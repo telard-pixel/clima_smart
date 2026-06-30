@@ -1,0 +1,56 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Clima Smart",
+        "description": "Pick the climate to drive and (optionally) the supporting sensors/switches. The controller does not create a new thermostat: it commands the existing one.",
+        "data": {
+          "climate_entity": "Climate to drive",
+          "presence_entity": "Presence sensor (device_tracker)",
+          "outdoor_sensor": "Outdoor temperature sensor",
+          "outdoor_fallback_sensor": "Fallback outdoor sensor",
+          "eco_switch": "Eco switch",
+          "mute_switch": "Mute switch",
+          "night_switch": "Night mode switch"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "This climate is already managed by Clima Smart."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Clima Smart parameters",
+        "description": "Values used by the logic. The times delimit the phases: GAP (off) from the morning start to the day start; DAY until the night start; NIGHT the rest.",
+        "data": {
+          "target_home": "Target when home (°C)",
+          "target_away": "Target when away (°C)",
+          "eco_band": "Eco hysteresis (°C): eco OFF at target+band",
+          "eco_outdoor_on": "Eco ON when outdoor below (°C)",
+          "eco_outdoor_off": "Eco OFF when outdoor above (°C)",
+          "summer_threshold": "Warm-season threshold (°C)",
+          "override_minutes": "Manual override duration (min)",
+          "morning_off_start": "Morning off phase start",
+          "day_start": "Day phase start",
+          "night_start": "Night phase start"
+        }
+      }
+    }
+  },
+  "entity": {
+    "select": {
+      "mode": {
+        "name": "Mode",
+        "state": {
+          "auto": "Auto",
+          "comfort": "Comfort",
+          "away": "Away",
+          "night": "Night",
+          "off": "Off"
+        }
+      }
+    }
+  }
+}

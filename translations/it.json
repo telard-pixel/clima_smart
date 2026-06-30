@@ -1,0 +1,64 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Clima Smart",
+        "description": "Scegli il climatizzatore da pilotare e (facoltativo) i sensori/switch di supporto. Il controller non crea un nuovo termostato: comanda quello esistente.",
+        "data": {
+          "climate_entity": "Climatizzatore da pilotare",
+          "presence_entity": "Sensore di presenza (device_tracker)",
+          "outdoor_sensor": "Sensore temperatura esterna",
+          "outdoor_fallback_sensor": "Sensore esterna di riserva",
+          "eco_switch": "Switch Eco",
+          "mute_switch": "Switch Muto",
+          "night_switch": "Switch Modalità Notte"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "Questo climatizzatore è già gestito da Clima Smart."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Parametri Clima Smart",
+        "description": "Valori usati dalla logica. Gli orari delimitano le fasce: GAP (spento) dall'inizio mattutino fino all'inizio giorno; GIORNO fino all'inizio notte; NOTTE il resto.",
+        "data": {
+          "target_home": "Target a casa (°C)",
+          "target_away": "Target fuori casa (°C)",
+          "eco_band": "Isteresi eco (°C): eco OFF a target+banda",
+          "eco_outdoor_on": "Eco ON con esterna sotto (°C)",
+          "eco_outdoor_off": "Eco OFF con esterna sopra (°C)",
+          "summer_threshold": "Soglia stagione calda (°C)",
+          "override_minutes": "Durata override manuale (min)",
+          "morning_off_start": "Inizio fascia spenta (mattino)",
+          "day_start": "Inizio fascia giorno",
+          "night_start": "Inizio fascia notte"
+        }
+      }
+    }
+  },
+  "entity": {
+    "switch": {
+      "master": { "name": "Attivo" }
+    },
+    "select": {
+      "mode": {
+        "name": "Modo",
+        "state": {
+          "auto": "Auto",
+          "comfort": "Comfort",
+          "away": "Fuori casa",
+          "night": "Notte",
+          "off": "Spento"
+        }
+      }
+    },
+    "sensor": {
+      "phase": { "name": "Fase" },
+      "target": { "name": "Target attivo" },
+      "reason": { "name": "Stato" }
+    }
+  }
+}
