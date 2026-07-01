@@ -296,8 +296,16 @@ class ClimaSmartController:
             self._last_hvac_cmd is not None and new_state.state == self._last_hvac_cmd
         ):
             manual = True
-        if setpoint_changed and not (
-            self._last_setpoint_cmd is not None and new_set == self._last_setpoint_cmd
+        # new_set None is a mode-driven attribute drop (e.g. our cool->off
+        # clearing the target temperature), never something a user typed: if the
+        # state event lands after the settle window it must not flag manual.
+        if (
+            setpoint_changed
+            and new_set is not None
+            and not (
+                self._last_setpoint_cmd is not None
+                and new_set == self._last_setpoint_cmd
+            )
         ):
             manual = True
 
@@ -436,11 +444,20 @@ class ClimaSmartController:
         outdoor, outdoor_valid = self._read_outdoor()
         is_home = self._is_home()
 
-        summer = (
-            (not outdoor_valid)
-            or (outdoor is not None and outdoor > self.summer_threshold)
-            or (cur_mode == HVAC_COOL and outdoor is not None and outdoor > self.summer_threshold - 2)
-        )
+        if outdoor_valid:
+            summer = (
+                outdoor > self.summer_threshold
+                or (cur_mode == HVAC_COOL and outdoor > self.summer_threshold - 2)
+            )
+        else:
+            # Outdoor sensors unavailable: never fail open (a dead sensor in
+            # winter would start cooling out of season). Keep controlling a unit
+            # that is already cooling; otherwise resume only on clear indoor
+            # heat (room at/over the home target). The heat guard below still
+            # protects a heating cycle either way.
+            summer = cur_mode == HVAC_COOL or (
+                room is not None and room >= self.target_home
+            )
 
         # Forced manual modes ignore presence/time.
         if self.mode == MODE_OFF:
@@ -591,19 +608,29 @@ class ClimaSmartController:
 
         # Setpoint / fan / eco only make sense while we intend the unit to cool.
         if desired.hvac == HVAC_COOL:
-            # 2) Setpoint
+            # 2) Setpoint. Snap the desired value to the climate's own step
+            # first (a unit that quantizes, e.g. to whole degrees, would report
+            # back a value that never equals ours and we would re-send at every
+            # pass); the small tolerance absorbs float noise in the reported
+            # state. _last_setpoint_cmd stores the snapped value, so the manual
+            # detection compares against what the device will actually echo.
+            want_set = desired.setpoint
+            if want_set is not None:
+                step = _to_float(climate.attributes.get("target_temp_step"))
+                if step:
+                    want_set = round(want_set / step) * step
             if (
-                desired.setpoint is not None
-                and cur_set != desired.setpoint
-                and not (settle_active and desired.setpoint == self._last_setpoint_cmd)
+                want_set is not None
+                and (cur_set is None or abs(cur_set - want_set) > 0.05)
+                and not (settle_active and want_set == self._last_setpoint_cmd)
             ):
                 if self._stopped:
                     return
                 prev = self._last_setpoint_cmd
-                self._last_setpoint_cmd = desired.setpoint
+                self._last_setpoint_cmd = want_set
                 self._arm_settle()
                 if not await self._call(
-                    "climate", "set_temperature", {"temperature": desired.setpoint}
+                    "climate", "set_temperature", {"temperature": want_set}
                 ):
                     self._last_setpoint_cmd = prev
 
