@@ -13,10 +13,24 @@
           "mute_switch": "Switch Muto",
           "night_switch": "Switch Modalità Notte"
         }
+      },
+      "reconfigure": {
+        "title": "Riconfigura Clima Smart",
+        "description": "Aggiorna le entità collegate (es. dopo un cambio del climatizzatore o di uno switch) senza perdere le tarature già impostate.",
+        "data": {
+          "climate_entity": "Climatizzatore da pilotare",
+          "presence_entity": "Sensore di presenza (device_tracker)",
+          "outdoor_sensor": "Sensore temperatura esterna",
+          "outdoor_fallback_sensor": "Sensore esterna di riserva",
+          "eco_switch": "Switch Eco",
+          "mute_switch": "Switch Muto",
+          "night_switch": "Switch Modalità Notte"
+        }
       }
     },
     "abort": {
-      "already_configured": "Questo climatizzatore è già gestito da Clima Smart."
+      "already_configured": "Questo climatizzatore è già gestito da Clima Smart.",
+      "reconfigure_successful": "Clima Smart è stato riconfigurato."
     }
   },
   "options": {
@@ -34,9 +48,13 @@
           "override_minutes": "Durata override manuale (min)",
           "morning_off_start": "Inizio fascia spenta (mattino)",
           "day_start": "Inizio fascia giorno",
-          "night_start": "Inizio fascia notte"
+          "night_start": "Inizio fascia notte",
+          "presence_home_state": "Stato dell'entità presenza che significa \"a casa\""
         }
       }
+    },
+    "error": {
+      "invalid_time_order": "Gli orari devono essere in ordine: inizio mattino < giorno < notte."
     }
   },
   "entity": {

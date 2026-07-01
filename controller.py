@@ -132,6 +132,11 @@ class ClimaSmartController:
         self.active_target: float | None = None
         self.last_reason: str = "inizializzazione"
 
+        # entity_id -> conf_key for the eco/mute/night aux switches, resolved in
+        # async_start() so manual toggles on them get the same override grace
+        # period as manual hvac/setpoint changes on the climate entity.
+        self._aux_entities: dict[str, str] = {}
+
         # Entity refresh callbacks
         self._update_callbacks: list = []
 
@@ -183,6 +188,11 @@ class ClimaSmartController:
         watched = [self.climate_entity]
         if self.presence_entity:
             watched.append(self.presence_entity)
+        for conf_key in (CONF_ECO_SWITCH, CONF_MUTE_SWITCH, CONF_NIGHT_SWITCH):
+            ent = self._cfg(conf_key)
+            if ent:
+                self._aux_entities[ent] = conf_key
+                watched.append(ent)
         self._unsubs.append(
             async_track_state_change_event(self.hass, watched, self._on_state_event)
         )
@@ -238,6 +248,8 @@ class ClimaSmartController:
         entity_id = event.data.get("entity_id")
         if entity_id == self.climate_entity:
             self._maybe_flag_manual(event)
+        elif entity_id in self._aux_entities:
+            self._maybe_flag_manual_switch(self._aux_entities[entity_id], event)
         self.entry.async_create_background_task(
             self.hass, self.async_evaluate("evento"), "clima_smart_evaluate"
         )
@@ -291,6 +303,35 @@ class ClimaSmartController:
 
         if manual:
             self._start_override("comando manuale rilevato")
+
+    @callback
+    def _maybe_flag_manual_switch(self, conf_key: str, event: Event) -> None:
+        """Same idea as _maybe_flag_manual, for the eco/mute/night aux switches.
+
+        Without this, a manual toggle of one of these switches from the
+        dashboard had no override protection at all (only the climate entity
+        was watched) and got silently reverted on the next evaluation pass.
+        """
+        if not self.enabled:
+            return
+        new_state = event.data.get("new_state")
+        old_state = event.data.get("old_state")
+        if new_state is None or old_state is None:
+            return
+        if new_state.state in _UNAVAILABLE or old_state.state in _UNAVAILABLE:
+            return
+        if new_state.state == old_state.state:
+            return
+
+        now = dt_util.now()
+        if self._settle_until and now < self._settle_until:
+            return
+
+        want = new_state.state == "on"
+        if self._last_aux_cmd.get(conf_key) == want:
+            return
+
+        self._start_override(f"comando manuale su {conf_key}")
 
     def _start_override(self, reason: str) -> None:
         self._override_until = dt_util.now() + timedelta(minutes=self.override_minutes)
@@ -442,6 +483,7 @@ class ClimaSmartController:
         # MODE_AUTO: replicate the validated automation.
         phase = self._phase(now)
         self.current_phase = phase
+        is_night = phase == PHASE_NIGHT
 
         if phase == PHASE_GAP:
             self.active_target = None
@@ -457,12 +499,18 @@ class ClimaSmartController:
             return Desired(reason="fuori stagione: non tocco il riscaldamento")
 
         if cur_mode == HVAC_HEAT:
+            # Never touch hvac/setpoint over a running heat cycle, but muto/notte
+            # still follow the day/night phase (the original automation toggled
+            # them whenever it was "summer and not gap", regardless of hvac mode).
             self.active_target = None
-            return Desired(reason="clima in heat: non intervengo")
+            return Desired(
+                mute=is_night,
+                night=is_night,
+                reason="clima in heat: non tocco hvac/setpoint, aggiorno muto/notte",
+            )
 
         target = self.target_home if is_home else self.target_away
         self.active_target = target
-        is_night = phase == PHASE_NIGHT
         return Desired(
             hvac=HVAC_COOL,
             setpoint=target,
@@ -541,7 +589,7 @@ class ClimaSmartController:
             # Treat the unit as already in the target mode for the rest of this pass.
             cur_mode = desired.hvac
 
-        # Only push setpoint / aux switches when we intend the unit to cool.
+        # Setpoint / fan / eco only make sense while we intend the unit to cool.
         if desired.hvac == HVAC_COOL:
             # 2) Setpoint
             if (
@@ -575,10 +623,13 @@ class ClimaSmartController:
                 ):
                     self._last_fan_cmd = prev
 
-            # 4) Aux switches (eco / mute / night)
+            # 4) Eco
             await self._apply_switch(CONF_ECO_SWITCH, desired.eco, settle_active)
-            await self._apply_switch(CONF_MUTE_SWITCH, desired.mute, settle_active)
-            await self._apply_switch(CONF_NIGHT_SWITCH, desired.night, settle_active)
+
+        # Mute / night quietness follow the day/night phase independently of
+        # hvac mode (see _compute's heat branch in MODE_AUTO).
+        await self._apply_switch(CONF_MUTE_SWITCH, desired.mute, settle_active)
+        await self._apply_switch(CONF_NIGHT_SWITCH, desired.night, settle_active)
 
     def _arm_settle(self) -> None:
         self._settle_until = dt_util.now() + timedelta(seconds=COMMAND_SETTLE_SECONDS)

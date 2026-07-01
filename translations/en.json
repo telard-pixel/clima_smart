@@ -13,10 +13,24 @@
           "mute_switch": "Mute switch",
           "night_switch": "Night mode switch"
         }
+      },
+      "reconfigure": {
+        "title": "Reconfigure Clima Smart",
+        "description": "Update the linked entities (e.g. after the climate or a switch changed) without losing the tuned parameters.",
+        "data": {
+          "climate_entity": "Climate to drive",
+          "presence_entity": "Presence sensor (device_tracker)",
+          "outdoor_sensor": "Outdoor temperature sensor",
+          "outdoor_fallback_sensor": "Fallback outdoor sensor",
+          "eco_switch": "Eco switch",
+          "mute_switch": "Mute switch",
+          "night_switch": "Night mode switch"
+        }
       }
     },
     "abort": {
-      "already_configured": "This climate is already managed by Clima Smart."
+      "already_configured": "This climate is already managed by Clima Smart.",
+      "reconfigure_successful": "Clima Smart was reconfigured."
     }
   },
   "options": {
@@ -34,9 +48,13 @@
           "override_minutes": "Manual override duration (min)",
           "morning_off_start": "Morning off phase start",
           "day_start": "Day phase start",
-          "night_start": "Night phase start"
+          "night_start": "Night phase start",
+          "presence_home_state": "Presence entity state meaning \"home\""
         }
       }
+    },
+    "error": {
+      "invalid_time_order": "Times must be in order: morning off < day < night."
     }
   },
   "entity": {

@@ -29,6 +29,7 @@ from .const import (
     CONF_OUTDOOR_FALLBACK,
     CONF_OVERRIDE_MINUTES,
     CONF_PRESENCE,
+    CONF_PRESENCE_HOME_STATE,
     CONF_SUMMER_THRESHOLD,
     CONF_TARGET_AWAY,
     CONF_TARGET_HOME,
@@ -39,6 +40,7 @@ from .const import (
     DEFAULT_MORNING_OFF_START,
     DEFAULT_NIGHT_START,
     DEFAULT_OVERRIDE_MINUTES,
+    DEFAULT_PRESENCE_HOME_STATE,
     DEFAULT_SUMMER_THRESHOLD,
     DEFAULT_TARGET_AWAY,
     DEFAULT_TARGET_HOME,
@@ -82,6 +84,11 @@ def _setup_schema(defaults: dict[str, Any]) -> vol.Schema:
     )
 
 
+def _time_to_minutes(value: str) -> int:
+    hh, mm = str(value).split(":")[:2]
+    return int(hh) * 60 + int(mm)
+
+
 class ClimaSmartConfigFlow(ConfigFlow, domain=DOMAIN):
     """Initial setup."""
 
@@ -99,6 +106,20 @@ class ClimaSmartConfigFlow(ConfigFlow, domain=DOMAIN):
             step_id="user", data_schema=_setup_schema({})
         )
 
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Let the linked entities be swapped (e.g. climate/switch replaced or
+        renamed) without losing the tuned options, which live separately.
+        """
+        entry = self._get_reconfigure_entry()
+        if user_input is not None:
+            return self.async_update_reload_and_abort(entry, data=user_input)
+
+        return self.async_show_form(
+            step_id="reconfigure", data_schema=_setup_schema(entry.data)
+        )
+
     @staticmethod
     @callback
     def async_get_options_flow(entry: ConfigEntry) -> OptionsFlow:
@@ -111,10 +132,19 @@ class ClimaSmartOptionsFlow(OptionsFlow):
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        if user_input is not None:
-            return self.async_create_entry(title="", data=user_input)
-
         opts = {**self.config_entry.data, **self.config_entry.options}
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            morning = _time_to_minutes(user_input[CONF_MORNING_OFF_START])
+            day = _time_to_minutes(user_input[CONF_DAY_START])
+            night = _time_to_minutes(user_input[CONF_NIGHT_START])
+            if not (morning < day < night):
+                errors["base"] = "invalid_time_order"
+            else:
+                return self.async_create_entry(title="", data=user_input)
+            # Re-show the form with what the user just typed, not the old values.
+            opts = {**opts, **user_input}
 
         def _num(key, default):
             return opts.get(key, default)
@@ -131,6 +161,7 @@ class ClimaSmartOptionsFlow(OptionsFlow):
                 vol.Required(CONF_MORNING_OFF_START, default=_num(CONF_MORNING_OFF_START, DEFAULT_MORNING_OFF_START)): selector.TimeSelector(),
                 vol.Required(CONF_DAY_START, default=_num(CONF_DAY_START, DEFAULT_DAY_START)): selector.TimeSelector(),
                 vol.Required(CONF_NIGHT_START, default=_num(CONF_NIGHT_START, DEFAULT_NIGHT_START)): selector.TimeSelector(),
+                vol.Required(CONF_PRESENCE_HOME_STATE, default=_num(CONF_PRESENCE_HOME_STATE, DEFAULT_PRESENCE_HOME_STATE)): str,
             }
         )
-        return self.async_show_form(step_id="init", data_schema=schema)
+        return self.async_show_form(step_id="init", data_schema=schema, errors=errors)
