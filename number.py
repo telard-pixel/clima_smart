@@ -34,7 +34,6 @@ from .entity import ClimaSmartEntity
 @dataclass(frozen=True, kw_only=True)
 class TuneNumber:
     key: str
-    name: str
     default: float
     minimum: float
     maximum: float
@@ -44,25 +43,25 @@ class TuneNumber:
 
 
 _NUMBERS: tuple[TuneNumber, ...] = (
-    TuneNumber(key=CONF_TARGET_HOME, name="Target casa", default=DEFAULT_TARGET_HOME,
+    TuneNumber(key=CONF_TARGET_HOME, default=DEFAULT_TARGET_HOME,
                minimum=16, maximum=30, step=0.5, icon="mdi:home-thermometer",
                unit=UnitOfTemperature.CELSIUS),
-    TuneNumber(key=CONF_TARGET_AWAY, name="Target fuori", default=DEFAULT_TARGET_AWAY,
+    TuneNumber(key=CONF_TARGET_AWAY, default=DEFAULT_TARGET_AWAY,
                minimum=16, maximum=30, step=0.5, icon="mdi:home-export-outline",
                unit=UnitOfTemperature.CELSIUS),
-    TuneNumber(key=CONF_ECO_BAND, name="Isteresi eco", default=DEFAULT_ECO_BAND,
+    TuneNumber(key=CONF_ECO_BAND, default=DEFAULT_ECO_BAND,
                minimum=0.5, maximum=5, step=0.5, icon="mdi:leaf",
                unit=UnitOfTemperature.CELSIUS),
-    TuneNumber(key=CONF_ECO_OUTDOOR_ON, name="Eco esterna ON sotto", default=DEFAULT_ECO_OUTDOOR_ON,
+    TuneNumber(key=CONF_ECO_OUTDOOR_ON, default=DEFAULT_ECO_OUTDOOR_ON,
                minimum=20, maximum=45, step=1, icon="mdi:weather-sunny",
                unit=UnitOfTemperature.CELSIUS),
-    TuneNumber(key=CONF_ECO_OUTDOOR_OFF, name="Eco esterna OFF sopra", default=DEFAULT_ECO_OUTDOOR_OFF,
+    TuneNumber(key=CONF_ECO_OUTDOOR_OFF, default=DEFAULT_ECO_OUTDOOR_OFF,
                minimum=20, maximum=45, step=1, icon="mdi:weather-sunny-alert",
                unit=UnitOfTemperature.CELSIUS),
-    TuneNumber(key=CONF_SUMMER_THRESHOLD, name="Soglia stagione calda", default=DEFAULT_SUMMER_THRESHOLD,
+    TuneNumber(key=CONF_SUMMER_THRESHOLD, default=DEFAULT_SUMMER_THRESHOLD,
                minimum=10, maximum=30, step=1, icon="mdi:sun-thermometer",
                unit=UnitOfTemperature.CELSIUS),
-    TuneNumber(key=CONF_OVERRIDE_MINUTES, name="Override manuale", default=DEFAULT_OVERRIDE_MINUTES,
+    TuneNumber(key=CONF_OVERRIDE_MINUTES, default=DEFAULT_OVERRIDE_MINUTES,
                minimum=0, maximum=480, step=5, icon="mdi:hand-back-right", unit="min"),
 )
 
@@ -84,7 +83,7 @@ class ClimaSmartNumber(ClimaSmartEntity, NumberEntity):
     def __init__(self, controller, desc: TuneNumber) -> None:
         super().__init__(controller, desc.key)
         self._desc = desc
-        self._attr_name = desc.name
+        self._attr_translation_key = desc.key
         self._attr_icon = desc.icon
         self._attr_native_min_value = desc.minimum
         self._attr_native_max_value = desc.maximum

@@ -28,7 +28,7 @@ async def async_setup_entry(
 
 
 class ClimaSmartPhaseSensor(ClimaSmartEntity, SensorEntity):
-    _attr_name = "Fase"
+    _attr_translation_key = "phase"
     _attr_icon = "mdi:clock-outline"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
@@ -41,7 +41,7 @@ class ClimaSmartPhaseSensor(ClimaSmartEntity, SensorEntity):
 
 
 class ClimaSmartTargetSensor(ClimaSmartEntity, SensorEntity):
-    _attr_name = "Target attivo"
+    _attr_translation_key = "target"
     _attr_icon = "mdi:thermometer-check"
     _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
     _attr_entity_category = EntityCategory.DIAGNOSTIC
@@ -55,7 +55,7 @@ class ClimaSmartTargetSensor(ClimaSmartEntity, SensorEntity):
 
 
 class ClimaSmartReasonSensor(ClimaSmartEntity, SensorEntity):
-    _attr_name = "Stato"
+    _attr_translation_key = "reason"
     _attr_icon = "mdi:information-outline"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 

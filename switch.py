@@ -24,7 +24,7 @@ async def async_setup_entry(
 class ClimaSmartMasterSwitch(ClimaSmartEntity, RestoreEntity, SwitchEntity):
     """Turns the smart control on/off (off = full manual control of the climate)."""
 
-    _attr_name = "Attivo"
+    _attr_translation_key = "master"
     _attr_icon = "mdi:robot"
 
     def __init__(self, controller) -> None:

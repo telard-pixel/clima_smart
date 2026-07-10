@@ -54,7 +54,8 @@
       }
     },
     "error": {
-      "invalid_time_order": "Times must be in order: morning off < day < night."
+      "invalid_time_order": "Times must be in order: morning off < day < night.",
+      "invalid_eco_range": "\"Eco ON when outdoor below\" must be lower than \"Eco OFF when outdoor above\"."
     }
   },
   "entity": {
@@ -69,6 +70,23 @@
           "off": "Off"
         }
       }
+    },
+    "switch": {
+      "master": { "name": "Active" }
+    },
+    "sensor": {
+      "phase": { "name": "Phase" },
+      "target": { "name": "Active target" },
+      "reason": { "name": "Status" }
+    },
+    "number": {
+      "target_home": { "name": "Target when home" },
+      "target_away": { "name": "Target when away" },
+      "eco_band": { "name": "Eco hysteresis" },
+      "eco_outdoor_on": { "name": "Eco ON below outdoor" },
+      "eco_outdoor_off": { "name": "Eco OFF above outdoor" },
+      "summer_threshold": { "name": "Warm-season threshold" },
+      "override_minutes": { "name": "Manual override duration" }
     }
   }
 }

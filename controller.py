@@ -79,6 +79,15 @@ def _parse_time(value: str, fallback: str) -> time:
             return time(int(hh), int(mm))
         except (ValueError, AttributeError):
             continue
+    # Both the configured value and the DEFAULT_* constant failed to parse -
+    # only reachable if a default itself was edited to something invalid.
+    # Silently collapsing to midnight would shrink a phase boundary with no
+    # visible symptom, so make it loud instead.
+    _LOGGER.warning(
+        "Clima Smart: impossibile interpretare l'orario %r (fallback %r), uso 00:00",
+        value,
+        fallback,
+    )
     return time(0, 0)
 
 
@@ -121,7 +130,14 @@ class ClimaSmartController:
         self.enabled: bool = True       # master switch (restored on startup)
         self.mode: str = MODE_AUTO      # "Modo" select (restored on startup)
         self._override_until: datetime | None = None
-        self._settle_until: datetime | None = None
+        # Settle windows are tracked per command source, not as one shared
+        # timestamp: an aux-switch command (eco/mute/night) must not mask
+        # manual-action detection on the climate entity's hvac/setpoint, and
+        # vice versa. See _maybe_flag_manual / _maybe_flag_manual_switch.
+        self._settle_hvac_until: datetime | None = None
+        self._settle_setpoint_until: datetime | None = None
+        self._settle_fan_until: datetime | None = None
+        self._settle_aux_until: dict[str, datetime] = {}
         self._last_setpoint_cmd: float | None = None
         self._last_hvac_cmd: str | None = None
         self._last_fan_cmd: str | None = None
@@ -284,30 +300,40 @@ class ClimaSmartController:
             return
 
         now = dt_util.now()
-        if self._settle_until and now < self._settle_until:
-            # Our own command still propagating.
-            return
 
         # Attribute each CHANGED field independently: it is "ours" only if it
-        # matches a value we actually commanded. A changed field we never set
-        # (e.g. a manual setpoint while hvac stayed 'cool') counts as manual.
+        # matches a value we actually commanded, OR that specific field's own
+        # settle window is still open (its command may still be propagating
+        # through the cloud and echo back a transient/mismatched value). A
+        # settle window armed by an unrelated command (e.g. the eco switch)
+        # must never suppress detection here - each field is judged on its
+        # own settle window, not a shared one.
         manual = False
-        if hvac_changed and not (
-            self._last_hvac_cmd is not None and new_state.state == self._last_hvac_cmd
-        ):
-            manual = True
-        # new_set None is a mode-driven attribute drop (e.g. our cool->off
-        # clearing the target temperature), never something a user typed: if the
-        # state event lands after the settle window it must not flag manual.
-        if (
-            setpoint_changed
-            and new_set is not None
-            and not (
-                self._last_setpoint_cmd is not None
-                and new_set == self._last_setpoint_cmd
+        if hvac_changed:
+            hvac_is_ours = (
+                self._last_hvac_cmd is not None
+                and new_state.state == self._last_hvac_cmd
             )
-        ):
-            manual = True
+            hvac_settling = (
+                self._settle_hvac_until is not None and now < self._settle_hvac_until
+            )
+            if not hvac_is_ours and not hvac_settling:
+                manual = True
+        # new_set None is a mode-driven attribute drop (e.g. our cool->off
+        # clearing the target temperature), never something a user typed.
+        if setpoint_changed and new_set is not None:
+            # Tolerance matches _apply's quantization-noise tolerance so our
+            # own echoed setpoint is never mistaken for a manual change.
+            setpoint_is_ours = (
+                self._last_setpoint_cmd is not None
+                and abs(new_set - self._last_setpoint_cmd) <= 0.05
+            )
+            setpoint_settling = (
+                self._settle_setpoint_until is not None
+                and now < self._settle_setpoint_until
+            )
+            if not setpoint_is_ours and not setpoint_settling:
+                manual = True
 
         if manual:
             self._start_override("comando manuale rilevato")
@@ -332,7 +358,8 @@ class ClimaSmartController:
             return
 
         now = dt_util.now()
-        if self._settle_until and now < self._settle_until:
+        settle_until = self._settle_aux_until.get(conf_key)
+        if settle_until is not None and now < settle_until:
             return
 
         want = new_state.state == "on"
@@ -558,8 +585,16 @@ class ClimaSmartController:
                 return
 
             now = dt_util.now()
-            desired = self._compute(now)
-            await self._apply(desired)
+            try:
+                desired = self._compute(now)
+                await self._apply(desired)
+            except Exception as err:  # noqa: BLE001 - one bad pass must not wedge the loop silently
+                _LOGGER.exception(
+                    "Clima Smart: errore durante la valutazione (%s)", trigger
+                )
+                self.last_reason = f"errore interno: {err} [{trigger} {now:%H:%M}]"
+                self._notify_entities()
+                return
             self.last_reason = f"{desired.reason} [{trigger} {now:%H:%M}]"
             self._notify_entities()
 
@@ -572,15 +607,25 @@ class ClimaSmartController:
         cur_fan = climate.attributes.get("fan_mode")
         # A command issued in a PREVIOUS pass may still be propagating through the
         # cloud (the read-back lags); don't re-send an identical value meanwhile.
-        settle_active = (
-            self._settle_until is not None and dt_util.now() < self._settle_until
+        # Each field has its own settle window (see __init__) so an unrelated
+        # command doesn't suppress a legitimate resend of a different field.
+        now = dt_util.now()
+        hvac_settle_active = (
+            self._settle_hvac_until is not None and now < self._settle_hvac_until
+        )
+        setpoint_settle_active = (
+            self._settle_setpoint_until is not None
+            and now < self._settle_setpoint_until
+        )
+        fan_settle_active = (
+            self._settle_fan_until is not None and now < self._settle_fan_until
         )
 
         # 1) HVAC mode
         if (
             desired.hvac is not None
             and desired.hvac != cur_mode
-            and not (settle_active and desired.hvac == self._last_hvac_cmd)
+            and not (hvac_settle_active and desired.hvac == self._last_hvac_cmd)
         ):
             # Bail before arming if we're being torn down, so we never leave the
             # settle window armed for a command we didn't actually send.
@@ -591,7 +636,7 @@ class ClimaSmartController:
             # action by _maybe_flag_manual.
             prev = self._last_hvac_cmd
             self._last_hvac_cmd = desired.hvac
-            self._arm_settle()
+            self._arm_settle("_settle_hvac_until")
             if desired.hvac == HVAC_OFF:
                 ok = await self._call("climate", "turn_off", {})
             else:
@@ -622,13 +667,13 @@ class ClimaSmartController:
             if (
                 want_set is not None
                 and (cur_set is None or abs(cur_set - want_set) > 0.05)
-                and not (settle_active and want_set == self._last_setpoint_cmd)
+                and not (setpoint_settle_active and want_set == self._last_setpoint_cmd)
             ):
                 if self._stopped:
                     return
                 prev = self._last_setpoint_cmd
                 self._last_setpoint_cmd = want_set
-                self._arm_settle()
+                self._arm_settle("_settle_setpoint_until")
                 if not await self._call(
                     "climate", "set_temperature", {"temperature": want_set}
                 ):
@@ -638,32 +683,30 @@ class ClimaSmartController:
             if (
                 desired.fan is not None
                 and cur_fan != desired.fan
-                and not (settle_active and desired.fan == self._last_fan_cmd)
+                and not (fan_settle_active and desired.fan == self._last_fan_cmd)
             ):
                 if self._stopped:
                     return
                 prev = self._last_fan_cmd
                 self._last_fan_cmd = desired.fan
-                self._arm_settle()
+                self._arm_settle("_settle_fan_until")
                 if not await self._call(
                     "climate", "set_fan_mode", {"fan_mode": desired.fan}
                 ):
                     self._last_fan_cmd = prev
 
             # 4) Eco
-            await self._apply_switch(CONF_ECO_SWITCH, desired.eco, settle_active)
+            await self._apply_switch(CONF_ECO_SWITCH, desired.eco)
 
         # Mute / night quietness follow the day/night phase independently of
         # hvac mode (see _compute's heat branch in MODE_AUTO).
-        await self._apply_switch(CONF_MUTE_SWITCH, desired.mute, settle_active)
-        await self._apply_switch(CONF_NIGHT_SWITCH, desired.night, settle_active)
+        await self._apply_switch(CONF_MUTE_SWITCH, desired.mute)
+        await self._apply_switch(CONF_NIGHT_SWITCH, desired.night)
 
-    def _arm_settle(self) -> None:
-        self._settle_until = dt_util.now() + timedelta(seconds=COMMAND_SETTLE_SECONDS)
+    def _arm_settle(self, field: str) -> None:
+        setattr(self, field, dt_util.now() + timedelta(seconds=COMMAND_SETTLE_SECONDS))
 
-    async def _apply_switch(
-        self, conf_key: str, want: bool | None, settle_active: bool
-    ) -> bool:
+    async def _apply_switch(self, conf_key: str, want: bool | None) -> bool:
         if want is None:
             return False
         entity_id = self._cfg(conf_key)
@@ -675,6 +718,9 @@ class ClimaSmartController:
         is_on = st.state == "on"
         if want == is_on:
             return False
+        now = dt_util.now()
+        settle_until = self._settle_aux_until.get(conf_key)
+        settle_active = settle_until is not None and now < settle_until
         if settle_active and self._last_aux_cmd.get(conf_key) == want:
             return False
         if self._stopped:
@@ -682,7 +728,9 @@ class ClimaSmartController:
         had_prev = conf_key in self._last_aux_cmd
         prev = self._last_aux_cmd.get(conf_key)
         self._last_aux_cmd[conf_key] = want
-        self._arm_settle()
+        self._settle_aux_until[conf_key] = now + timedelta(
+            seconds=COMMAND_SETTLE_SECONDS
+        )
         if not await self._call_target(
             "switch", "turn_on" if want else "turn_off", entity_id
         ):

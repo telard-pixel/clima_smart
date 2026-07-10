@@ -54,7 +54,8 @@
       }
     },
     "error": {
-      "invalid_time_order": "Gli orari devono essere in ordine: inizio mattino < giorno < notte."
+      "invalid_time_order": "Gli orari devono essere in ordine: inizio mattino < giorno < notte.",
+      "invalid_eco_range": "\"Eco ON con esterna sotto\" deve essere inferiore a \"Eco OFF con esterna sopra\"."
     }
   },
   "entity": {
@@ -77,6 +78,15 @@
       "phase": { "name": "Fase" },
       "target": { "name": "Target attivo" },
       "reason": { "name": "Stato" }
+    },
+    "number": {
+      "target_home": { "name": "Target casa" },
+      "target_away": { "name": "Target fuori" },
+      "eco_band": { "name": "Isteresi eco" },
+      "eco_outdoor_on": { "name": "Eco esterna ON sotto" },
+      "eco_outdoor_off": { "name": "Eco esterna OFF sopra" },
+      "summer_threshold": { "name": "Soglia stagione calda" },
+      "override_minutes": { "name": "Override manuale" }
     }
   }
 }
