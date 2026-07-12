@@ -6,7 +6,7 @@
         "description": "Pick the climate to drive and (optionally) the supporting sensors/switches. The controller does not create a new thermostat: it commands the existing one.",
         "data": {
           "climate_entity": "Climate to drive",
-          "presence_entity": "Presence sensor (device_tracker)",
+          "presence_entity": "Presence (person or device tracker)",
           "outdoor_sensor": "Outdoor temperature sensor",
           "outdoor_fallback_sensor": "Fallback outdoor sensor",
           "eco_switch": "Eco switch",
@@ -19,7 +19,7 @@
         "description": "Update the linked entities (e.g. after the climate or a switch changed) without losing the tuned parameters.",
         "data": {
           "climate_entity": "Climate to drive",
-          "presence_entity": "Presence sensor (device_tracker)",
+          "presence_entity": "Presence (person or device tracker)",
           "outdoor_sensor": "Outdoor temperature sensor",
           "outdoor_fallback_sensor": "Fallback outdoor sensor",
           "eco_switch": "Eco switch",
@@ -31,6 +31,9 @@
     "abort": {
       "already_configured": "This climate is already managed by Clima Smart.",
       "reconfigure_successful": "Clima Smart was reconfigured."
+    },
+    "error": {
+      "duplicate_aux_switch": "Eco, Mute and Night mode must use different switches."
     }
   },
   "options": {
@@ -75,7 +78,14 @@
       "master": { "name": "Active" }
     },
     "sensor": {
-      "phase": { "name": "Phase" },
+      "phase": {
+        "name": "Phase",
+        "state": {
+          "day": "Day",
+          "night": "Night",
+          "gap": "Off window"
+        }
+      },
       "target": { "name": "Active target" },
       "reason": { "name": "Status" }
     },

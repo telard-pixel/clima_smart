@@ -1,7 +1,7 @@
 {
   "domain": "clima_smart",
   "name": "Clima Smart",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "documentation": "https://github.com/telard-pixel/clima_smart",
   "issue_tracker": "https://github.com/telard-pixel/clima_smart/issues",
   "dependencies": [],
@@ -9,6 +9,6 @@
   "codeowners": ["@telard-pixel"],
   "config_flow": true,
   "iot_class": "calculated",
-  "integration_type": "service",
+  "integration_type": "helper",
   "requirements": []
 }

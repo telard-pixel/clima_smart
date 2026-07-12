@@ -48,9 +48,11 @@ from .const import (
 )
 
 
-def _entity(domain: str) -> selector.EntitySelector:
+def _entity(
+    domain: str | list[str], *, device_class: str | None = None
+) -> selector.EntitySelector:
     return selector.EntitySelector(
-        selector.EntitySelectorConfig(domain=domain)
+        selector.EntitySelectorConfig(domain=domain, device_class=device_class)
     )
 
 
@@ -62,14 +64,14 @@ def _setup_schema(defaults: dict[str, Any]) -> vol.Schema:
             ),
             vol.Optional(
                 CONF_PRESENCE, default=defaults.get(CONF_PRESENCE, vol.UNDEFINED)
-            ): _entity("device_tracker"),
+            ): _entity(["device_tracker", "person"]),
             vol.Optional(
                 CONF_OUTDOOR, default=defaults.get(CONF_OUTDOOR, vol.UNDEFINED)
-            ): _entity("sensor"),
+            ): _entity("sensor", device_class="temperature"),
             vol.Optional(
                 CONF_OUTDOOR_FALLBACK,
                 default=defaults.get(CONF_OUTDOOR_FALLBACK, vol.UNDEFINED),
-            ): _entity("sensor"),
+            ): _entity("sensor", device_class="temperature"),
             vol.Optional(
                 CONF_ECO_SWITCH, default=defaults.get(CONF_ECO_SWITCH, vol.UNDEFINED)
             ): _entity("switch"),
@@ -89,6 +91,16 @@ def _time_to_minutes(value: str) -> int:
     return int(hh) * 60 + int(mm)
 
 
+def _aux_switches_are_distinct(values: dict[str, Any]) -> bool:
+    """Prevent two logical features from fighting over the same real switch."""
+    selected = [
+        values.get(key)
+        for key in (CONF_ECO_SWITCH, CONF_MUTE_SWITCH, CONF_NIGHT_SWITCH)
+        if values.get(key)
+    ]
+    return len(selected) == len(set(selected))
+
+
 class ClimaSmartConfigFlow(ConfigFlow, domain=DOMAIN):
     """Initial setup."""
 
@@ -98,9 +110,19 @@ class ClimaSmartConfigFlow(ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         if user_input is not None:
-            await self.async_set_unique_id(user_input[CONF_CLIMATE])
-            self._abort_if_unique_id_configured()
-            return self.async_create_entry(title="Clima Smart", data=user_input)
+            if _aux_switches_are_distinct(user_input):
+                climate_entity = user_input[CONF_CLIMATE]
+                await self.async_set_unique_id(climate_entity)
+                self._abort_if_unique_id_configured(reload_on_update=False)
+                # Also cover entries created by an older release without a
+                # unique_id, or whose unique_id predates a reconfiguration.
+                self._async_abort_entries_match({CONF_CLIMATE: climate_entity})
+                return self.async_create_entry(title="Clima Smart", data=user_input)
+            return self.async_show_form(
+                step_id="user",
+                data_schema=_setup_schema(user_input),
+                errors={"base": "duplicate_aux_switch"},
+            )
 
         return self.async_show_form(
             step_id="user", data_schema=_setup_schema({})
@@ -114,12 +136,39 @@ class ClimaSmartConfigFlow(ConfigFlow, domain=DOMAIN):
         """
         entry = self._get_reconfigure_entry()
         if user_input is not None:
-            # Re-derive the unique_id so swapping to a different climate still
-            # blocks a second entry from managing the same climate (and frees
-            # up the previous climate_entity for a future entry).
-            await self.async_set_unique_id(user_input[CONF_CLIMATE])
-            self._abort_if_unique_id_configured()
-            return self.async_update_reload_and_abort(entry, data=user_input)
+            if not _aux_switches_are_distinct(user_input):
+                return self.async_show_form(
+                    step_id="reconfigure",
+                    data_schema=_setup_schema(user_input),
+                    errors={"base": "duplicate_aux_switch"},
+                )
+            # The linked climate is also our unique id. Permit this entry to keep
+            # or change it, but never let it take over a climate managed by a
+            # different Clima Smart entry.
+            new_climate = user_input[CONF_CLIMATE]
+            duplicate = next(
+                (
+                    candidate
+                    for candidate in self._async_current_entries()
+                    if candidate.entry_id != entry.entry_id
+                    and (
+                        candidate.data.get(CONF_CLIMATE) == new_climate
+                        or candidate.unique_id == new_climate
+                    )
+                ),
+                None,
+            )
+            if duplicate is not None:
+                return self.async_abort(reason="already_configured")
+
+            # The update listener performs the one required reload when entry.data
+            # changes. Using the non-reloading helper avoids the double-reload race
+            # deprecated by Home Assistant 2026.6.
+            return self.async_update_and_abort(
+                entry,
+                unique_id=new_climate,
+                data=user_input,
+            )
 
         return self.async_show_form(
             step_id="reconfigure", data_schema=_setup_schema(entry.data)

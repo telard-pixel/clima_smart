@@ -37,6 +37,7 @@ class ClimaSmartModeSelect(ClimaSmartEntity, RestoreEntity, SelectEntity):
         last_state = await self.async_get_last_state()
         if last_state is not None and last_state.state in MODES:
             self._controller.mode = last_state.state
+        self._controller.mark_restore_ready("mode")
 
     @property
     def current_option(self) -> str:

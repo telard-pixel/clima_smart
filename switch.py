@@ -37,6 +37,7 @@ class ClimaSmartMasterSwitch(ClimaSmartEntity, RestoreEntity, SwitchEntity):
         last_state = await self.async_get_last_state()
         if last_state is not None and last_state.state in ("on", "off"):
             self._controller.enabled = last_state.state == "on"
+        self._controller.mark_restore_ready("master")
 
     @property
     def is_on(self) -> bool:

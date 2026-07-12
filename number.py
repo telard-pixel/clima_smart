@@ -8,6 +8,7 @@ from homeassistant.components.number import NumberEntity, NumberMode
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory, UnitOfTemperature
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import (
@@ -100,6 +101,20 @@ class ClimaSmartNumber(ClimaSmartEntity, NumberEntity):
 
     async def async_set_native_value(self, value: float) -> None:
         entry = self._controller.entry
+        if (
+            self._desc.key == CONF_ECO_OUTDOOR_ON
+            and value >= self._controller.eco_outdoor_off
+        ):
+            raise HomeAssistantError(
+                "Eco ON deve essere inferiore alla soglia Eco OFF"
+            )
+        if (
+            self._desc.key == CONF_ECO_OUTDOOR_OFF
+            and value <= self._controller.eco_outdoor_on
+        ):
+            raise HomeAssistantError(
+                "Eco OFF deve essere superiore alla soglia Eco ON"
+            )
         options = dict(entry.options)
         options[self._desc.key] = value
         # Triggers the update listener -> controller re-evaluates.

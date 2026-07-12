@@ -35,5 +35,5 @@ I parametri di tuning si regolano poi dalle entità `number`/`select`, oppure da
 
 ## Note
 
-- Testata su Home Assistant 2026.6.
-- Stato attuale: `0.4.0` — uso personale.
+- Testata su Home Assistant 2026.7.2.
+- Stato attuale: `0.4.1` — uso personale.

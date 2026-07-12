@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from homeassistant.components.sensor import SensorEntity
+from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory, UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DATA_CONTROLLER, DOMAIN
+from .const import DATA_CONTROLLER, DOMAIN, PHASE_DAY, PHASE_GAP, PHASE_NIGHT
 from .entity import ClimaSmartEntity
 
 
@@ -31,6 +31,8 @@ class ClimaSmartPhaseSensor(ClimaSmartEntity, SensorEntity):
     _attr_translation_key = "phase"
     _attr_icon = "mdi:clock-outline"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = [PHASE_DAY, PHASE_NIGHT, PHASE_GAP]
 
     def __init__(self, controller) -> None:
         super().__init__(controller, "phase")
@@ -44,6 +46,7 @@ class ClimaSmartTargetSensor(ClimaSmartEntity, SensorEntity):
     _attr_translation_key = "target"
     _attr_icon = "mdi:thermometer-check"
     _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, controller) -> None:

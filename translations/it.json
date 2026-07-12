@@ -6,7 +6,7 @@
         "description": "Scegli il climatizzatore da pilotare e (facoltativo) i sensori/switch di supporto. Il controller non crea un nuovo termostato: comanda quello esistente.",
         "data": {
           "climate_entity": "Climatizzatore da pilotare",
-          "presence_entity": "Sensore di presenza (device_tracker)",
+          "presence_entity": "Presenza (persona o device tracker)",
           "outdoor_sensor": "Sensore temperatura esterna",
           "outdoor_fallback_sensor": "Sensore esterna di riserva",
           "eco_switch": "Switch Eco",
@@ -19,7 +19,7 @@
         "description": "Aggiorna le entità collegate (es. dopo un cambio del climatizzatore o di uno switch) senza perdere le tarature già impostate.",
         "data": {
           "climate_entity": "Climatizzatore da pilotare",
-          "presence_entity": "Sensore di presenza (device_tracker)",
+          "presence_entity": "Presenza (persona o device tracker)",
           "outdoor_sensor": "Sensore temperatura esterna",
           "outdoor_fallback_sensor": "Sensore esterna di riserva",
           "eco_switch": "Switch Eco",
@@ -31,6 +31,9 @@
     "abort": {
       "already_configured": "Questo climatizzatore è già gestito da Clima Smart.",
       "reconfigure_successful": "Clima Smart è stato riconfigurato."
+    },
+    "error": {
+      "duplicate_aux_switch": "Eco, Muto e Modalità Notte devono usare switch distinti."
     }
   },
   "options": {
@@ -75,7 +78,14 @@
       }
     },
     "sensor": {
-      "phase": { "name": "Fase" },
+      "phase": {
+        "name": "Fase",
+        "state": {
+          "day": "Giorno",
+          "night": "Notte",
+          "gap": "Fascia spenta"
+        }
+      },
       "target": { "name": "Target attivo" },
       "reason": { "name": "Stato" }
     },
