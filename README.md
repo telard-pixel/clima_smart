@@ -36,4 +36,4 @@ I parametri di tuning si regolano poi dalle entità `number`/`select`, oppure da
 ## Note
 
 - Testata su Home Assistant 2026.7.2.
-- Stato attuale: `0.4.2` — packaging compatibile con HACS.
+- Stato attuale: `0.4.3` — visibilità corretta come integrazione dispositivo.
