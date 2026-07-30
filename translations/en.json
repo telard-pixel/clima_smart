@@ -11,7 +11,8 @@
           "outdoor_fallback_sensor": "Fallback outdoor sensor",
           "eco_switch": "Eco switch",
           "mute_switch": "Mute switch",
-          "night_switch": "Night mode switch"
+          "night_switch": "Night mode switch",
+          "humidity_sensor": "Indoor humidity sensor (optional)"
         }
       },
       "reconfigure": {
@@ -24,7 +25,8 @@
           "outdoor_fallback_sensor": "Fallback outdoor sensor",
           "eco_switch": "Eco switch",
           "mute_switch": "Mute switch",
-          "night_switch": "Night mode switch"
+          "night_switch": "Night mode switch",
+          "humidity_sensor": "Indoor humidity sensor (optional)"
         }
       }
     },
@@ -66,6 +68,7 @@
       "mode": {
         "name": "Mode",
         "state": {
+          "smart": "Adaptive (fixed target, fan and program decided for you)",
           "auto": "Auto",
           "comfort": "Comfort",
           "away": "Away",
@@ -75,7 +78,9 @@
       }
     },
     "switch": {
-      "master": { "name": "Active" }
+      "master": {
+        "name": "Active"
+      }
     },
     "sensor": {
       "phase": {
@@ -86,17 +91,35 @@
           "gap": "Off window"
         }
       },
-      "target": { "name": "Active target" },
-      "reason": { "name": "Status" }
+      "target": {
+        "name": "Active target"
+      },
+      "reason": {
+        "name": "Status"
+      }
     },
     "number": {
-      "target_home": { "name": "Target when home" },
-      "target_away": { "name": "Target when away" },
-      "eco_band": { "name": "Eco hysteresis" },
-      "eco_outdoor_on": { "name": "Eco ON below outdoor" },
-      "eco_outdoor_off": { "name": "Eco OFF above outdoor" },
-      "summer_threshold": { "name": "Warm-season threshold" },
-      "override_minutes": { "name": "Manual override duration" }
+      "target_home": {
+        "name": "Target when home"
+      },
+      "target_away": {
+        "name": "Target when away"
+      },
+      "eco_band": {
+        "name": "Eco hysteresis"
+      },
+      "eco_outdoor_on": {
+        "name": "Eco ON below outdoor"
+      },
+      "eco_outdoor_off": {
+        "name": "Eco OFF above outdoor"
+      },
+      "summer_threshold": {
+        "name": "Warm-season threshold"
+      },
+      "override_minutes": {
+        "name": "Manual override duration"
+      }
     }
   }
 }

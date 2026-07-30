@@ -32,6 +32,7 @@ from .const import (
     CONF_ECO_OUTDOOR_OFF,
     CONF_ECO_OUTDOOR_ON,
     CONF_ECO_SWITCH,
+    CONF_HUMIDITY,
     CONF_MORNING_OFF_START,
     CONF_MUTE_SWITCH,
     CONF_NIGHT_SWITCH,
@@ -55,15 +56,25 @@ from .const import (
     DEFAULT_SUMMER_THRESHOLD,
     DEFAULT_TARGET_AWAY,
     DEFAULT_TARGET_HOME,
+    DRY_HUMIDITY_OFF,
+    DRY_HUMIDITY_ON,
+    DRY_MAX_DELTA,
+    FAN_BANDS,
+    FAN_HYSTERESIS,
+    FAN_ORDER,
     HVAC_COOL,
+    HVAC_DRY,
     HVAC_HEAT,
     HVAC_OFF,
+    MIN_FAN_DWELL_SECONDS,
     MODE_AUTO,
     MODE_AWAY,
     MODE_COMFORT,
     MODE_NIGHT,
     MODE_OFF,
+    MODE_SMART,
     MODES,
+    NIGHT_MAX_FAN,
     PHASE_DAY,
     PHASE_GAP,
     PHASE_NIGHT,
@@ -116,6 +127,31 @@ def _convert_temperature(
         return TemperatureConverter.convert(value, from_unit, to_unit)
     except ValueError:
         return None
+
+
+def _fan_band(delta: float) -> str:
+    """The fan step MODE_SMART wants for a given gap above the target."""
+    for threshold, name in FAN_BANDS:
+        if delta >= threshold:
+            return name
+    return FAN_BANDS[-1][1]
+
+
+def _band_threshold(name: str) -> float:
+    """Lower edge of a fan band, used to hold a step until the gap really drops."""
+    for threshold, band in FAN_BANDS:
+        if band == name:
+            return threshold
+    return 0.0
+
+
+def _quieter(first: str, second: str) -> str:
+    """The lower of two fan steps (unknown steps are left alone)."""
+    if first not in FAN_ORDER:
+        return second
+    if second not in FAN_ORDER:
+        return first
+    return first if FAN_ORDER.index(first) <= FAN_ORDER.index(second) else second
 
 
 def _snap_setpoint(value: float, attributes: dict) -> float:
@@ -200,6 +236,12 @@ class ClimaSmartController:
         # unavailable tracker is treated as home instead of silently switching to
         # the away target.
         self._last_presence_home = True
+
+        # MODE_SMART: the fan step we last decided and when, so a downgrade has to
+        # wait out MIN_FAN_DWELL_SECONDS instead of chasing every tenth of a degree.
+        self._last_fan_band: str | None = None
+        self._last_fan_band_at: datetime | None = None
+        self._dry_active = False
 
         # Diagnostics (read by sensors)
         self.current_phase: str | None = None
@@ -652,6 +694,89 @@ class ClimaSmartController:
             return PHASE_DAY
         return PHASE_NIGHT
 
+    def _read_humidity(self) -> float | None:
+        """Indoor relative humidity, if a sensor was configured (MODE_SMART only)."""
+        ent = self._cfg(CONF_HUMIDITY)
+        if not ent:
+            return None
+        st = self.hass.states.get(ent)
+        if st is None:
+            return None
+        value = _to_float(st.state)
+        # The Haier's own humidity sensor reports a flat 0.0 when it has nothing to
+        # say, and 0% indoors is not a reading: treat it as missing.
+        if value is None or value <= 0:
+            return None
+        return value
+
+    def _fan_for(
+        self,
+        delta: float | None,
+        cur_fan: str | None,
+        is_night: bool,
+        now: datetime,
+        fan_modes: list | None,
+    ) -> str | None:
+        """Fan step for MODE_SMART: harder the further the room is above target.
+
+        Upgrades land immediately, because that is the case where the room is
+        getting warmer and waiting would be felt. Downgrades have to earn it (see
+        FAN_HYSTERESIS / MIN_FAN_DWELL_SECONDS).
+        """
+        if delta is None:
+            return None
+        wanted = _fan_band(delta)
+        if is_night:
+            wanted = _quieter(wanted, NIGHT_MAX_FAN)
+
+        # Compare against our own last decision; fall back to what the unit reports
+        # so a restart doesn't jump the fan around before the first decision.
+        reference = self._last_fan_band
+        if reference not in FAN_ORDER:
+            reference = cur_fan if cur_fan in FAN_ORDER else None
+        if reference in FAN_ORDER and FAN_ORDER.index(wanted) < FAN_ORDER.index(
+            reference
+        ):
+            hold = delta > _band_threshold(reference) - FAN_HYSTERESIS
+            too_soon = (
+                self._last_fan_band_at is not None
+                and (now - self._last_fan_band_at).total_seconds()
+                < MIN_FAN_DWELL_SECONDS
+            )
+            if hold or too_soon:
+                wanted = reference
+
+        if fan_modes and wanted not in fan_modes:
+            # The unit does not offer this step: leave the fan alone rather than
+            # sending something it would reject at every pass.
+            return None
+        if wanted != self._last_fan_band:
+            self._last_fan_band = wanted
+            self._last_fan_band_at = now
+        return wanted
+
+    def _program_for(
+        self, delta: float | None, humidity: float | None, hvac_modes: list | None
+    ) -> str:
+        """Pick `dry` over `cool` when the room is muggy but already at temperature.
+
+        Without a humidity sensor, or on a unit without `dry`, this always returns
+        `cool`, which is exactly what the other modes do.
+        """
+        if humidity is None or delta is None:
+            self._dry_active = False
+            return HVAC_COOL
+        if hvac_modes and HVAC_DRY not in hvac_modes:
+            self._dry_active = False
+            return HVAC_COOL
+        if delta >= DRY_MAX_DELTA:
+            # Too warm for dehumidifying to be the answer.
+            self._dry_active = False
+            return HVAC_COOL
+        threshold = DRY_HUMIDITY_OFF if self._dry_active else DRY_HUMIDITY_ON
+        self._dry_active = humidity > threshold
+        return HVAC_DRY if self._dry_active else HVAC_COOL
+
     def _eco_decision(
         self, room: float | None, target: float, outdoor: float | None
     ) -> bool | None:
@@ -740,7 +865,8 @@ class ClimaSmartController:
                 reason=f"modo {self.mode}",
             )
 
-        # MODE_AUTO: replicate the validated automation.
+        # MODE_AUTO replicates the validated automation; MODE_SMART shares its
+        # phases and season guards and only decides target, fan and program itself.
         phase = self._phase(now)
         self.current_phase = phase
         is_night = phase == PHASE_NIGHT
@@ -769,8 +895,40 @@ class ClimaSmartController:
                 reason="clima in heat: non tocco hvac/setpoint, aggiorno muto/notte",
             )
 
-        target = self.target_home if is_home else self.target_away
+        # MODE_SMART keeps one target whatever the presence says: it is the mode for
+        # "I set 25 and you deal with the rest".
+        smart = self.mode == MODE_SMART
+        target = self.target_home if (smart or is_home) else self.target_away
         self.active_target = self._reachable_target(target, climate)
+
+        if smart:
+            delta = None if room is None else room - target
+            humidity = self._read_humidity()
+            program = self._program_for(
+                delta, humidity, climate.attributes.get("hvac_modes")
+            )
+            fan = self._fan_for(
+                delta,
+                climate.attributes.get("fan_mode"),
+                is_night,
+                now,
+                climate.attributes.get("fan_modes"),
+            )
+            detail = f"{program}, ventola {fan or 'invariata'}"
+            if delta is not None:
+                detail += f", scarto {delta:+.1f}"
+            if humidity is not None:
+                detail += f", umidità {humidity:.0f}%"
+            return Desired(
+                hvac=program,
+                setpoint=target,
+                fan=fan,
+                eco=self._eco_decision(room, target, outdoor),
+                mute=is_night,
+                night=is_night,
+                reason=f"smart {phase}: target {target}, {detail}",
+            )
+
         return Desired(
             hvac=HVAC_COOL,
             setpoint=target,
@@ -898,8 +1056,9 @@ class ClimaSmartController:
             # Treat the unit as already in the target mode for the rest of this pass.
             cur_mode = desired.hvac
 
-        # Setpoint / fan / eco only make sense while we intend the unit to cool.
-        if not hvac_blocked and desired.hvac == HVAC_COOL:
+        # Setpoint / fan / eco only make sense while we intend the unit to cool or
+        # dehumidify (MODE_SMART's `dry` still takes a setpoint and a fan step).
+        if not hvac_blocked and desired.hvac in (HVAC_COOL, HVAC_DRY):
             # 2) Setpoint. Snap the desired value to the climate's own step
             # first (a unit that quantizes, e.g. to whole degrees, would report
             # back a value that never equals ours and we would re-send at every

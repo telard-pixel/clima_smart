@@ -11,7 +11,8 @@
           "outdoor_fallback_sensor": "Sensore esterna di riserva",
           "eco_switch": "Switch Eco",
           "mute_switch": "Switch Muto",
-          "night_switch": "Switch Modalità Notte"
+          "night_switch": "Switch Modalità Notte",
+          "humidity_sensor": "Sensore di umidità interna (opzionale)"
         }
       },
       "reconfigure": {
@@ -24,7 +25,8 @@
           "outdoor_fallback_sensor": "Sensore esterna di riserva",
           "eco_switch": "Switch Eco",
           "mute_switch": "Switch Muto",
-          "night_switch": "Switch Modalità Notte"
+          "night_switch": "Switch Modalità Notte",
+          "humidity_sensor": "Sensore di umidità interna (opzionale)"
         }
       }
     },
@@ -63,12 +65,15 @@
   },
   "entity": {
     "switch": {
-      "master": { "name": "Attivo" }
+      "master": {
+        "name": "Attivo"
+      }
     },
     "select": {
       "mode": {
         "name": "Modo",
         "state": {
+          "smart": "Adattivo (25 fissi, ventola e programma automatici)",
           "auto": "Auto",
           "comfort": "Comfort",
           "away": "Fuori casa",
@@ -86,17 +91,35 @@
           "gap": "Fascia spenta"
         }
       },
-      "target": { "name": "Target attivo" },
-      "reason": { "name": "Stato" }
+      "target": {
+        "name": "Target attivo"
+      },
+      "reason": {
+        "name": "Stato"
+      }
     },
     "number": {
-      "target_home": { "name": "Target casa" },
-      "target_away": { "name": "Target fuori" },
-      "eco_band": { "name": "Isteresi eco" },
-      "eco_outdoor_on": { "name": "Eco esterna ON sotto" },
-      "eco_outdoor_off": { "name": "Eco esterna OFF sopra" },
-      "summer_threshold": { "name": "Soglia stagione calda" },
-      "override_minutes": { "name": "Override manuale" }
+      "target_home": {
+        "name": "Target casa"
+      },
+      "target_away": {
+        "name": "Target fuori"
+      },
+      "eco_band": {
+        "name": "Isteresi eco"
+      },
+      "eco_outdoor_on": {
+        "name": "Eco esterna ON sotto"
+      },
+      "eco_outdoor_off": {
+        "name": "Eco esterna OFF sopra"
+      },
+      "summer_threshold": {
+        "name": "Soglia stagione calda"
+      },
+      "override_minutes": {
+        "name": "Override manuale"
+      }
     }
   }
 }

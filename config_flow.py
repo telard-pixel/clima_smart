@@ -21,6 +21,7 @@ from .const import (
     CONF_ECO_OUTDOOR_OFF,
     CONF_ECO_OUTDOOR_ON,
     CONF_ECO_SWITCH,
+    CONF_HUMIDITY,
     CONF_MORNING_OFF_START,
     CONF_MUTE_SWITCH,
     CONF_NIGHT_START,
@@ -72,6 +73,9 @@ def _setup_schema(defaults: dict[str, Any]) -> vol.Schema:
                 CONF_OUTDOOR_FALLBACK,
                 default=defaults.get(CONF_OUTDOOR_FALLBACK, vol.UNDEFINED),
             ): _entity("sensor", device_class="temperature"),
+            vol.Optional(
+                CONF_HUMIDITY, default=defaults.get(CONF_HUMIDITY, vol.UNDEFINED)
+            ): _entity("sensor", device_class="humidity"),
             vol.Optional(
                 CONF_ECO_SWITCH, default=defaults.get(CONF_ECO_SWITCH, vol.UNDEFINED)
             ): _entity("switch"),
