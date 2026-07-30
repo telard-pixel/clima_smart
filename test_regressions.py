@@ -22,7 +22,9 @@ def _install_ha_stubs() -> None:
     ha = types.ModuleType("homeassistant")
     config_entries = types.ModuleType("homeassistant.config_entries")
     config_entries.ConfigEntry = object
-    config_entries.ConfigEntryError = RuntimeError
+    exceptions = types.ModuleType("homeassistant.exceptions")
+    exceptions.ConfigEntryError = RuntimeError
+    exceptions.HomeAssistantError = RuntimeError
     const = types.ModuleType("homeassistant.const")
     const.UnitOfTemperature = types.SimpleNamespace(CELSIUS="°C")
     core = types.ModuleType("homeassistant.core")
@@ -56,6 +58,7 @@ def _install_ha_stubs() -> None:
         {
             "homeassistant": ha,
             "homeassistant.config_entries": config_entries,
+            "homeassistant.exceptions": exceptions,
             "homeassistant.const": const,
             "homeassistant.core": core,
             "homeassistant.helpers": helpers,
@@ -72,6 +75,7 @@ package = types.ModuleType("clima_smart")
 package.__path__ = [str(Path(__file__).parent)]
 sys.modules["clima_smart"] = package
 controller_module = importlib.import_module("clima_smart.controller")
+validation = importlib.import_module("clima_smart.validation")
 
 
 class Context:
@@ -212,13 +216,19 @@ class ControllerRegressionTests(unittest.TestCase):
             {"climate.test": State("off", {"temperature": 25})}
         )
 
-        async def fail_call(*args, **kwargs):
+        tentativi = []
+
+        async def fail_call(domain, service, data=None):
+            tentativi.append(service)
             return False
 
         ctrl._call = fail_call
         asyncio.run(
             ctrl._apply(controller_module.Desired(hvac="cool", setpoint=25))
         )
+        # Asserzione positiva: il comando e' stato davvero tentato, quindi il None
+        # qui sotto significa "finestra ripulita", non "mai armata".
+        self.assertEqual(tentativi, ["set_hvac_mode"])
         self.assertIsNone(ctrl._settle_hvac_until)
 
     def test_master_off_during_hvac_call_stops_followup_commands(self):
@@ -613,11 +623,21 @@ class ControllerRegressionTests(unittest.TestCase):
         ctrl._call = record
         ctrl._call_target = lambda *a, **k: record("switch")
         asyncio.run(
-            ctrl._apply(controller_module.Desired(hvac="cool", setpoint=25, fan="low"))
+            ctrl._apply(controller_module.Desired(hvac="cool", setpoint=23, fan="low"))
         )
+        # Positiva piu' negativa: il setpoint parte, la ventola no. Senza la prima
+        # questa prova passerebbe anche se _apply fosse uscito subito.
+        self.assertIn("set_temperature", sent)
         self.assertNotIn("set_fan_mode", sent)
 
     # --------------------------------------------- profilo notturno completo
+    def _orologio(self, quando):
+        """Fissa l'ora vista dal controller e la ripristina a fine prova: una
+        prova che fallisce a meta' non deve lasciare l'orologio finto acceso per
+        quelle dopo (successo gia' pagato una volta)."""
+        controller_module.dt_util.now = lambda: quando
+        self.addCleanup(setattr, controller_module.dt_util, "now", lambda: NOW)
+
     def _profilo_notte(self, ctrl):
         ctrl.entry.options = dict(
             ctrl.entry.options,
@@ -660,12 +680,29 @@ class ControllerRegressionTests(unittest.TestCase):
     def test_morning_switch_off_happens_once(self):
         ctrl = self._smart_controller(room=24.0)
         self._profilo_notte(ctrl)
-        spegnimento = GIORNO.replace(hour=8, minute=31)
-        primo = ctrl._compute(spegnimento)
-        self.assertEqual(primo.hvac, "off")
-        # Riacceso dall'utente poco dopo: non deve rispegnerlo.
-        secondo = ctrl._compute(spegnimento + timedelta(minutes=5))
-        self.assertNotEqual(secondo.hvac, "off")
+        ctrl._restore_event.set()
+        inviati = []
+
+        async def riesce(domain, service, data=None):
+            inviati.append(service)
+            return True
+
+        ctrl._call = riesce
+        self._orologio(GIORNO.replace(hour=8, minute=31))
+        asyncio.run(ctrl.async_evaluate("prova"))
+        self.assertEqual(inviati, ["turn_off"])
+
+        # L'unita' si spegne davvero, come farebbe la macchina vera.
+        ctrl.hass.states.values["climate.test"].state = "off"
+        self._orologio(GIORNO.replace(hour=8, minute=36))
+        asyncio.run(ctrl.async_evaluate("prova"))
+        self.assertEqual(inviati, ["turn_off"])
+
+        # Riaccesa dall'utente dentro la finestra: viene gestita, non rispenta.
+        ctrl.hass.states.values["climate.test"].state = "cool"
+        self._orologio(GIORNO.replace(hour=8, minute=40))
+        asyncio.run(ctrl.async_evaluate("prova"))
+        self.assertNotIn("turn_off", inviati[1:])
 
     def test_morning_switch_off_not_attempted_late(self):
         """Oltre la finestra non ci si prova nemmeno: un riavvio a meta' mattina
@@ -691,6 +728,101 @@ class ControllerRegressionTests(unittest.TestCase):
         self.assertEqual(desired.setpoint, 25.0)
         self.assertEqual(desired.hvac, "cool")
 
+    # ------------------------------------- correzioni dalla revisione a due voci
+    def test_morning_switch_off_spares_a_running_heater(self):
+        """`!= off` comprendeva anche `heat`: d'inverno spegneva il riscaldamento."""
+        ctrl = self._smart_controller(room=19.0, outdoor=8.0)
+        self._profilo_notte(ctrl)
+        ctrl.hass.states.values["climate.test"].state = "heat"
+        desired = ctrl._compute(GIORNO.replace(hour=8, minute=31))
+        self.assertNotEqual(desired.hvac, "off")
+
+    def test_morning_switch_off_retries_when_the_command_fails(self):
+        ctrl = self._smart_controller(room=24.0)
+        self._profilo_notte(ctrl)
+        ctrl._restore_event.set()
+
+        async def fallisce(domain, service, data=None):
+            return False
+
+        ctrl._call = fallisce
+        self._orologio(GIORNO.replace(hour=8, minute=31))
+        asyncio.run(ctrl.async_evaluate("prova"))
+        self.assertIsNone(ctrl._morning_off_done_on)   # non marcato: si riprova
+
+        inviati = []
+
+        async def riesce(domain, service, data=None):
+            inviati.append(service)
+            return True
+
+        ctrl._call = riesce
+        asyncio.run(ctrl.async_evaluate("prova"))
+        self.assertIn("turn_off", inviati)
+        self.assertEqual(ctrl._morning_off_done_on, GIORNO.date())
+
+    def test_two_band_jump_lands_on_the_middle_step(self):
+        """Con scarto fra 2.0 e 2.3 la ventola ripiegava su `low`: piu' la stanza
+        era calda, piu' andava piano."""
+        ctrl = self._smart_controller(room=25.0)
+        ctrl.entry.options = dict(ctrl.entry.options, target_home=25.0)
+        self.assertEqual(ctrl._compute(GIORNO).fan, "low")
+        ctrl.hass.states.values["climate.test"].attributes["current_temperature"] = 27.0
+        self.assertEqual(ctrl._compute(GIORNO).fan, "medium")   # non piu' low
+        ctrl.hass.states.values["climate.test"].attributes["current_temperature"] = 27.4
+        self.assertEqual(ctrl._compute(GIORNO).fan, "high")
+
+    def test_restore_timeout_opens_the_barrier_degraded(self):
+        controller_module.RESTORE_TIMEOUT_SECONDS = 0.05
+        self.addCleanup(setattr, controller_module, "RESTORE_TIMEOUT_SECONDS", 10)
+        """Disabilitando una delle due entita' il controller restava fermo per
+        sempre: ora la barriera si apre, ma il controllo resta spento."""
+        ctrl = make_controller()
+        asyncio.run(ctrl.async_start())
+        self.assertTrue(ctrl._restore_event.is_set())
+        self.assertFalse(ctrl.enabled)
+        self.assertIn("non ripristinate", ctrl.last_reason)
+        # E da qui in poi le valutazioni girano, invece di uscire tutte.
+        asyncio.run(ctrl.async_evaluate("intervallo"))
+        self.assertIn("disattivato", ctrl.last_reason)
+
+    def test_our_own_mode_change_is_not_a_manual_command(self):
+        ctrl = make_controller()
+        ctrl._last_hvac_cmd = "dry"
+        ctrl._settle_hvac_until = NOW + timedelta(seconds=60)
+        ctrl._settle_mode_change_until = NOW + timedelta(seconds=60)
+        ctrl._maybe_flag_manual(
+            Event(
+                State("cool", {"temperature": 25.0, "fan_mode": "low"}),
+                State("dry", {"temperature": 24.0, "fan_mode": "auto"}),
+            )
+        )
+        self.assertFalse(ctrl.override_active)
+
+    def test_a_real_manual_command_still_wins_after_a_mode_change(self):
+        ctrl = make_controller()
+        ctrl._last_hvac_cmd = "dry"
+        ctrl._settle_mode_change_until = NOW - timedelta(seconds=1)   # scaduta
+        ctrl._maybe_flag_manual(
+            Event(
+                State("cool", {"fan_mode": "low"}),
+                State("cool", {"fan_mode": "high"}),
+            )
+        )
+        self.assertTrue(ctrl.override_active)
+
+    def test_dry_does_not_flap_on_the_gap_threshold(self):
+        ctrl = self._smart_controller(room=25.2, humidity=65)
+        self.assertEqual(ctrl._compute(GIORNO).hvac, "dry")
+        # La stanza sale fino al confine: senza isteresi qui tornava a cool.
+        for temperatura, atteso in ((26.0, "dry"), (26.4, "dry"), (26.6, "cool")):
+            ctrl.hass.states.values["climate.test"].attributes[
+                "current_temperature"
+            ] = temperatura
+            self.assertEqual(
+                ctrl._compute(GIORNO).hvac, atteso, f"stanza {temperatura}"
+            )
+
     def test_event_burst_collapses_into_one_evaluation(self):
         ctrl = make_controller()
         ctrl._queue_evaluate("evento")
@@ -701,6 +833,84 @@ class ControllerRegressionTests(unittest.TestCase):
         asyncio.run(ctrl.async_evaluate("evento"))
         ctrl._queue_evaluate("evento")
         self.assertEqual(len(ctrl.entry.tasks), 2)
+
+
+class ValidationTests(unittest.TestCase):
+    """Regole del form, provate direttamente: `validation` non importa ne' Home
+    Assistant ne' voluptuous, quindi qui non c'e' nessuno stub di mezzo."""
+
+    BASE = {
+        "morning_off_start": "08:30:00",
+        "day_start": "10:00:00",
+        "night_start": "22:00:00",
+        "sleep_start": "23:00:00",
+        "sleep_end": "07:30:00",
+        "eco_outdoor_on": 33.0,
+        "eco_outdoor_off": 35.0,
+        "presence_home_state": "home",
+    }
+
+    def valida(self, **cambi):
+        return validation.validate_options({**self.BASE, **cambi})
+
+    def test_configurazione_sana_passa(self):
+        self.assertIsNone(self.valida())
+
+    def test_ordine_orari(self):
+        self.assertEqual(self.valida(day_start="07:00:00"), "invalid_time_order")
+
+    def test_finestra_notturna_nulla(self):
+        self.assertEqual(
+            self.valida(sleep_start="23:00:00", sleep_end="23:00:00"),
+            "invalid_sleep_window",
+        )
+
+    def test_notte_che_supera_lo_spegnimento(self):
+        """Con sleep_end dopo lo spegnimento sparisce la fascia dry e lo
+        spegnimento non avviene mai: il clima raffredda tutto il giorno."""
+        self.assertEqual(
+            self.valida(sleep_end="09:00:00", morning_off_start="08:00:00"),
+            "invalid_wind_down",
+        )
+
+    def test_notte_che_finisce_esattamente_allo_spegnimento(self):
+        self.assertEqual(
+            self.valida(sleep_end="08:30:00"), "invalid_wind_down"
+        )
+
+    def test_soglie_eco_invertite(self):
+        self.assertEqual(
+            self.valida(eco_outdoor_on=36.0), "invalid_eco_range"
+        )
+
+    def test_stato_presenza_vuoto(self):
+        for valore in ("", "   "):
+            self.assertEqual(
+                self.valida(presence_home_state=valore),
+                "invalid_presence_state",
+                repr(valore),
+            )
+
+    def test_stato_presenza_ripulito(self):
+        self.assertEqual(validation.normalise_presence_state("  home "), "home")
+
+    def test_switch_ausiliari_distinti(self):
+        self.assertTrue(
+            validation.aux_switches_are_distinct(
+                {"eco_switch": "switch.a", "mute_switch": "switch.b"}
+            )
+        )
+        self.assertFalse(
+            validation.aux_switches_are_distinct(
+                {"eco_switch": "switch.a", "night_switch": "switch.a"}
+            )
+        )
+        # Due caselle vuote non sono un duplicato.
+        self.assertTrue(
+            validation.aux_switches_are_distinct(
+                {"eco_switch": None, "mute_switch": None}
+            )
+        )
 
 
 if __name__ == "__main__":

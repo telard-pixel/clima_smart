@@ -66,7 +66,9 @@
     "error": {
       "invalid_time_order": "Times must be in order: morning off < day < night.",
       "invalid_eco_range": "\"Eco ON when outdoor below\" must be lower than \"Eco OFF when outdoor above\".",
-      "invalid_sleep_window": "Deep night cannot start and end at the same time"
+      "invalid_sleep_window": "Deep night cannot start and end at the same time",
+      "invalid_wind_down": "The deep-night window must end before the morning switch-off",
+      "invalid_presence_state": "The presence “home” state cannot be empty"
     }
   },
   "entity": {
@@ -134,6 +136,17 @@
       "setpoint_offset": {
         "name": "Setpoint correction"
       }
+    }
+  },
+  "exceptions": {
+    "eco_on_not_below_off": {
+      "message": "The “eco outdoor ON below” threshold must be lower than “eco outdoor OFF above”."
+    },
+    "eco_off_not_above_on": {
+      "message": "The “eco outdoor OFF above” threshold must be higher than “eco outdoor ON below”."
+    },
+    "duplicate_aux_switch": {
+      "message": "Eco, mute and night mode must use distinct switches."
     }
   }
 }

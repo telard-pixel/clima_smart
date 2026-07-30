@@ -4,9 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from homeassistant.components.number import NumberEntity, NumberMode
+from homeassistant.components.number import (
+    NumberDeviceClass,
+    NumberEntity,
+    NumberMode,
+)
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import EntityCategory, UnitOfTemperature
+from homeassistant.const import EntityCategory, UnitOfTemperature, UnitOfTime
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -45,16 +49,19 @@ class TuneNumber:
     step: float
     icon: str
     unit: str | None = None
+    # Deliberately absent on the setpoint correction: it is a difference, and a
+    # temperature device class would convert it as if it were an absolute reading.
+    device_class: str | None = None
 
 
 _NUMBERS: tuple[TuneNumber, ...] = (
-    TuneNumber(key=CONF_TARGET_HOME, default=DEFAULT_TARGET_HOME,
+    TuneNumber(device_class=NumberDeviceClass.TEMPERATURE, key=CONF_TARGET_HOME, default=DEFAULT_TARGET_HOME,
                minimum=16, maximum=30, step=0.5, icon="mdi:home-thermometer",
                unit=UnitOfTemperature.CELSIUS),
-    TuneNumber(key=CONF_TARGET_AWAY, default=DEFAULT_TARGET_AWAY,
+    TuneNumber(device_class=NumberDeviceClass.TEMPERATURE, key=CONF_TARGET_AWAY, default=DEFAULT_TARGET_AWAY,
                minimum=16, maximum=30, step=0.5, icon="mdi:home-export-outline",
                unit=UnitOfTemperature.CELSIUS),
-    TuneNumber(key=CONF_TARGET_SLEEP, default=DEFAULT_TARGET_SLEEP,
+    TuneNumber(device_class=NumberDeviceClass.TEMPERATURE, key=CONF_TARGET_SLEEP, default=DEFAULT_TARGET_SLEEP,
                minimum=16, maximum=30, step=0.5, icon="mdi:bed",
                unit=UnitOfTemperature.CELSIUS),
     TuneNumber(key=CONF_SETPOINT_OFFSET, default=DEFAULT_SETPOINT_OFFSET,
@@ -63,17 +70,18 @@ _NUMBERS: tuple[TuneNumber, ...] = (
     TuneNumber(key=CONF_ECO_BAND, default=DEFAULT_ECO_BAND,
                minimum=0.5, maximum=5, step=0.5, icon="mdi:leaf",
                unit=UnitOfTemperature.CELSIUS),
-    TuneNumber(key=CONF_ECO_OUTDOOR_ON, default=DEFAULT_ECO_OUTDOOR_ON,
+    TuneNumber(device_class=NumberDeviceClass.TEMPERATURE, key=CONF_ECO_OUTDOOR_ON, default=DEFAULT_ECO_OUTDOOR_ON,
                minimum=20, maximum=45, step=1, icon="mdi:weather-sunny",
                unit=UnitOfTemperature.CELSIUS),
-    TuneNumber(key=CONF_ECO_OUTDOOR_OFF, default=DEFAULT_ECO_OUTDOOR_OFF,
+    TuneNumber(device_class=NumberDeviceClass.TEMPERATURE, key=CONF_ECO_OUTDOOR_OFF, default=DEFAULT_ECO_OUTDOOR_OFF,
                minimum=20, maximum=45, step=1, icon="mdi:weather-sunny-alert",
                unit=UnitOfTemperature.CELSIUS),
-    TuneNumber(key=CONF_SUMMER_THRESHOLD, default=DEFAULT_SUMMER_THRESHOLD,
+    TuneNumber(device_class=NumberDeviceClass.TEMPERATURE, key=CONF_SUMMER_THRESHOLD, default=DEFAULT_SUMMER_THRESHOLD,
                minimum=10, maximum=30, step=1, icon="mdi:sun-thermometer",
                unit=UnitOfTemperature.CELSIUS),
     TuneNumber(key=CONF_OVERRIDE_MINUTES, default=DEFAULT_OVERRIDE_MINUTES,
-               minimum=0, maximum=480, step=5, icon="mdi:hand-back-right", unit="min"),
+               minimum=0, maximum=480, step=5, icon="mdi:hand-back-right",
+               unit=UnitOfTime.MINUTES, device_class=NumberDeviceClass.DURATION),
 )
 
 
@@ -100,6 +108,7 @@ class ClimaSmartNumber(ClimaSmartEntity, NumberEntity):
         self._attr_native_max_value = desc.maximum
         self._attr_native_step = desc.step
         self._attr_native_unit_of_measurement = desc.unit
+        self._attr_device_class = desc.device_class
         self._attr_entity_category = EntityCategory.CONFIG
 
     @property
@@ -116,14 +125,14 @@ class ClimaSmartNumber(ClimaSmartEntity, NumberEntity):
             and value >= self._controller.eco_outdoor_off
         ):
             raise HomeAssistantError(
-                "Eco ON deve essere inferiore alla soglia Eco OFF"
+                translation_domain=DOMAIN, translation_key="eco_on_not_below_off"
             )
         if (
             self._desc.key == CONF_ECO_OUTDOOR_OFF
             and value <= self._controller.eco_outdoor_on
         ):
             raise HomeAssistantError(
-                "Eco OFF deve essere superiore alla soglia Eco ON"
+                translation_domain=DOMAIN, translation_key="eco_off_not_above_on"
             )
         options = dict(entry.options)
         options[self._desc.key] = value

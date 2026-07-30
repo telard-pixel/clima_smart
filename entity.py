@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
 from homeassistant.helpers.entity import Entity
 
 from .const import DOMAIN
@@ -23,6 +23,7 @@ class ClimaSmartEntity(Entity):
             name="Clima Smart",
             manufacturer="tis24dev",
             model="Smart climate controller",
+            entry_type=DeviceEntryType.SERVICE,
         )
 
     async def async_added_to_hass(self) -> None:

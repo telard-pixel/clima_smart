@@ -14,6 +14,11 @@ from homeassistant.config_entries import (
 from homeassistant.core import callback
 from homeassistant.helpers import selector
 
+from .validation import (
+    aux_switches_are_distinct,
+    normalise_presence_state,
+    validate_options,
+)
 from .const import (
     CONF_CLIMATE,
     CONF_DAY_START,
@@ -100,19 +105,10 @@ def _setup_schema(defaults: dict[str, Any]) -> vol.Schema:
     )
 
 
-def _time_to_minutes(value: str) -> int:
-    hh, mm = str(value).split(":")[:2]
-    return int(hh) * 60 + int(mm)
-
-
 def _aux_switches_are_distinct(values: dict[str, Any]) -> bool:
-    """Prevent two logical features from fighting over the same real switch."""
-    selected = [
-        values.get(key)
-        for key in (CONF_ECO_SWITCH, CONF_MUTE_SWITCH, CONF_NIGHT_SWITCH)
-        if values.get(key)
-    ]
-    return len(selected) == len(set(selected))
+    """Kept as a thin alias: the rule itself lives in `validation`, which has no
+    Home Assistant or voluptuous import and can therefore be tested directly."""
+    return aux_switches_are_distinct(values)
 
 
 class ClimaSmartConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -173,7 +169,13 @@ class ClimaSmartConfigFlow(ConfigFlow, domain=DOMAIN):
                 None,
             )
             if duplicate is not None:
-                return self.async_abort(reason="already_configured")
+                # Il form torna con l'errore invece di chiudersi: abortire buttava
+                # via tutto quello che l'utente aveva appena compilato.
+                return self.async_show_form(
+                    step_id="reconfigure",
+                    data_schema=_setup_schema(user_input),
+                    errors={"base": "already_configured"},
+                )
 
             # The update listener performs the one required reload when entry.data
             # changes. Using the non-reloading helper avoids the double-reload race
@@ -204,22 +206,13 @@ class ClimaSmartOptionsFlow(OptionsFlow):
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            morning = _time_to_minutes(user_input[CONF_MORNING_OFF_START])
-            day = _time_to_minutes(user_input[CONF_DAY_START])
-            night = _time_to_minutes(user_input[CONF_NIGHT_START])
-            if not (morning < day < night):
-                errors["base"] = "invalid_time_order"
-            elif user_input[CONF_SLEEP_START] == user_input[CONF_SLEEP_END]:
-                # Same instant means a zero-length window, which would silently
-                # disable the sleep target instead of doing what was asked.
-                errors["base"] = "invalid_sleep_window"
-            # eco_outdoor_on must stay below eco_outdoor_off: _eco_decision checks
-            # the "on" condition first, so a swapped/equal pair makes the "off"
-            # branch practically unreachable and eco silently gets stuck on.
-            elif user_input[CONF_ECO_OUTDOOR_ON] >= user_input[CONF_ECO_OUTDOOR_OFF]:
-                errors["base"] = "invalid_eco_range"
-            else:
+            problem = validate_options(user_input)
+            if problem is None:
+                user_input[CONF_PRESENCE_HOME_STATE] = normalise_presence_state(
+                    user_input[CONF_PRESENCE_HOME_STATE]
+                )
                 return self.async_create_entry(title="", data=user_input)
+            errors["base"] = problem
             # Re-show the form with what the user just typed, not the old values.
             opts = {**opts, **user_input}
 

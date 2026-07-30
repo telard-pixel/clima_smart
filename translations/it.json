@@ -66,7 +66,9 @@
     "error": {
       "invalid_time_order": "Gli orari devono essere in ordine: inizio mattino < giorno < notte.",
       "invalid_eco_range": "\"Eco ON con esterna sotto\" deve essere inferiore a \"Eco OFF con esterna sopra\".",
-      "invalid_sleep_window": "Inizio e fine della notte fonda non possono coincidere"
+      "invalid_sleep_window": "Inizio e fine della notte fonda non possono coincidere",
+      "invalid_wind_down": "La fine della notte fonda deve precedere lo spegnimento del mattino",
+      "invalid_presence_state": "Lo stato «a casa» della presenza non può essere vuoto"
     }
   },
   "entity": {
@@ -134,6 +136,17 @@
       "setpoint_offset": {
         "name": "Correzione setpoint"
       }
+    }
+  },
+  "exceptions": {
+    "eco_on_not_below_off": {
+      "message": "La soglia «Eco esterna ON sotto» deve essere inferiore a «Eco esterna OFF sopra»."
+    },
+    "eco_off_not_above_on": {
+      "message": "La soglia «Eco esterna OFF sopra» deve essere superiore a «Eco esterna ON sotto»."
+    },
+    "duplicate_aux_switch": {
+      "message": "Eco, Muto e Modalità notte devono usare interruttori distinti."
     }
   }
 }

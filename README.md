@@ -80,7 +80,15 @@ I parametri di tuning si regolano poi dalle entità `number`/`select`, oppure da
 ## Note
 
 - Testata su Home Assistant 2026.7.2.
-- Stato attuale: `0.8.0` — profilo notturno completo: notte fonda con ventola a
+- Stato attuale: `0.9.0` — giro di correzioni dopo una revisione a due voci: lo
+  spegnimento del mattino non tocca più un riscaldamento acceso e viene segnato
+  solo se il comando riesce; la ventola sale al gradino intermedio invece di
+  restare bassa; la barriera di ripristino non blocca più il controller se
+  un'entità è disabilitata; la fusione delle raffiche funziona davvero; un nostro
+  cambio di programma non viene più scambiato per un tuo comando; `cool`/`dry` ha
+  isteresi anche sullo scarto. Validazioni nuove nel form, messaggi d'errore
+  tradotti, e 59 prove fra cui la prima batteria sulle regole del form.
+- `0.8.0` — profilo notturno completo: notte fonda con ventola a
   due passi, scarico mattutino in `dry`, spegnimento una tantum, e il controller
   non accende mai l'unità da sé.
 - `0.7.0` — finestra di notte fonda con target proprio e correzione setpoint

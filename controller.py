@@ -13,7 +13,8 @@ import math
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 
-from homeassistant.config_entries import ConfigEntry, ConfigEntryError
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.exceptions import ConfigEntryError
 from homeassistant.const import UnitOfTemperature
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers.event import (
@@ -64,6 +65,8 @@ from .const import (
     DEFAULT_TARGET_AWAY,
     DEFAULT_TARGET_HOME,
     DEFAULT_TARGET_SLEEP,
+    DOMAIN,
+    DRY_DELTA_HYSTERESIS,
     DRY_HUMIDITY_OFF,
     DRY_HUMIDITY_ON,
     DRY_MAX_DELTA,
@@ -89,6 +92,7 @@ from .const import (
     PHASE_NIGHT,
     PHASE_SLEEP,
     PHASE_WIND_DOWN,
+    RESTORE_TIMEOUT_SECONDS,
     SERVICE_CALL_TIMEOUT_SECONDS,
     SUMMER_HYSTERESIS,
     UPDATE_INTERVAL_SECONDS,
@@ -228,6 +232,11 @@ class ClimaSmartController:
         # vice versa. See _maybe_flag_manual / _maybe_flag_manual_switch.
         self._settle_hvac_until: datetime | None = None
         self._settle_setpoint_until: datetime | None = None
+        # Armed whenever we change the hvac mode: this unit moves the fan, the
+        # setpoint and the aux switches as a side effect of a mode change, and
+        # those knock-on changes carry no user context, so without this window
+        # they were indistinguishable from someone reaching for the remote.
+        self._settle_mode_change_until: datetime | None = None
         self._settle_fan_until: datetime | None = None
         self._settle_aux_until: dict[str, datetime] = {}
         self._last_setpoint_cmd: float | None = None
@@ -244,13 +253,19 @@ class ClimaSmartController:
         self._last_fan_band: str | None = None
         self._last_fan_band_at: datetime | None = None
         self._dry_active = False
-        # Giorno in cui lo spegnimento del mattino e' gia' stato deciso.
+        # Giorno in cui lo spegnimento del mattino e' gia' stato eseguito, e flag
+        # della passata in corso che lo ha deciso.
         self._morning_off_done_on = None
+        self._morning_off_armed = False
 
         # Diagnostics (read by sensors)
         self.current_phase: str | None = None
         self.active_target: float | None = None
         self.last_reason: str = "inizializzazione"
+        # Fuori dallo stato del sensore: cambiano a ogni passata e riempirebbero
+        # il recorder di righe identiche nel contenuto.
+        self.last_trigger: str | None = None
+        self.last_evaluated: datetime | None = None
 
         # entity_id -> conf_key for the eco/mute/night aux switches, resolved in
         # async_start() so manual toggles on them get the same override grace
@@ -332,7 +347,7 @@ class ClimaSmartController:
         }
         if len(aux_config.values()) != len(set(aux_config.values())):
             raise ConfigEntryError(
-                "Eco, Muto e Modalità Notte devono usare switch distinti"
+                translation_domain=DOMAIN, translation_key="duplicate_aux_switch"
             )
         for conf_key, ent in aux_config.items():
             if ent:
@@ -349,11 +364,26 @@ class ClimaSmartController:
             )
         )
         try:
-            await asyncio.wait_for(self._restore_event.wait(), timeout=10)
+            await asyncio.wait_for(
+                self._restore_event.wait(), timeout=RESTORE_TIMEOUT_SECONDS
+            )
         except TimeoutError:
+            # One of the two restoring entities never arrived: it can be disabled in
+            # the entity registry, which is an ordinary thing for a user to do. The
+            # barrier opens anyway, or every later evaluation - interval, event,
+            # options change - would bail out at the same check, for good and after
+            # every restart. `enabled` stays False, so nothing is commanded until
+            # the master switch says otherwise: degraded, not deaf.
             self._restore_wait_timed_out = True
-            self.last_reason = "attendo ripristino entità master/modo"
-            _LOGGER.warning("Clima Smart: timeout nel ripristino iniziale, resto disattivato")
+            self._restore_event.set()
+            self.enabled = False
+            self.last_reason = (
+                "entità master/modo non ripristinate: controllo fermo per sicurezza"
+            )
+            _LOGGER.warning(
+                "Clima Smart: timeout nel ripristino iniziale (entità master/modo "
+                "assenti o disabilitate), resto disattivato"
+            )
             self._notify_entities()
             return
         await self.async_evaluate("avvio dopo ripristino")
@@ -488,6 +518,13 @@ class ClimaSmartController:
         # never suppress detection here.
         manual = False
         hvac_echo = False
+        # A mode change of ours drags other fields with it, in the same event or a
+        # minute later. While that window is open, a setpoint or fan move without
+        # user context is collateral of our own command, not a person.
+        mode_change_settling = (
+            self._settle_mode_change_until is not None
+            and now < self._settle_mode_change_until
+        )
         if hvac_changed:
             hvac_echo = (
                 self._last_hvac_cmd is not None
@@ -511,18 +548,18 @@ class ClimaSmartController:
                 self._settle_setpoint_until is not None
                 and now < self._settle_setpoint_until
             )
-            mode_materialized_setpoint = hvac_echo and old_set is None
-            if not mode_materialized_setpoint and not (
-                setpoint_settling and setpoint_echo
-            ):
+            # Our own mode change carrying the setpoint with it: either seen in the
+            # same event (hvac_echo) or arriving just after it.
+            mode_driven = hvac_echo or mode_change_settling
+            if not mode_driven and not (setpoint_settling and setpoint_echo):
                 manual = True
         if fan_changed:
             fan_echo = self._last_fan_cmd is not None and new_fan == self._last_fan_cmd
             fan_settling = (
                 self._settle_fan_until is not None and now < self._settle_fan_until
             )
-            mode_materialized_fan = hvac_echo and old_fan is None
-            if not mode_materialized_fan and not (fan_settling and fan_echo):
+            mode_driven_fan = hvac_echo or mode_change_settling
+            if not mode_driven_fan and not (fan_settling and fan_echo):
                 manual = True
 
         if manual:
@@ -550,6 +587,13 @@ class ClimaSmartController:
         now = dt_util.now()
         if new_state.context.user_id is not None:
             self._start_override(f"comando manuale su {conf_key}")
+            return
+        if (
+            self._settle_mode_change_until is not None
+            and now < self._settle_mode_change_until
+        ):
+            # Aux switches this unit drops or raises by itself when the mode
+            # changes: our command moved them, not a hand.
             return
         settle_until = self._settle_aux_until.get(conf_key)
         want = new_state.state == "on"
@@ -785,14 +829,21 @@ class ClimaSmartController:
             reference = cur_fan if cur_fan in FAN_ORDER else None
         # A step the current band table does not offer (e.g. `high` left over from
         # the day when the sleep window starts) is not a reference to hold on to.
-        if reference is not None and reference not in [name for _, name in bands]:
+        available = sorted({name for _, name in bands}, key=FAN_ORDER.index)
+        if reference is not None and reference not in available:
             reference = None
         if reference in FAN_ORDER and wanted != reference:
             if FAN_ORDER.index(wanted) > FAN_ORDER.index(reference):
                 # Upgrade: the gap has to be clearly inside the higher band, not
-                # merely touching its edge.
-                if delta < _band_threshold(wanted, bands) + FAN_HYSTERESIS:
-                    wanted = reference
+                # merely touching its edge. On a two-step jump, come down one step
+                # at a time instead of collapsing back to the reference: falling
+                # straight back to `low` meant the hotter the room, the slower the
+                # fan, for every gap between a threshold and its margin.
+                while (
+                    available.index(wanted) > available.index(reference)
+                    and delta < _band_threshold(wanted, bands) + FAN_HYSTERESIS
+                ):
+                    wanted = available[available.index(wanted) - 1]
             else:
                 hold = delta > _band_threshold(reference, bands) - FAN_HYSTERESIS
                 too_soon = (
@@ -826,7 +877,11 @@ class ClimaSmartController:
         if hvac_modes and HVAC_DRY not in hvac_modes:
             self._dry_active = False
             return HVAC_COOL
-        if delta >= DRY_MAX_DELTA:
+        # Two thresholds on the gap as well, not one hard edge: a unit reporting in
+        # half degrees sits right on 1.0 for minutes, and a bare `>=` had the
+        # compressor swapping between cool and dry at every pass.
+        leave = DRY_MAX_DELTA + DRY_DELTA_HYSTERESIS if self._dry_active else DRY_MAX_DELTA
+        if delta >= leave:
             # Too warm for dehumidifying to be the answer.
             self._dry_active = False
             return HVAC_COOL
@@ -934,8 +989,14 @@ class ClimaSmartController:
             # For MODE_SMART the morning switch-off is one event, not a state held
             # for two hours: outside its window the phase behaves like the day, so a
             # unit the user turns back on in the morning is managed, not switched off.
-            if self._morning_off_due(now) and cur_mode != HVAC_OFF:
-                self._morning_off_done_on = now.date()
+            # Only what we drive gets switched off: `!= HVAC_OFF` also covered `heat`
+            # and would have shut down a running heating cycle every winter morning,
+            # the one thing the rest of this file promises never to do.
+            if self._morning_off_due(now) and cur_mode in (HVAC_COOL, HVAC_DRY):
+                # Marked only once the command has actually gone through, in
+                # async_evaluate: marking here meant a failed turn_off was never
+                # retried and the unit cooled all day.
+                self._morning_off_armed = True
                 self.active_target = None
                 return Desired(hvac=HVAC_OFF, reason="smart: spegnimento del mattino")
         elif phase == PHASE_GAP:
@@ -1025,12 +1086,16 @@ class ClimaSmartController:
 
     # ---------------------------------------------------------------- apply
     async def async_evaluate(self, trigger: str) -> None:
-        # Release the coalescing slot first: from here on this pass re-reads every
-        # state, so anything arriving now belongs to the next pass, not this one.
-        self._evaluate_queued = False
         # Serialize: interval + state events must not run the logic concurrently
         # (equivalent of the automation's mode: single).
         async with self._lock:
+            # Release the coalescing slot only here. Background tasks start eagerly
+            # in Home Assistant, and acquiring a free lock does not suspend, so
+            # clearing it before this line ran inside _queue_evaluate itself: the
+            # flag was already False when that call returned and nothing ever
+            # coalesced. From here on the pass re-reads every state, so whatever
+            # arrives now genuinely belongs to the next one.
+            self._evaluate_queued = False
             if self._stopped:
                 return
             if not self._restore_event.is_set():
@@ -1046,21 +1111,28 @@ class ClimaSmartController:
 
             if self.override_active:
                 self.last_reason = (
-                    f"override manuale fino a {self._override_until:%H:%M} ({trigger})"
+                    f"override manuale fino a {self._override_until:%H:%M}"
                 )
+                self.last_trigger = trigger
                 self._notify_entities()
                 return
 
             now = dt_util.now()
             try:
+                self._morning_off_armed = False
                 desired = self._compute(now)
                 self._apply_errors.clear()
                 await self._apply(desired)
+                if self._morning_off_armed and not self._apply_errors:
+                    # The switch-off went through: no second attempt today.
+                    self._morning_off_done_on = now.date()
             except Exception as err:  # noqa: BLE001 - one bad pass must not wedge the loop silently
                 _LOGGER.exception(
                     "Clima Smart: errore durante la valutazione (%s)", trigger
                 )
-                self.last_reason = f"errore interno: {err} [{trigger} {now:%H:%M}]"
+                self.last_reason = f"errore interno: {err}"
+                self.last_trigger = trigger
+                self.last_evaluated = now
                 self._notify_entities()
                 return
             error_suffix = (
@@ -1068,9 +1140,9 @@ class ClimaSmartController:
                 if self._apply_errors
                 else ""
             )
-            self.last_reason = (
-                f"{desired.reason}{error_suffix} [{trigger} {now:%H:%M}]"
-            )
+            self.last_reason = f"{desired.reason}{error_suffix}"
+            self.last_trigger = trigger
+            self.last_evaluated = now
             self._notify_entities()
 
     async def _apply(self, desired: Desired) -> None:
@@ -1125,6 +1197,9 @@ class ClimaSmartController:
             prev = self._last_hvac_cmd
             self._last_hvac_cmd = desired.hvac
             self._arm_settle("_settle_hvac_until")
+            # The unit rearranges fan, setpoint and aux switches around a mode
+            # change; give those knock-on moves the same grace.
+            self._arm_settle("_settle_mode_change_until")
             if desired.hvac == HVAC_OFF:
                 ok = await self._call("climate", "turn_off", {})
             else:
@@ -1136,6 +1211,10 @@ class ClimaSmartController:
                 # instead of the settle guard suppressing the resend for ~180s.
                 self._last_hvac_cmd = prev
                 self._settle_hvac_until = None
+                self._settle_mode_change_until = None
+                # A morning switch-off that did not go through must not be recorded
+                # as done, or it is never attempted again today.
+                self._morning_off_armed = False
                 return
             # Treat the unit as already in the target mode for the rest of this pass.
             cur_mode = desired.hvac

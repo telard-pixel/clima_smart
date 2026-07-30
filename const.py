@@ -61,6 +61,10 @@ DEFAULT_PRESENCE_HOME_STATE = "home"
 # cycle in progress is not cut off by a small dip in the outdoor reading.
 SUMMER_HYSTERESIS = 2.0
 
+# How long async_start waits for the master switch and the mode select to restore
+# before opening the barrier in degraded mode.
+RESTORE_TIMEOUT_SECONDS = 10
+
 # Periodic re-evaluation cadence (event-driven updates happen on top of this).
 UPDATE_INTERVAL_SECONDS = 300
 # After we send a command, ignore "manual override" detection for this long so the
@@ -111,8 +115,11 @@ MIN_FAN_DWELL_SECONDS = 600
 # draws less than compressor cooling. Two thresholds, again to avoid flapping.
 DRY_HUMIDITY_ON = 60.0
 DRY_HUMIDITY_OFF = 55.0
-# Above this gap the room needs cooling, not dehumidifying.
+# Above this gap the room needs cooling, not dehumidifying. The second value is
+# the extra slack before leaving dry, so the program does not swap back and
+# forth while the reported temperature sits on the threshold.
 DRY_MAX_DELTA = 1.0
+DRY_DELTA_HYSTERESIS = 0.5
 
 # --- Day phases (only meaningful in MODE_AUTO / MODE_SMART) ---
 PHASE_DAY = "day"
