@@ -13,9 +13,10 @@ di casa, la presenza non conta), applica le stesse fasce orarie di `auto`, e in 
 decide da sé:
 
 - **la ventola**, in base a quanto la stanza è ancora sopra il target: 2 gradi o più
-  → `high`, 1 o più → `medium`, sotto → `low`. Le salite valgono subito, le discese
-  solo dopo 10 minuti e con mezzo passo di margine, così non ticchetta. Di notte non
-  supera `medium`.
+  → `high`, 1 o più → `medium`, sotto → `low`. Entrambe le direzioni chiedono 0.3 di
+  margine oltre il confine della banda, e le discese anche 10 minuti dall'ultimo
+  cambio: senza, un'unità che riporta a mezzi gradi fa ticchettare la ventola
+  restando appoggiata sul confine.
 - **il programma**: `dry` quando l'aria è umida (oltre il 60%) ma la temperatura è già
   a posto, `cool` in tutti gli altri casi. Serve un sensore di umidità interna
   configurato: senza quello resta sempre su `cool`.
