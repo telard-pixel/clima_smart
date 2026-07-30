@@ -36,4 +36,8 @@ I parametri di tuning si regolano poi dalle entità `number`/`select`, oppure da
 ## Note
 
 - Testata su Home Assistant 2026.7.2.
-- Stato attuale: `0.4.3` — visibilità corretta come integrazione dispositivo.
+- Stato attuale: `0.5.0` — il target diagnostico coincide con quello che l'unità
+  riceve davvero, muto/notte non si fermano più su una modalità HVAC non
+  supportata, la diagnostica si azzera quando il clima è irraggiungibile,
+  override a 0 minuti non annuncia più una scadenza inesistente e le raffiche di
+  eventi si fondono in una sola valutazione.

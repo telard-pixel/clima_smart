@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 
@@ -67,6 +68,7 @@ from .const import (
     PHASE_GAP,
     PHASE_NIGHT,
     SERVICE_CALL_TIMEOUT_SECONDS,
+    SUMMER_HYSTERESIS,
     UPDATE_INTERVAL_SECONDS,
 )
 
@@ -116,6 +118,32 @@ def _convert_temperature(
         return None
 
 
+def _snap_setpoint(value: float, attributes: dict) -> float:
+    """Clamp a setpoint to the climate's limits and snap it to its own step.
+
+    Shared by the decision and the apply path so the diagnostic target sensor
+    and the value the unit actually receives can never disagree.
+    """
+    minimum = _to_float(attributes.get("min_temp"))
+    maximum = _to_float(attributes.get("max_temp"))
+    if minimum is not None:
+        value = max(value, minimum)
+    if maximum is not None:
+        value = min(value, maximum)
+    step = _to_float(attributes.get("target_temp_step"))
+    if step:
+        base = minimum if minimum is not None else 0.0
+        # round() halves to even (25.5 -> 26 but 16.5 -> 16): on a 1 degree step
+        # the same half degree landed sometimes above and sometimes below the
+        # request. Half-up keeps it predictable.
+        value = base + math.floor((value - base) / step + 0.5) * step
+        if minimum is not None:
+            value = max(value, minimum)
+        if maximum is not None:
+            value = min(value, maximum)
+    return value
+
+
 @dataclass
 class Desired:
     """What the controller wants the climate to be on this evaluation.
@@ -148,6 +176,9 @@ class ClimaSmartController:
         self._restore_wait_timed_out = False
         self._override_cancel = None
         self._apply_errors: list[str] = []
+        # True while an evaluation has been queued but has not started yet, so a
+        # burst of state events collapses into one pass (see _queue_evaluate).
+        self._evaluate_queued = False
 
         # Runtime state (surfaced/edited through entities)
         self.enabled: bool = False      # fail-safe until master restore completes
@@ -325,12 +356,27 @@ class ClimaSmartController:
 
     # --------------------------------------------------------- state changes
     @callback
+    def _queue_evaluate(self, trigger: str) -> None:
+        """Queue one evaluation, collapsing bursts into a single pass.
+
+        The Haier cloud publishes several attributes in a row: one task per event
+        meant a queue of identical passes waiting on the lock. A pass that has
+        not started yet can absorb everything that arrives meanwhile because it
+        re-reads every state when it runs. Events arriving after it started still
+        queue a fresh pass, so no update is lost.
+        """
+        if self._evaluate_queued:
+            return
+        self._evaluate_queued = True
+        self.entry.async_create_background_task(
+            self.hass, self.async_evaluate(trigger), "clima_smart_evaluate"
+        )
+
+    @callback
     def _on_interval(self, now: datetime) -> None:
         if self._stopped:
             return
-        self.entry.async_create_background_task(
-            self.hass, self.async_evaluate("intervallo"), "clima_smart_evaluate"
-        )
+        self._queue_evaluate("intervallo")
 
     @callback
     def _on_state_event(self, event: Event) -> None:
@@ -341,9 +387,7 @@ class ClimaSmartController:
             self._maybe_flag_manual(event)
         elif entity_id in self._aux_entities:
             self._maybe_flag_manual_switch(self._aux_entities[entity_id], event)
-        self.entry.async_create_background_task(
-            self.hass, self.async_evaluate("evento"), "clima_smart_evaluate"
-        )
+        self._queue_evaluate("evento")
 
     @callback
     def _maybe_flag_manual(self, event: Event) -> None:
@@ -468,15 +512,24 @@ class ClimaSmartController:
         if self._override_cancel is not None:
             self._override_cancel()
             self._override_cancel = None
-        self._override_until = dt_util.now() + timedelta(minutes=self.override_minutes)
+        minutes = self.override_minutes
+        if minutes <= 0:
+            # Override turned off by the user: keep control and say so. Setting
+            # _override_until to "now" left override_active already false while
+            # the reason line announced a handover until HH:MM that never was.
+            self._override_until = None
+            self.last_reason = f"{reason} → override disattivato (0 min)"
+            _LOGGER.debug("Clima Smart: %s", self.last_reason)
+            self._notify_entities()
+            return
+        self._override_until = dt_util.now() + timedelta(minutes=minutes)
         self.last_reason = f"{reason} → cedo fino a {self._override_until:%H:%M}"
         _LOGGER.debug("Clima Smart: %s", self.last_reason)
-        if self.override_minutes > 0:
-            self._override_cancel = async_call_later(
-                self.hass,
-                timedelta(minutes=self.override_minutes),
-                self._on_override_expired,
-            )
+        self._override_cancel = async_call_later(
+            self.hass,
+            timedelta(minutes=minutes),
+            self._on_override_expired,
+        )
         self._notify_entities()
 
     @callback
@@ -557,6 +610,21 @@ class ClimaSmartController:
         units = getattr(getattr(self.hass, "config", None), "units", None)
         return getattr(units, "temperature_unit", UnitOfTemperature.CELSIUS)
 
+    def _reachable_target(self, target: float, climate) -> float:
+        """The target the unit will really hold, expressed back in Celsius.
+
+        active_target feeds the diagnostic sensor. Publishing the requested value
+        instead of the quantized one made the sensor read 25.5 while a unit with
+        a 1 degree step was holding 26.
+        """
+        unit = self._system_temperature_unit
+        in_unit = _convert_temperature(target, UnitOfTemperature.CELSIUS, unit)
+        if in_unit is None:
+            return target
+        snapped = _snap_setpoint(in_unit, climate.attributes)
+        back = _convert_temperature(snapped, unit, UnitOfTemperature.CELSIUS)
+        return target if back is None else back
+
     def _is_home(self) -> bool:
         ent = self.presence_entity
         if not ent:
@@ -604,6 +672,10 @@ class ClimaSmartController:
     def _compute(self, now: datetime) -> Desired:
         climate = self.hass.states.get(self.climate_entity)
         if climate is None or climate.state in _UNAVAILABLE:
+            # Clear the diagnostics too: leaving them frozen on the last pass made
+            # the sensors advertise a phase and a target we are no longer chasing.
+            self.current_phase = None
+            self.active_target = None
             return Desired(reason="clima non disponibile")
 
         cur_mode = climate.state
@@ -619,7 +691,10 @@ class ClimaSmartController:
         if outdoor_valid:
             summer = (
                 outdoor > self.summer_threshold
-                or (cur_mode == HVAC_COOL and outdoor > self.summer_threshold - 2)
+                or (
+                    cur_mode == HVAC_COOL
+                    and outdoor > self.summer_threshold - SUMMER_HYSTERESIS
+                )
             )
         else:
             # Outdoor sensors unavailable: fail closed. We may maintain a cooling
@@ -653,7 +728,7 @@ class ClimaSmartController:
                     reason=f"modo {self.mode}: fuori stagione, non tocco"
                 )
             target = self.target_away if self.mode == MODE_AWAY else self.target_home
-            self.active_target = target
+            self.active_target = self._reachable_target(target, climate)
             night = self.mode == MODE_NIGHT
             return Desired(
                 hvac=HVAC_COOL,
@@ -695,7 +770,7 @@ class ClimaSmartController:
             )
 
         target = self.target_home if is_home else self.target_away
-        self.active_target = target
+        self.active_target = self._reachable_target(target, climate)
         return Desired(
             hvac=HVAC_COOL,
             setpoint=target,
@@ -708,6 +783,9 @@ class ClimaSmartController:
 
     # ---------------------------------------------------------------- apply
     async def async_evaluate(self, trigger: str) -> None:
+        # Release the coalescing slot first: from here on this pass re-reads every
+        # state, so anything arriving now belongs to the next pass, not this one.
+        self._evaluate_queued = False
         # Serialize: interval + state events must not run the logic concurrently
         # (equivalent of the automation's mode: single).
         async with self._lock:
@@ -762,13 +840,16 @@ class ClimaSmartController:
         cur_fan = climate.attributes.get("fan_mode")
         climate_unit = self._system_temperature_unit
         hvac_modes = climate.attributes.get("hvac_modes")
-        if (
+        hvac_blocked = (
             desired.hvac not in (None, HVAC_OFF)
             and hvac_modes
             and desired.hvac not in hvac_modes
-        ):
+        )
+        if hvac_blocked:
+            # Record it and skip only the hvac/setpoint/fan/eco part: mute and night
+            # do not depend on the hvac mode, and returning here left them frozen on
+            # yesterday's phase for as long as the mismatch lasted.
             self._apply_errors.append(f"modalità HVAC non supportata: {desired.hvac}")
-            return
         # A command issued in a PREVIOUS pass may still be propagating through the
         # cloud (the read-back lags); don't re-send an identical value meanwhile.
         # Each field has its own settle window (see __init__) so an unrelated
@@ -787,7 +868,8 @@ class ClimaSmartController:
 
         # 1) HVAC mode
         if (
-            desired.hvac is not None
+            not hvac_blocked
+            and desired.hvac is not None
             and desired.hvac != cur_mode
             and not (hvac_settle_active and desired.hvac == self._last_hvac_cmd)
         ):
@@ -817,7 +899,7 @@ class ClimaSmartController:
             cur_mode = desired.hvac
 
         # Setpoint / fan / eco only make sense while we intend the unit to cool.
-        if desired.hvac == HVAC_COOL:
+        if not hvac_blocked and desired.hvac == HVAC_COOL:
             # 2) Setpoint. Snap the desired value to the climate's own step
             # first (a unit that quantizes, e.g. to whole degrees, would report
             # back a value that never equals ours and we would re-send at every
@@ -830,20 +912,7 @@ class ClimaSmartController:
                     want_set, UnitOfTemperature.CELSIUS, climate_unit
                 )
             if want_set is not None:
-                minimum = _to_float(climate.attributes.get("min_temp"))
-                maximum = _to_float(climate.attributes.get("max_temp"))
-                if minimum is not None:
-                    want_set = max(want_set, minimum)
-                if maximum is not None:
-                    want_set = min(want_set, maximum)
-                step = _to_float(climate.attributes.get("target_temp_step"))
-                if step:
-                    base = minimum or 0.0
-                    want_set = base + round((want_set - base) / step) * step
-                    if minimum is not None:
-                        want_set = max(want_set, minimum)
-                    if maximum is not None:
-                        want_set = min(want_set, maximum)
+                want_set = _snap_setpoint(want_set, climate.attributes)
             if (
                 want_set is not None
                 and (cur_set is None or abs(cur_set - want_set) > 0.05)

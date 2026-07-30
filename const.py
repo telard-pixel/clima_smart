@@ -41,6 +41,10 @@ DEFAULT_NIGHT_START = "22:00:00"
 DEFAULT_MORNING_OFF_START = "08:00:00"
 DEFAULT_PRESENCE_HOME_STATE = "home"
 
+# While the unit is already cooling, the season threshold drops by this much, so a
+# cycle in progress is not cut off by a small dip in the outdoor reading.
+SUMMER_HYSTERESIS = 2.0
+
 # Periodic re-evaluation cadence (event-driven updates happen on top of this).
 UPDATE_INTERVAL_SECONDS = 300
 # After we send a command, ignore "manual override" detection for this long so the

@@ -93,6 +93,12 @@ class Entry:
     def __init__(self, data=None, options=None):
         self.data = data or {"climate_entity": "climate.test"}
         self.options = options or {}
+        self.tasks: list[str] = []
+
+    def async_create_background_task(self, hass, coro, name):
+        """Record the scheduled pass; close the coroutine so nothing runs."""
+        self.tasks.append(name)
+        coro.close()
 
 
 class States:
@@ -288,6 +294,106 @@ class ControllerRegressionTests(unittest.TestCase):
         self.assertFalse(ctrl.config_data_changed)
         ctrl.entry.data = {"climate_entity": "climate.other"}
         self.assertTrue(ctrl.config_data_changed)
+
+    def test_unsupported_hvac_still_updates_mute_and_night(self):
+        """An hvac mode the unit lacks must not freeze muto/notte on the old phase."""
+        data = {
+            "climate_entity": "climate.test",
+            "mute_switch": "switch.mute",
+            "night_switch": "switch.night",
+        }
+        ctrl = make_controller(
+            {
+                "climate.test": State("off", {"hvac_modes": ["off", "heat"]}),
+                "switch.mute": State("off"),
+                "switch.night": State("off"),
+            },
+            data,
+        )
+        calls = []
+
+        async def record(domain, service, entity_id, data=None):
+            calls.append((service, entity_id))
+            return True
+
+        ctrl._call_target = record
+        asyncio.run(
+            ctrl._apply(
+                controller_module.Desired(
+                    hvac="cool", setpoint=25, mute=True, night=True
+                )
+            )
+        )
+        self.assertEqual(
+            calls, [("turn_on", "switch.mute"), ("turn_on", "switch.night")]
+        )
+        self.assertTrue(
+            any("non supportata" in err for err in ctrl._apply_errors), ctrl._apply_errors
+        )
+
+    def test_diagnostics_cleared_when_climate_unavailable(self):
+        ctrl = make_controller({"climate.test": State("unavailable")})
+        ctrl.current_phase = "day"
+        ctrl.active_target = 26.0
+        desired = ctrl._compute(NOW)
+        self.assertEqual(desired.reason, "clima non disponibile")
+        self.assertIsNone(ctrl.current_phase)
+        self.assertIsNone(ctrl.active_target)
+
+    def test_half_degree_setpoint_rounds_up_not_to_even(self):
+        attrs = {"min_temp": 16.0, "max_temp": 30.0, "target_temp_step": 1.0}
+        snap = controller_module._snap_setpoint
+        self.assertEqual(snap(25.5, attrs), 26.0)
+        self.assertEqual(snap(16.5, attrs), 17.0)   # round() avrebbe dato 16.0
+        self.assertEqual(snap(40.0, attrs), 30.0)   # oltre il massimo
+        self.assertEqual(snap(10.0, attrs), 16.0)   # sotto il minimo
+
+    def test_active_target_is_what_the_unit_will_hold(self):
+        climate = State(
+            "cool",
+            {
+                "current_temperature": 27,
+                "hvac_modes": ["off", "cool"],
+                "min_temp": 16.0,
+                "max_temp": 30.0,
+                "target_temp_step": 1.0,
+            },
+        )
+        ctrl = make_controller({"climate.test": climate})
+        ctrl.mode = "comfort"
+        ctrl.entry.options = {"target_home": 25.5}
+        desired = ctrl._compute(NOW)
+        # Il sensore diagnostico deve dire 26, non il 25.5 che nessuno terrà.
+        self.assertEqual(ctrl.active_target, 26.0)
+
+        sent = []
+
+        async def record(domain, service, data):
+            sent.append((service, data))
+            return True
+
+        ctrl._call = record
+        asyncio.run(ctrl._apply(desired))
+        self.assertIn(("set_temperature", {"temperature": 26.0}), sent)
+
+    def test_override_zero_minutes_keeps_control(self):
+        ctrl = make_controller()
+        ctrl.entry.options = {"override_minutes": 0}
+        ctrl._start_override("comando manuale rilevato")
+        self.assertFalse(ctrl.override_active)
+        self.assertIsNone(ctrl.override_until)
+        self.assertIn("override disattivato", ctrl.last_reason)
+
+    def test_event_burst_collapses_into_one_evaluation(self):
+        ctrl = make_controller()
+        ctrl._queue_evaluate("evento")
+        ctrl._queue_evaluate("evento")
+        ctrl._queue_evaluate("intervallo")
+        self.assertEqual(len(ctrl.entry.tasks), 1)
+        # Una volta che la valutazione e' partita, la successiva torna ad accodarsi.
+        asyncio.run(ctrl.async_evaluate("evento"))
+        ctrl._queue_evaluate("evento")
+        self.assertEqual(len(ctrl.entry.tasks), 2)
 
 
 if __name__ == "__main__":
