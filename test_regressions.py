@@ -12,6 +12,10 @@ import unittest
 
 
 NOW = datetime.now().astimezone()
+# Ora fissa in pieno giorno: senza questa le prove del modo Adattivo
+# cambiavano risultato secondo l'ora in cui giravano, per esempio finendo
+# dentro la finestra di notte fonda.
+GIORNO = NOW.replace(hour=12, minute=0, second=0, microsecond=0)
 
 
 def _install_ha_stubs() -> None:
@@ -413,7 +417,7 @@ class ControllerRegressionTests(unittest.TestCase):
     def test_smart_fan_follows_the_gap(self):
         for room, expected in ((27.5, "high"), (26.5, "medium"), (25.2, "low")):
             ctrl = self._smart_controller(room=room)
-            desired = ctrl._compute(NOW)
+            desired = ctrl._compute(GIORNO)
             self.assertEqual(desired.fan, expected, f"stanza {room}")
             self.assertEqual(desired.setpoint, 25.0)
 
@@ -424,17 +428,17 @@ class ControllerRegressionTests(unittest.TestCase):
             ctrl.entry.data, presence_entity="person.test"
         )
         ctrl.hass.states.values["person.test"] = State("not_home")
-        desired = ctrl._compute(NOW)
+        desired = ctrl._compute(GIORNO)
         self.assertEqual(desired.setpoint, 25.0)   # non 30 (target_away)
 
     def test_smart_fan_upgrades_at_once_but_downgrades_slowly(self):
         ctrl = self._smart_controller(room=27.5)
-        self.assertEqual(ctrl._compute(NOW).fan, "high")
+        self.assertEqual(ctrl._compute(GIORNO).fan, "high")
         # La stanza scende di colpo: il declassamento non deve essere immediato.
         ctrl.hass.states.values["climate.test"].attributes["current_temperature"] = 25.2
-        self.assertEqual(ctrl._compute(NOW).fan, "high")
+        self.assertEqual(ctrl._compute(GIORNO).fan, "high")
         # Passato il tempo di attesa, scende.
-        later = NOW + timedelta(seconds=controller_module.MIN_FAN_DWELL_SECONDS + 1)
+        later = GIORNO + timedelta(seconds=controller_module.MIN_FAN_DWELL_SECONDS + 1)
         self.assertEqual(ctrl._compute(later).fan, "low")
         # E una risalita vale subito, senza aspettare.
         ctrl.hass.states.values["climate.test"].attributes["current_temperature"] = 27.5
@@ -445,18 +449,18 @@ class ControllerRegressionTests(unittest.TestCase):
         della banda `medium` e prima faceva salire la ventola sei volte in 82
         minuti. Con il margine anche in salita deve restare su `low`."""
         ctrl = self._smart_controller(room=25.5)
-        self.assertEqual(ctrl._compute(NOW).fan, "low")
+        self.assertEqual(ctrl._compute(GIORNO).fan, "low")
         ctrl.hass.states.values["climate.test"].attributes["current_temperature"] = 26.0
-        self.assertEqual(ctrl._compute(NOW).fan, "low")   # scarto +1.0: sul confine
+        self.assertEqual(ctrl._compute(GIORNO).fan, "low")   # scarto +1.0: sul confine
         ctrl.hass.states.values["climate.test"].attributes["current_temperature"] = 26.2
-        self.assertEqual(ctrl._compute(NOW).fan, "low")   # +1.2: ancora dentro il margine
+        self.assertEqual(ctrl._compute(GIORNO).fan, "low")   # +1.2: ancora dentro il margine
         ctrl.hass.states.values["climate.test"].attributes["current_temperature"] = 26.4
-        self.assertEqual(ctrl._compute(NOW).fan, "medium")  # +1.4: deriva vera
+        self.assertEqual(ctrl._compute(GIORNO).fan, "medium")  # +1.4: deriva vera
 
     def test_smart_fan_holds_inside_the_hysteresis_band(self):
         ctrl = self._smart_controller(room=27.5)
-        self.assertEqual(ctrl._compute(NOW).fan, "high")
-        later = NOW + timedelta(seconds=controller_module.MIN_FAN_DWELL_SECONDS + 1)
+        self.assertEqual(ctrl._compute(GIORNO).fan, "high")
+        later = GIORNO + timedelta(seconds=controller_module.MIN_FAN_DWELL_SECONDS + 1)
         # 1.9 sopra: dentro la banda di isteresi (2.0 - 0.3), la ventola tiene.
         ctrl.hass.states.values["climate.test"].attributes["current_temperature"] = 26.9
         self.assertEqual(ctrl._compute(later).fan, "high")
@@ -464,51 +468,55 @@ class ControllerRegressionTests(unittest.TestCase):
         ctrl.hass.states.values["climate.test"].attributes["current_temperature"] = 26.6
         self.assertEqual(ctrl._compute(later).fan, "medium")
 
-    def test_smart_night_caps_the_fan(self):
+    def test_smart_leaves_the_fan_to_the_unit_at_night(self):
+        """Di notte il muto e' acceso, e con quello l'unita' rifiuta una velocita'
+        imposta: comandarla costava un'ora di controllo per falso override."""
         ctrl = self._smart_controller(room=27.5)
         ctrl.entry.options = dict(
             ctrl.entry.options,
             morning_off_start="08:00:00",
             day_start="10:00:00",
-            night_start="00:00:00",   # tutto il giorno e' fascia notte
+            night_start="22:00:00",
+            sleep_start="23:30:00",
+            sleep_end="07:30:00",
         )
-        desired = ctrl._compute(NOW.replace(hour=23, minute=0))
-        self.assertEqual(desired.fan, controller_module.NIGHT_MAX_FAN)
+        desired = ctrl._compute(GIORNO.replace(hour=22, minute=30))
+        self.assertIsNone(desired.fan)
         self.assertTrue(desired.mute)
         self.assertTrue(desired.night)
 
     def test_smart_uses_dry_when_muggy_and_at_temperature(self):
         ctrl = self._smart_controller(room=25.2, humidity=65)
-        desired = ctrl._compute(NOW)
+        desired = ctrl._compute(GIORNO)
         self.assertEqual(desired.hvac, "dry")
         # Isteresi: a 57% resta in dry, sotto 55 torna a cool.
         ctrl.hass.states.values["sensor.humidity"] = State("57")
-        self.assertEqual(ctrl._compute(NOW).hvac, "dry")
+        self.assertEqual(ctrl._compute(GIORNO).hvac, "dry")
         ctrl.hass.states.values["sensor.humidity"] = State("54")
-        self.assertEqual(ctrl._compute(NOW).hvac, "cool")
+        self.assertEqual(ctrl._compute(GIORNO).hvac, "cool")
 
     def test_smart_never_dehumidifies_a_warm_room(self):
         ctrl = self._smart_controller(room=27.0, humidity=80)
-        self.assertEqual(ctrl._compute(NOW).hvac, "cool")
+        self.assertEqual(ctrl._compute(GIORNO).hvac, "cool")
 
     def test_smart_without_humidity_sensor_stays_on_cool(self):
         ctrl = self._smart_controller(room=25.1)
-        self.assertEqual(ctrl._compute(NOW).hvac, "cool")
+        self.assertEqual(ctrl._compute(GIORNO).hvac, "cool")
 
     def test_smart_treats_zero_humidity_as_missing(self):
         """Il sensore dell'Haier riporta 0.0 quando non ha nulla da dire."""
         ctrl = self._smart_controller(room=25.1, humidity=0)
         self.assertIsNone(ctrl._read_humidity())
-        self.assertEqual(ctrl._compute(NOW).hvac, "cool")
+        self.assertEqual(ctrl._compute(GIORNO).hvac, "cool")
 
     def test_smart_leaves_fan_alone_if_step_unsupported(self):
         ctrl = self._smart_controller(room=27.5)
         ctrl.hass.states.values["climate.test"].attributes["fan_modes"] = ["auto"]
-        self.assertIsNone(ctrl._compute(NOW).fan)
+        self.assertIsNone(ctrl._compute(GIORNO).fan)
 
     def test_dry_program_still_gets_setpoint_and_fan(self):
         ctrl = self._smart_controller(room=25.2, humidity=70, fan="high")
-        desired = ctrl._compute(NOW)
+        desired = ctrl._compute(GIORNO)
         self.assertEqual(desired.hvac, "dry")
         sent = []
 
@@ -521,6 +529,95 @@ class ControllerRegressionTests(unittest.TestCase):
         self.assertIn("set_hvac_mode", sent)
         self.assertIn("set_temperature", sent)
         self.assertIn("set_fan_mode", sent)
+
+    # -------------------------------- notte fonda, correzione, muto e ventola
+    def _orari(self, ctrl, **extra):
+        ctrl.entry.options = dict(
+            ctrl.entry.options,
+            morning_off_start="08:00:00",
+            day_start="10:00:00",
+            night_start="22:00:00",
+            sleep_start="23:30:00",
+            sleep_end="07:30:00",
+            **extra,
+        )
+
+    def test_sleep_window_wraps_around_midnight(self):
+        ctrl = self._smart_controller()
+        self._orari(ctrl)
+        casi = {
+            (23, 29): "night",   # un minuto prima
+            (23, 30): "sleep",   # inizio
+            (0, 15): "sleep",    # oltre mezzanotte
+            (7, 29): "sleep",    # un minuto prima della fine
+            (7, 30): "night",    # fine: torna notte normale
+            (9, 0): "gap",       # fascia 08-10
+            (12, 0): "day",
+        }
+        for (h, m), atteso in casi.items():
+            self.assertEqual(
+                ctrl._phase(NOW.replace(hour=h, minute=m)), atteso, f"{h:02d}:{m:02d}"
+            )
+
+    def test_sleep_window_uses_its_own_target(self):
+        ctrl = self._smart_controller(room=26.0)
+        self._orari(ctrl, target_sleep=23.0)
+        desired = ctrl._compute(NOW.replace(hour=2, minute=0))
+        self.assertEqual(desired.setpoint, 23.0)
+        self.assertEqual(ctrl.current_phase, "sleep")
+        self.assertTrue(desired.mute)          # la notte fonda resta silenziosa
+        self.assertIsNone(desired.fan)         # ventola lasciata all'unita'
+        # Fuori dalla finestra si torna al target di casa.
+        self.assertEqual(ctrl._compute(NOW.replace(hour=12, minute=0)).setpoint, 25.0)
+
+    def test_setpoint_offset_shifts_the_command_not_the_target(self):
+        ctrl = self._smart_controller(room=27.0)
+        ctrl.entry.options = dict(ctrl.entry.options, setpoint_offset=-1.0)
+        desired = ctrl._compute(NOW)
+        self.assertEqual(desired.setpoint, 25.0)      # l'obiettivo resta 25
+        self.assertEqual(ctrl.active_target, 25.0)    # e il sensore pure
+        sent = []
+
+        async def record(domain, service, data):
+            sent.append((service, data))
+            return True
+
+        ctrl._call = record
+        asyncio.run(ctrl._apply(desired))
+        # ...ma alla macchina arriva un grado in meno
+        self.assertIn(("set_temperature", {"temperature": 24.0}), sent)
+
+    def test_no_fan_command_while_quiet_mode_is_on(self):
+        """Con `muto` acceso l'unita' rimette `auto` da sola: comandarla significa
+        farsi leggere come intervento manuale e perdere il controllo per un'ora."""
+        data = {"climate_entity": "climate.test", "mute_switch": "switch.mute"}
+        ctrl = make_controller(
+            {
+                "climate.test": State(
+                    "cool",
+                    {
+                        "temperature": 25.0,
+                        "fan_mode": "auto",
+                        "fan_modes": ["high", "medium", "low", "auto"],
+                        "hvac_modes": ["off", "cool"],
+                    },
+                ),
+                "switch.mute": State("on"),
+            },
+            data,
+        )
+        sent = []
+
+        async def record(domain, service, data=None):
+            sent.append(service)
+            return True
+
+        ctrl._call = record
+        ctrl._call_target = lambda *a, **k: record("switch")
+        asyncio.run(
+            ctrl._apply(controller_module.Desired(hvac="cool", setpoint=25, fan="low"))
+        )
+        self.assertNotIn("set_fan_mode", sent)
 
     def test_event_burst_collapses_into_one_evaluation(self):
         ctrl = make_controller()

@@ -54,13 +54,19 @@
           "morning_off_start": "Morning off phase start",
           "day_start": "Day phase start",
           "night_start": "Night phase start",
-          "presence_home_state": "Presence entity state meaning \"home\""
-        }
+          "presence_home_state": "Presence entity state meaning \"home\"",
+          "target_sleep": "Deep-night target (°C)",
+          "setpoint_offset": "Setpoint correction (°C)",
+          "sleep_start": "Deep night starts",
+          "sleep_end": "Deep night ends"
+        },
+        "data_description": {}
       }
     },
     "error": {
       "invalid_time_order": "Times must be in order: morning off < day < night.",
-      "invalid_eco_range": "\"Eco ON when outdoor below\" must be lower than \"Eco OFF when outdoor above\"."
+      "invalid_eco_range": "\"Eco ON when outdoor below\" must be lower than \"Eco OFF when outdoor above\".",
+      "invalid_sleep_window": "Deep night cannot start and end at the same time"
     }
   },
   "entity": {
@@ -88,7 +94,8 @@
         "state": {
           "day": "Day",
           "night": "Night",
-          "gap": "Off window"
+          "gap": "Off window",
+          "sleep": "Deep night"
         }
       },
       "target": {
@@ -119,6 +126,12 @@
       },
       "override_minutes": {
         "name": "Manual override duration"
+      },
+      "target_sleep": {
+        "name": "Deep-night target"
+      },
+      "setpoint_offset": {
+        "name": "Setpoint correction"
       }
     }
   }

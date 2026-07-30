@@ -29,7 +29,16 @@ CONF_OVERRIDE_MINUTES = "override_minutes"
 CONF_DAY_START = "day_start"
 CONF_NIGHT_START = "night_start"
 CONF_MORNING_OFF_START = "morning_off_start"
+# Deep-night window: same quiet behaviour as the night phase, but its own colder
+# target. Crosses midnight, so the end is earlier than the start.
+CONF_TARGET_SLEEP = "target_sleep"
+CONF_SLEEP_START = "sleep_start"
+CONF_SLEEP_END = "sleep_end"
 CONF_PRESENCE_HOME_STATE = "presence_home_state"
+# Split units read the return air, not the room, and stop short: measured here the
+# room settled 0.5-1.0 above a 25.0 setpoint. This shifts what we send to the unit
+# without touching the target we aim the room at, so the diagnostics stay honest.
+CONF_SETPOINT_OFFSET = "setpoint_offset"
 
 # --- Defaults (validated values from the original automation) ---
 DEFAULT_TARGET_HOME = 26.0
@@ -42,6 +51,10 @@ DEFAULT_OVERRIDE_MINUTES = 60
 DEFAULT_DAY_START = "10:00:00"
 DEFAULT_NIGHT_START = "22:00:00"
 DEFAULT_MORNING_OFF_START = "08:00:00"
+DEFAULT_TARGET_SLEEP = 23.0
+DEFAULT_SLEEP_START = "23:30:00"
+DEFAULT_SLEEP_END = "07:30:00"
+DEFAULT_SETPOINT_OFFSET = 0.0
 DEFAULT_PRESENCE_HOME_STATE = "home"
 
 # While the unit is already cooling, the season threshold drops by this much, so a
@@ -87,8 +100,6 @@ FAN_BANDS: tuple[tuple[float, str], ...] = (
 )
 # Increasing order, used to compare two steps and to cap the night one.
 FAN_ORDER: tuple[str, ...] = ("low", "medium", "high")
-# At night the fan never goes above this, whatever the gap says.
-NIGHT_MAX_FAN = "medium"
 # A downgrade needs the gap to be this far inside the lower band, and this many
 # seconds since the last change: without both, a tenth of a degree of noise in
 # the reported temperature would cycle the fan up and down forever.
@@ -107,6 +118,8 @@ DRY_MAX_DELTA = 1.0
 PHASE_DAY = "day"
 PHASE_NIGHT = "night"
 PHASE_GAP = "gap"
+# Inside the night, the stretch where the colder sleep target applies.
+PHASE_SLEEP = "sleep"
 
 # HVAC constants we rely on (kept as literals to avoid importing climate internals).
 HVAC_COOL = "cool"

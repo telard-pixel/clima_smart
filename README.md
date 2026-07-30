@@ -20,6 +20,23 @@ decide da sé:
   a posto, `cool` in tutti gli altri casi. Serve un sensore di umidità interna
   configurato: senza quello resta sempre su `cool`.
 
+Di notte la ventola **non** viene comandata: con il muto acceso questa unità rifiuta
+una velocità imposta e torna su `auto` dopo circa un minuto, e quel ritorno veniva
+letto come un intervento manuale, con un'ora di controllo ceduta ogni volta.
+
+### Notte fonda
+
+Una finestra dentro la notte (`23:30` → `07:30`, entrambe configurabili) con un
+**target proprio**, di norma più basso. Attraversa la mezzanotte. Vale per i modi
+Adattivo e Auto.
+
+### Correzione setpoint
+
+Le unità split leggono l'aria di ripresa e si fermano prima: qui la stanza si
+assestava fra 0.5 e 1.0 sopra un setpoint di 25.0. La correzione sposta **solo ciò
+che viene chiesto alla macchina**, non il target: il sensore diagnostico continua a
+dire 25 mentre all'unità arriva 24.
+
 ## Cosa fa
 
 - Si controlla sulla **temperatura interna** del clima (non su un sensore nel flusso d'aria).
@@ -51,7 +68,9 @@ I parametri di tuning si regolano poi dalle entità `number`/`select`, oppure da
 ## Note
 
 - Testata su Home Assistant 2026.7.2.
-- Stato attuale: `0.6.0` — nuovo modo **Adattivo**, che decide ventola e programma
+- Stato attuale: `0.7.0` — finestra di notte fonda con target proprio, correzione
+  setpoint configurabile, e di notte la ventola resta all'unità.
+- `0.6.x` — nuovo modo **Adattivo**, che decide ventola e programma
   dai sensori invece di tenerli fissi, più il campo opzionale per il sensore di
   umidità interna.
 - `0.5.0` — il target diagnostico coincide con quello che l'unità riceve davvero,

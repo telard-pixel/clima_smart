@@ -42,9 +42,13 @@ from .const import (
     CONF_OVERRIDE_MINUTES,
     CONF_PRESENCE,
     CONF_PRESENCE_HOME_STATE,
+    CONF_SETPOINT_OFFSET,
+    CONF_SLEEP_END,
+    CONF_SLEEP_START,
     CONF_SUMMER_THRESHOLD,
     CONF_TARGET_AWAY,
     CONF_TARGET_HOME,
+    CONF_TARGET_SLEEP,
     DEFAULT_DAY_START,
     DEFAULT_ECO_BAND,
     DEFAULT_ECO_OUTDOOR_OFF,
@@ -53,9 +57,13 @@ from .const import (
     DEFAULT_NIGHT_START,
     DEFAULT_OVERRIDE_MINUTES,
     DEFAULT_PRESENCE_HOME_STATE,
+    DEFAULT_SETPOINT_OFFSET,
+    DEFAULT_SLEEP_END,
+    DEFAULT_SLEEP_START,
     DEFAULT_SUMMER_THRESHOLD,
     DEFAULT_TARGET_AWAY,
     DEFAULT_TARGET_HOME,
+    DEFAULT_TARGET_SLEEP,
     DRY_HUMIDITY_OFF,
     DRY_HUMIDITY_ON,
     DRY_MAX_DELTA,
@@ -74,10 +82,10 @@ from .const import (
     MODE_OFF,
     MODE_SMART,
     MODES,
-    NIGHT_MAX_FAN,
     PHASE_DAY,
     PHASE_GAP,
     PHASE_NIGHT,
+    PHASE_SLEEP,
     SERVICE_CALL_TIMEOUT_SECONDS,
     SUMMER_HYSTERESIS,
     UPDATE_INTERVAL_SECONDS,
@@ -143,15 +151,6 @@ def _band_threshold(name: str) -> float:
         if band == name:
             return threshold
     return 0.0
-
-
-def _quieter(first: str, second: str) -> str:
-    """The lower of two fan steps (unknown steps are left alone)."""
-    if first not in FAN_ORDER:
-        return second
-    if second not in FAN_ORDER:
-        return first
-    return first if FAN_ORDER.index(first) <= FAN_ORDER.index(second) else second
 
 
 def _snap_setpoint(value: float, attributes: dict) -> float:
@@ -283,6 +282,14 @@ class ClimaSmartController:
     @property
     def target_away(self) -> float:
         return float(self._cfg(CONF_TARGET_AWAY, DEFAULT_TARGET_AWAY))
+
+    @property
+    def target_sleep(self) -> float:
+        return float(self._cfg(CONF_TARGET_SLEEP, DEFAULT_TARGET_SLEEP))
+
+    @property
+    def setpoint_offset(self) -> float:
+        return float(self._cfg(CONF_SETPOINT_OFFSET, DEFAULT_SETPOINT_OFFSET))
 
     @property
     def eco_band(self) -> float:
@@ -688,6 +695,21 @@ class ClimaSmartController:
         night = _parse_time(
             self._cfg(CONF_NIGHT_START, DEFAULT_NIGHT_START), DEFAULT_NIGHT_START
         )
+        sleep_start = _parse_time(
+            self._cfg(CONF_SLEEP_START, DEFAULT_SLEEP_START), DEFAULT_SLEEP_START
+        )
+        sleep_end = _parse_time(
+            self._cfg(CONF_SLEEP_END, DEFAULT_SLEEP_END), DEFAULT_SLEEP_END
+        )
+        # Checked first, and it normally wraps around midnight (23:30 -> 07:30), so
+        # the two halves are tested separately; an unwrapped window still works.
+        if sleep_start != sleep_end:
+            if sleep_start > sleep_end:
+                in_sleep = t >= sleep_start or t < sleep_end
+            else:
+                in_sleep = sleep_start <= t < sleep_end
+            if in_sleep:
+                return PHASE_SLEEP
         if morning <= t < day:
             return PHASE_GAP
         if day <= t < night:
@@ -713,7 +735,6 @@ class ClimaSmartController:
         self,
         delta: float | None,
         cur_fan: str | None,
-        is_night: bool,
         now: datetime,
         fan_modes: list | None,
     ) -> str | None:
@@ -728,8 +749,6 @@ class ClimaSmartController:
         if delta is None:
             return None
         wanted = _fan_band(delta)
-        if is_night:
-            wanted = _quieter(wanted, NIGHT_MAX_FAN)
 
         # Compare against our own last decision; fall back to what the unit reports
         # so a restart doesn't jump the fan around before the first decision.
@@ -875,7 +894,9 @@ class ClimaSmartController:
         # phases and season guards and only decides target, fan and program itself.
         phase = self._phase(now)
         self.current_phase = phase
-        is_night = phase == PHASE_NIGHT
+        # The sleep window is a stretch of the night: same quiet behaviour, colder
+        # target. Everything that keyed off "is it night" must include it.
+        is_night = phase in (PHASE_NIGHT, PHASE_SLEEP)
 
         if phase == PHASE_GAP:
             self.active_target = None
@@ -904,7 +925,10 @@ class ClimaSmartController:
         # MODE_SMART keeps one target whatever the presence says: it is the mode for
         # "I set 25 and you deal with the rest".
         smart = self.mode == MODE_SMART
-        target = self.target_home if (smart or is_home) else self.target_away
+        if phase == PHASE_SLEEP:
+            target = self.target_sleep
+        else:
+            target = self.target_home if (smart or is_home) else self.target_away
         self.active_target = self._reachable_target(target, climate)
 
         if smart:
@@ -913,10 +937,13 @@ class ClimaSmartController:
             program = self._program_for(
                 delta, humidity, climate.attributes.get("hvac_modes")
             )
-            fan = self._fan_for(
+            # Quiet mode and a forced fan step are mutually exclusive on this unit:
+            # with `muto` on it reverts to `auto` about a minute after our command,
+            # which _maybe_flag_manual then reads as a manual intervention and hands
+            # over control for an hour. At night we leave the fan to the unit.
+            fan = None if is_night else self._fan_for(
                 delta,
                 climate.attributes.get("fan_mode"),
-                is_night,
                 now,
                 climate.attributes.get("fan_modes"),
             )
@@ -1071,8 +1098,12 @@ class ClimaSmartController:
             # pass); the small tolerance absorbs float noise in the reported
             # state. _last_setpoint_cmd stores the snapped value, so the manual
             # detection compares against what the device will actually echo.
+            # The offset shifts what the unit is asked for, never the target we aim
+            # the room at: active_target and the eco decision keep using the real
+            # goal, so the diagnostics do not start lying to compensate a machine.
             want_set = desired.setpoint
             if want_set is not None:
+                want_set += self.setpoint_offset
                 want_set = _convert_temperature(
                     want_set, UnitOfTemperature.CELSIUS, climate_unit
                 )
@@ -1094,10 +1125,15 @@ class ClimaSmartController:
                     self._last_setpoint_cmd = prev
                     self._settle_setpoint_until = None
 
-            # 3) Fan
+            # 3) Fan, unless the unit is in quiet mode. Measured on the real unit:
+            # with `muto` on it puts the fan back to `auto` about a minute after our
+            # command, and that contextless divergence is exactly what
+            # _maybe_flag_manual treats as a manual action, handing over control for
+            # override_minutes. Fighting it costs an hour of control every time.
             fan_modes = climate.attributes.get("fan_modes")
             if (
                 desired.fan is not None
+                and not self._quiet_mode_on(desired)
                 and (not fan_modes or desired.fan in fan_modes)
                 and cur_fan != desired.fan
                 and not (fan_settle_active and desired.fan == self._last_fan_cmd)
@@ -1120,6 +1156,16 @@ class ClimaSmartController:
         # hvac mode (see _compute's heat branch in MODE_AUTO).
         await self._apply_switch(CONF_MUTE_SWITCH, desired.mute)
         await self._apply_switch(CONF_NIGHT_SWITCH, desired.night)
+
+    def _quiet_mode_on(self, desired: Desired) -> bool:
+        """Whether the unit is in (or is being put into) quiet mode this pass."""
+        if desired.mute:
+            return True
+        entity_id = self._cfg(CONF_MUTE_SWITCH)
+        if not entity_id:
+            return False
+        st = self.hass.states.get(entity_id)
+        return st is not None and st.state == "on"
 
     def _arm_settle(self, field: str) -> None:
         setattr(self, field, dt_util.now() + timedelta(seconds=COMMAND_SETTLE_SECONDS))

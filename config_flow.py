@@ -31,9 +31,13 @@ from .const import (
     CONF_OVERRIDE_MINUTES,
     CONF_PRESENCE,
     CONF_PRESENCE_HOME_STATE,
+    CONF_SETPOINT_OFFSET,
+    CONF_SLEEP_END,
+    CONF_SLEEP_START,
     CONF_SUMMER_THRESHOLD,
     CONF_TARGET_AWAY,
     CONF_TARGET_HOME,
+    CONF_TARGET_SLEEP,
     DEFAULT_DAY_START,
     DEFAULT_ECO_BAND,
     DEFAULT_ECO_OUTDOOR_OFF,
@@ -42,9 +46,13 @@ from .const import (
     DEFAULT_NIGHT_START,
     DEFAULT_OVERRIDE_MINUTES,
     DEFAULT_PRESENCE_HOME_STATE,
+    DEFAULT_SETPOINT_OFFSET,
+    DEFAULT_SLEEP_END,
+    DEFAULT_SLEEP_START,
     DEFAULT_SUMMER_THRESHOLD,
     DEFAULT_TARGET_AWAY,
     DEFAULT_TARGET_HOME,
+    DEFAULT_TARGET_SLEEP,
     DOMAIN,
 )
 
@@ -57,35 +65,37 @@ def _entity(
     )
 
 
+def _optional(key: str, defaults: dict[str, Any]) -> vol.Optional:
+    """An optional field that can also be emptied.
+
+    With `default=` voluptuous quietly puts the previous value back whenever the
+    field arrives empty, so an entity linked once could never be unlinked from the
+    form again: clearing "Modalità notte" and saving left it exactly where it was.
+    A suggested value pre-fills the form the same way, but an empty field really
+    does come back empty.
+    """
+    return vol.Optional(key, description={"suggested_value": defaults.get(key)})
+
+
 def _setup_schema(defaults: dict[str, Any]) -> vol.Schema:
     return vol.Schema(
         {
             vol.Required(CONF_CLIMATE, default=defaults.get(CONF_CLIMATE)): _entity(
                 "climate"
             ),
-            vol.Optional(
-                CONF_PRESENCE, default=defaults.get(CONF_PRESENCE, vol.UNDEFINED)
-            ): _entity(["device_tracker", "person"]),
-            vol.Optional(
-                CONF_OUTDOOR, default=defaults.get(CONF_OUTDOOR, vol.UNDEFINED)
-            ): _entity("sensor", device_class="temperature"),
-            vol.Optional(
-                CONF_OUTDOOR_FALLBACK,
-                default=defaults.get(CONF_OUTDOOR_FALLBACK, vol.UNDEFINED),
-            ): _entity("sensor", device_class="temperature"),
-            vol.Optional(
-                CONF_HUMIDITY, default=defaults.get(CONF_HUMIDITY, vol.UNDEFINED)
-            ): _entity("sensor", device_class="humidity"),
-            vol.Optional(
-                CONF_ECO_SWITCH, default=defaults.get(CONF_ECO_SWITCH, vol.UNDEFINED)
-            ): _entity("switch"),
-            vol.Optional(
-                CONF_MUTE_SWITCH, default=defaults.get(CONF_MUTE_SWITCH, vol.UNDEFINED)
-            ): _entity("switch"),
-            vol.Optional(
-                CONF_NIGHT_SWITCH,
-                default=defaults.get(CONF_NIGHT_SWITCH, vol.UNDEFINED),
-            ): _entity("switch"),
+            _optional(CONF_PRESENCE, defaults): _entity(["device_tracker", "person"]),
+            _optional(CONF_OUTDOOR, defaults): _entity(
+                "sensor", device_class="temperature"
+            ),
+            _optional(CONF_OUTDOOR_FALLBACK, defaults): _entity(
+                "sensor", device_class="temperature"
+            ),
+            _optional(CONF_HUMIDITY, defaults): _entity(
+                "sensor", device_class="humidity"
+            ),
+            _optional(CONF_ECO_SWITCH, defaults): _entity("switch"),
+            _optional(CONF_MUTE_SWITCH, defaults): _entity("switch"),
+            _optional(CONF_NIGHT_SWITCH, defaults): _entity("switch"),
         }
     )
 
@@ -199,6 +209,10 @@ class ClimaSmartOptionsFlow(OptionsFlow):
             night = _time_to_minutes(user_input[CONF_NIGHT_START])
             if not (morning < day < night):
                 errors["base"] = "invalid_time_order"
+            elif user_input[CONF_SLEEP_START] == user_input[CONF_SLEEP_END]:
+                # Same instant means a zero-length window, which would silently
+                # disable the sleep target instead of doing what was asked.
+                errors["base"] = "invalid_sleep_window"
             # eco_outdoor_on must stay below eco_outdoor_off: _eco_decision checks
             # the "on" condition first, so a swapped/equal pair makes the "off"
             # branch practically unreachable and eco silently gets stuck on.
@@ -239,6 +253,15 @@ class ClimaSmartOptionsFlow(OptionsFlow):
                 vol.Required(
                     CONF_OVERRIDE_MINUTES, default=_num(CONF_OVERRIDE_MINUTES, DEFAULT_OVERRIDE_MINUTES)
                 ): vol.All(vol.Coerce(int), vol.Range(min=0, max=480)),
+                vol.Required(
+                    CONF_TARGET_SLEEP, default=_num(CONF_TARGET_SLEEP, DEFAULT_TARGET_SLEEP)
+                ): vol.All(vol.Coerce(float), vol.Range(min=16, max=30)),
+                vol.Required(
+                    CONF_SETPOINT_OFFSET,
+                    default=_num(CONF_SETPOINT_OFFSET, DEFAULT_SETPOINT_OFFSET),
+                ): vol.All(vol.Coerce(float), vol.Range(min=-3, max=3)),
+                vol.Required(CONF_SLEEP_START, default=_num(CONF_SLEEP_START, DEFAULT_SLEEP_START)): selector.TimeSelector(),
+                vol.Required(CONF_SLEEP_END, default=_num(CONF_SLEEP_END, DEFAULT_SLEEP_END)): selector.TimeSelector(),
                 vol.Required(CONF_MORNING_OFF_START, default=_num(CONF_MORNING_OFF_START, DEFAULT_MORNING_OFF_START)): selector.TimeSelector(),
                 vol.Required(CONF_DAY_START, default=_num(CONF_DAY_START, DEFAULT_DAY_START)): selector.TimeSelector(),
                 vol.Required(CONF_NIGHT_START, default=_num(CONF_NIGHT_START, DEFAULT_NIGHT_START)): selector.TimeSelector(),
