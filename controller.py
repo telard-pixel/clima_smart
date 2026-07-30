@@ -719,9 +719,11 @@ class ClimaSmartController:
     ) -> str | None:
         """Fan step for MODE_SMART: harder the further the room is above target.
 
-        Upgrades land immediately, because that is the case where the room is
-        getting warmer and waiting would be felt. Downgrades have to earn it (see
-        FAN_HYSTERESIS / MIN_FAN_DWELL_SECONDS).
+        Both directions need FAN_HYSTERESIS of margin past the band edge, because
+        a unit that reports in half degrees sits exactly on an edge for minutes at
+        a time: measured on the real unit, a room held at target touched the
+        `medium` edge six times in 82 minutes and dragged the fan up every time.
+        Downgrades additionally wait out MIN_FAN_DWELL_SECONDS.
         """
         if delta is None:
             return None
@@ -734,17 +736,21 @@ class ClimaSmartController:
         reference = self._last_fan_band
         if reference not in FAN_ORDER:
             reference = cur_fan if cur_fan in FAN_ORDER else None
-        if reference in FAN_ORDER and FAN_ORDER.index(wanted) < FAN_ORDER.index(
-            reference
-        ):
-            hold = delta > _band_threshold(reference) - FAN_HYSTERESIS
-            too_soon = (
-                self._last_fan_band_at is not None
-                and (now - self._last_fan_band_at).total_seconds()
-                < MIN_FAN_DWELL_SECONDS
-            )
-            if hold or too_soon:
-                wanted = reference
+        if reference in FAN_ORDER and wanted != reference:
+            if FAN_ORDER.index(wanted) > FAN_ORDER.index(reference):
+                # Upgrade: the gap has to be clearly inside the higher band, not
+                # merely touching its edge.
+                if delta < _band_threshold(wanted) + FAN_HYSTERESIS:
+                    wanted = reference
+            else:
+                hold = delta > _band_threshold(reference) - FAN_HYSTERESIS
+                too_soon = (
+                    self._last_fan_band_at is not None
+                    and (now - self._last_fan_band_at).total_seconds()
+                    < MIN_FAN_DWELL_SECONDS
+                )
+                if hold or too_soon:
+                    wanted = reference
 
         if fan_modes and wanted not in fan_modes:
             # The unit does not offer this step: leave the fan alone rather than

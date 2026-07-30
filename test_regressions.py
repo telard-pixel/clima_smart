@@ -440,6 +440,19 @@ class ControllerRegressionTests(unittest.TestCase):
         ctrl.hass.states.values["climate.test"].attributes["current_temperature"] = 27.5
         self.assertEqual(ctrl._compute(later).fan, "high")
 
+    def test_smart_fan_ignores_a_gap_that_only_touches_the_band_edge(self):
+        """Misurato sull'unità vera: la stanza a 26.0 con target 25 tocca il confine
+        della banda `medium` e prima faceva salire la ventola sei volte in 82
+        minuti. Con il margine anche in salita deve restare su `low`."""
+        ctrl = self._smart_controller(room=25.5)
+        self.assertEqual(ctrl._compute(NOW).fan, "low")
+        ctrl.hass.states.values["climate.test"].attributes["current_temperature"] = 26.0
+        self.assertEqual(ctrl._compute(NOW).fan, "low")   # scarto +1.0: sul confine
+        ctrl.hass.states.values["climate.test"].attributes["current_temperature"] = 26.2
+        self.assertEqual(ctrl._compute(NOW).fan, "low")   # +1.2: ancora dentro il margine
+        ctrl.hass.states.values["climate.test"].attributes["current_temperature"] = 26.4
+        self.assertEqual(ctrl._compute(NOW).fan, "medium")  # +1.4: deriva vera
+
     def test_smart_fan_holds_inside_the_hysteresis_band(self):
         ctrl = self._smart_controller(room=27.5)
         self.assertEqual(ctrl._compute(NOW).fan, "high")
