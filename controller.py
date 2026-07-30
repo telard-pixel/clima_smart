@@ -68,6 +68,7 @@ from .const import (
     DRY_HUMIDITY_ON,
     DRY_MAX_DELTA,
     FAN_BANDS,
+    FAN_BANDS_SLEEP,
     FAN_HYSTERESIS,
     FAN_ORDER,
     HVAC_COOL,
@@ -82,10 +83,12 @@ from .const import (
     MODE_OFF,
     MODE_SMART,
     MODES,
+    MORNING_OFF_WINDOW_MINUTES,
     PHASE_DAY,
     PHASE_GAP,
     PHASE_NIGHT,
     PHASE_SLEEP,
+    PHASE_WIND_DOWN,
     SERVICE_CALL_TIMEOUT_SECONDS,
     SUMMER_HYSTERESIS,
     UPDATE_INTERVAL_SECONDS,
@@ -137,17 +140,17 @@ def _convert_temperature(
         return None
 
 
-def _fan_band(delta: float) -> str:
+def _fan_band(delta: float, bands: tuple[tuple[float, str], ...]) -> str:
     """The fan step MODE_SMART wants for a given gap above the target."""
-    for threshold, name in FAN_BANDS:
+    for threshold, name in bands:
         if delta >= threshold:
             return name
-    return FAN_BANDS[-1][1]
+    return bands[-1][1]
 
 
-def _band_threshold(name: str) -> float:
+def _band_threshold(name: str, bands: tuple[tuple[float, str], ...]) -> float:
     """Lower edge of a fan band, used to hold a step until the gap really drops."""
-    for threshold, band in FAN_BANDS:
+    for threshold, band in bands:
         if band == name:
             return threshold
     return 0.0
@@ -241,6 +244,8 @@ class ClimaSmartController:
         self._last_fan_band: str | None = None
         self._last_fan_band_at: datetime | None = None
         self._dry_active = False
+        # Giorno in cui lo spegnimento del mattino e' gia' stato deciso.
+        self._morning_off_done_on = None
 
         # Diagnostics (read by sensors)
         self.current_phase: str | None = None
@@ -710,11 +715,33 @@ class ClimaSmartController:
                 in_sleep = sleep_start <= t < sleep_end
             if in_sleep:
                 return PHASE_SLEEP
+            # From the end of the sleep window to the morning switch-off: still the
+            # night target, but at the lowest fan step.
+            if sleep_end <= t < morning:
+                return PHASE_WIND_DOWN
         if morning <= t < day:
             return PHASE_GAP
         if day <= t < night:
             return PHASE_DAY
         return PHASE_NIGHT
+
+    def _morning_off_due(self, now: datetime) -> bool:
+        """Whether the one-shot morning switch-off still has to happen today.
+
+        Bounded to a short window after its time, and marked once decided: a Home
+        Assistant restart later in the morning must not switch off a unit the user
+        has meanwhile turned back on.
+        """
+        if self._morning_off_done_on == now.date():
+            return False
+        start = _parse_time(
+            self._cfg(CONF_MORNING_OFF_START, DEFAULT_MORNING_OFF_START),
+            DEFAULT_MORNING_OFF_START,
+        )
+        begin = now.replace(
+            hour=start.hour, minute=start.minute, second=0, microsecond=0
+        )
+        return begin <= now < begin + timedelta(minutes=MORNING_OFF_WINDOW_MINUTES)
 
     def _read_humidity(self) -> float | None:
         """Indoor relative humidity, if a sensor was configured (MODE_SMART only)."""
@@ -737,6 +764,7 @@ class ClimaSmartController:
         cur_fan: str | None,
         now: datetime,
         fan_modes: list | None,
+        bands: tuple[tuple[float, str], ...] = FAN_BANDS,
     ) -> str | None:
         """Fan step for MODE_SMART: harder the further the room is above target.
 
@@ -748,21 +776,25 @@ class ClimaSmartController:
         """
         if delta is None:
             return None
-        wanted = _fan_band(delta)
+        wanted = _fan_band(delta, bands)
 
         # Compare against our own last decision; fall back to what the unit reports
         # so a restart doesn't jump the fan around before the first decision.
         reference = self._last_fan_band
         if reference not in FAN_ORDER:
             reference = cur_fan if cur_fan in FAN_ORDER else None
+        # A step the current band table does not offer (e.g. `high` left over from
+        # the day when the sleep window starts) is not a reference to hold on to.
+        if reference is not None and reference not in [name for _, name in bands]:
+            reference = None
         if reference in FAN_ORDER and wanted != reference:
             if FAN_ORDER.index(wanted) > FAN_ORDER.index(reference):
                 # Upgrade: the gap has to be clearly inside the higher band, not
                 # merely touching its edge.
-                if delta < _band_threshold(wanted) + FAN_HYSTERESIS:
+                if delta < _band_threshold(wanted, bands) + FAN_HYSTERESIS:
                     wanted = reference
             else:
-                hold = delta > _band_threshold(reference) - FAN_HYSTERESIS
+                hold = delta > _band_threshold(reference, bands) - FAN_HYSTERESIS
                 too_soon = (
                     self._last_fan_band_at is not None
                     and (now - self._last_fan_band_at).total_seconds()
@@ -898,7 +930,15 @@ class ClimaSmartController:
         # target. Everything that keyed off "is it night" must include it.
         is_night = phase in (PHASE_NIGHT, PHASE_SLEEP)
 
-        if phase == PHASE_GAP:
+        if phase == PHASE_GAP and self.mode == MODE_SMART:
+            # For MODE_SMART the morning switch-off is one event, not a state held
+            # for two hours: outside its window the phase behaves like the day, so a
+            # unit the user turns back on in the morning is managed, not switched off.
+            if self._morning_off_due(now) and cur_mode != HVAC_OFF:
+                self._morning_off_done_on = now.date()
+                self.active_target = None
+                return Desired(hvac=HVAC_OFF, reason="smart: spegnimento del mattino")
+        elif phase == PHASE_GAP:
             self.active_target = None
             # Turn off, but only if cooling (never touch heating).
             if cur_mode == HVAC_COOL:
@@ -925,28 +965,39 @@ class ClimaSmartController:
         # MODE_SMART keeps one target whatever the presence says: it is the mode for
         # "I set 25 and you deal with the rest".
         smart = self.mode == MODE_SMART
-        if phase == PHASE_SLEEP:
+        night_window = phase in (PHASE_SLEEP, PHASE_WIND_DOWN)
+        if night_window:
             target = self.target_sleep
         else:
             target = self.target_home if (smart or is_home) else self.target_away
         self.active_target = self._reachable_target(target, climate)
 
         if smart:
+            # MODE_SMART never starts the unit: the user decides when it runs, we
+            # decide how it runs, and the only switch-off we do is the scheduled one.
+            if cur_mode == HVAC_OFF:
+                self.active_target = None
+                return Desired(reason=f"smart {phase}: clima spento, non lo accendo io")
+
             delta = None if room is None else room - target
             humidity = self._read_humidity()
-            program = self._program_for(
-                delta, humidity, climate.attributes.get("hvac_modes")
-            )
-            # Quiet mode and a forced fan step are mutually exclusive on this unit:
-            # with `muto` on it reverts to `auto` about a minute after our command,
-            # which _maybe_flag_manual then reads as a manual intervention and hands
-            # over control for an hour. At night we leave the fan to the unit.
-            fan = None if is_night else self._fan_for(
-                delta,
-                climate.attributes.get("fan_mode"),
-                now,
-                climate.attributes.get("fan_modes"),
-            )
+            hvac_modes = climate.attributes.get("hvac_modes")
+            if phase == PHASE_WIND_DOWN:
+                # The hour before the switch-off: dehumidify with the fan on auto,
+                # which takes the edge off the room without cooling it further.
+                program = (
+                    HVAC_DRY if not hvac_modes or HVAC_DRY in hvac_modes else HVAC_COOL
+                )
+                fan = "auto"
+            else:
+                program = self._program_for(delta, humidity, hvac_modes)
+                fan = self._fan_for(
+                    delta,
+                    climate.attributes.get("fan_mode"),
+                    now,
+                    climate.attributes.get("fan_modes"),
+                    FAN_BANDS_SLEEP if phase == PHASE_SLEEP else FAN_BANDS,
+                )
             detail = f"{program}, ventola {fan or 'invariata'}"
             if delta is not None:
                 detail += f", scarto {delta:+.1f}"
@@ -1158,12 +1209,16 @@ class ClimaSmartController:
         await self._apply_switch(CONF_NIGHT_SWITCH, desired.night)
 
     def _quiet_mode_on(self, desired: Desired) -> bool:
-        """Whether the unit is in (or is being put into) quiet mode this pass."""
-        if desired.mute:
-            return True
+        """Whether the unit is in (or is being put into) quiet mode this pass.
+
+        With no mute switch linked there is nothing to conflict with, so the fan
+        stays ours to command: `desired.mute` alone must not block it.
+        """
         entity_id = self._cfg(CONF_MUTE_SWITCH)
         if not entity_id:
             return False
+        if desired.mute:
+            return True
         st = self.hass.states.get(entity_id)
         return st is not None and st.state == "on"
 

@@ -25,11 +25,19 @@ Di notte la ventola **non** viene comandata: con il muto acceso questa unità ri
 una velocità imposta e torna su `auto` dopo circa un minuto, e quel ritorno veniva
 letto come un intervento manuale, con un'ora di controllo ceduta ogni volta.
 
-### Notte fonda
+### Il profilo notturno (modo Adattivo)
 
-Una finestra dentro la notte (`23:30` → `07:30`, entrambe configurabili) con un
-**target proprio**, di norma più basso. Attraversa la mezzanotte. Vale per i modi
-Adattivo e Auto.
+- **notte fonda** (`sleep_start` → `sleep_end`, di norma `23:00` → `07:30`): target
+  proprio, più basso, e ventola a due soli passi — `medium` finché la stanza non
+  arriva, poi `low` per mantenere. Mai `high`.
+- **scarico mattutino** (dalla fine della notte fonda allo spegnimento): programma
+  `dry` con ventola `auto`, per togliere l'afa senza raffreddare ancora.
+- **spegnimento del mattino** (`morning_off_start`, di norma `08:30`): avviene **una
+  volta sola**, dentro una finestra di mezz'ora. Non è uno stato imposto: se
+  riaccendi il clima in mattinata viene gestito col profilo di giorno, non rispento.
+
+In questo modo il controller **non accende mai** l'unità: decidi tu quando parte,
+lui decide come lavora, e l'unico spegnimento che fa è quello programmato.
 
 ### Correzione setpoint
 
@@ -69,8 +77,11 @@ I parametri di tuning si regolano poi dalle entità `number`/`select`, oppure da
 ## Note
 
 - Testata su Home Assistant 2026.7.2.
-- Stato attuale: `0.7.0` — finestra di notte fonda con target proprio, correzione
-  setpoint configurabile, e di notte la ventola resta all'unità.
+- Stato attuale: `0.8.0` — profilo notturno completo: notte fonda con ventola a
+  due passi, scarico mattutino in `dry`, spegnimento una tantum, e il controller
+  non accende mai l'unità da sé.
+- `0.7.0` — finestra di notte fonda con target proprio e correzione setpoint
+  configurabile.
 - `0.6.x` — nuovo modo **Adattivo**, che decide ventola e programma
   dai sensori invece di tenerli fissi, più il campo opzionale per il sensore di
   umidità interna.

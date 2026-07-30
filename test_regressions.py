@@ -468,22 +468,19 @@ class ControllerRegressionTests(unittest.TestCase):
         ctrl.hass.states.values["climate.test"].attributes["current_temperature"] = 26.6
         self.assertEqual(ctrl._compute(later).fan, "medium")
 
-    def test_smart_leaves_the_fan_to_the_unit_at_night(self):
-        """Di notte il muto e' acceso, e con quello l'unita' rifiuta una velocita'
-        imposta: comandarla costava un'ora di controllo per falso override."""
+    def test_no_fan_command_when_a_mute_switch_is_linked_and_on(self):
+        """Con un muto collegato e acceso la ventola non si comanda: l'unita' la
+        rimette su `auto` e il ritorno verrebbe letto come intervento manuale.
+        Senza muto collegato, invece, la ventola resta nostra."""
         ctrl = self._smart_controller(room=27.5)
-        ctrl.entry.options = dict(
-            ctrl.entry.options,
-            morning_off_start="08:00:00",
-            day_start="10:00:00",
-            night_start="22:00:00",
-            sleep_start="23:30:00",
-            sleep_end="07:30:00",
-        )
-        desired = ctrl._compute(GIORNO.replace(hour=22, minute=30))
-        self.assertIsNone(desired.fan)
-        self.assertTrue(desired.mute)
-        self.assertTrue(desired.night)
+        ctrl.entry.data = dict(ctrl.entry.data, mute_switch="switch.mute")
+        ctrl.hass.states.values["switch.mute"] = State("on")
+        desired = controller_module.Desired(hvac="cool", setpoint=25, fan="high")
+        self.assertTrue(ctrl._quiet_mode_on(desired))
+        ctrl.entry.data = {
+            k: v for k, v in ctrl.entry.data.items() if k != "mute_switch"
+        }
+        self.assertFalse(ctrl._quiet_mode_on(desired))
 
     def test_smart_uses_dry_when_muggy_and_at_temperature(self):
         ctrl = self._smart_controller(room=25.2, humidity=65)
@@ -549,9 +546,9 @@ class ControllerRegressionTests(unittest.TestCase):
             (23, 29): "night",   # un minuto prima
             (23, 30): "sleep",   # inizio
             (0, 15): "sleep",    # oltre mezzanotte
-            (7, 29): "sleep",    # un minuto prima della fine
-            (7, 30): "night",    # fine: torna notte normale
-            (9, 0): "gap",       # fascia 08-10
+            (7, 29): "sleep",       # un minuto prima della fine
+            (7, 30): "wind_down",   # fine notte fonda: si scarica fino allo stop
+            (9, 0): "gap",          # dopo lo spegnimento del mattino
             (12, 0): "day",
         }
         for (h, m), atteso in casi.items():
@@ -565,8 +562,7 @@ class ControllerRegressionTests(unittest.TestCase):
         desired = ctrl._compute(NOW.replace(hour=2, minute=0))
         self.assertEqual(desired.setpoint, 23.0)
         self.assertEqual(ctrl.current_phase, "sleep")
-        self.assertTrue(desired.mute)          # la notte fonda resta silenziosa
-        self.assertIsNone(desired.fan)         # ventola lasciata all'unita'
+        self.assertEqual(desired.fan, "medium")   # ancora lontano dal target
         # Fuori dalla finestra si torna al target di casa.
         self.assertEqual(ctrl._compute(NOW.replace(hour=12, minute=0)).setpoint, 25.0)
 
@@ -618,6 +614,80 @@ class ControllerRegressionTests(unittest.TestCase):
             ctrl._apply(controller_module.Desired(hvac="cool", setpoint=25, fan="low"))
         )
         self.assertNotIn("set_fan_mode", sent)
+
+    # --------------------------------------------- profilo notturno completo
+    def _profilo_notte(self, ctrl):
+        ctrl.entry.options = dict(
+            ctrl.entry.options,
+            target_home=25.0,
+            target_sleep=22.0,
+            sleep_start="23:00:00",
+            sleep_end="07:30:00",
+            morning_off_start="08:30:00",
+            day_start="10:00:00",
+            night_start="22:00:00",
+        )
+
+    def test_night_profile_fan_medium_until_target_then_low(self):
+        ctrl = self._smart_controller(room=26.0)
+        self._profilo_notte(ctrl)
+        notte = GIORNO.replace(hour=23, minute=30)
+        desired = ctrl._compute(notte)
+        self.assertEqual(ctrl.current_phase, "sleep")
+        self.assertEqual(desired.setpoint, 22.0)
+        self.assertEqual(desired.fan, "medium")   # 4 gradi da scendere
+        # Arrivato al target passa a low, dopo l'attesa anti-ticchettio.
+        ctrl.hass.states.values["climate.test"].attributes["current_temperature"] = 22.0
+        dopo = notte + timedelta(seconds=controller_module.MIN_FAN_DWELL_SECONDS + 1)
+        self.assertEqual(ctrl._compute(dopo).fan, "low")
+
+    def test_night_profile_never_uses_high(self):
+        ctrl = self._smart_controller(room=30.0)   # otto gradi sopra
+        self._profilo_notte(ctrl)
+        self.assertEqual(ctrl._compute(GIORNO.replace(hour=2)).fan, "medium")
+
+    def test_wind_down_is_dry_with_fan_auto(self):
+        ctrl = self._smart_controller(room=23.0)
+        self._profilo_notte(ctrl)
+        desired = ctrl._compute(GIORNO.replace(hour=8, minute=0))
+        self.assertEqual(ctrl.current_phase, "wind_down")
+        self.assertEqual(desired.hvac, "dry")
+        self.assertEqual(desired.fan, "auto")
+        self.assertEqual(desired.setpoint, 22.0)
+
+    def test_morning_switch_off_happens_once(self):
+        ctrl = self._smart_controller(room=24.0)
+        self._profilo_notte(ctrl)
+        spegnimento = GIORNO.replace(hour=8, minute=31)
+        primo = ctrl._compute(spegnimento)
+        self.assertEqual(primo.hvac, "off")
+        # Riacceso dall'utente poco dopo: non deve rispegnerlo.
+        secondo = ctrl._compute(spegnimento + timedelta(minutes=5))
+        self.assertNotEqual(secondo.hvac, "off")
+
+    def test_morning_switch_off_not_attempted_late(self):
+        """Oltre la finestra non ci si prova nemmeno: un riavvio a meta' mattina
+        non deve spegnere un clima appena riacceso a mano."""
+        ctrl = self._smart_controller(room=24.0)
+        self._profilo_notte(ctrl)
+        tardi = ctrl._compute(GIORNO.replace(hour=9, minute=30))
+        self.assertNotEqual(tardi.hvac, "off")
+
+    def test_smart_never_turns_the_unit_on(self):
+        ctrl = self._smart_controller(room=28.0)
+        self._profilo_notte(ctrl)
+        ctrl.hass.states.values["climate.test"].state = "off"
+        desired = ctrl._compute(GIORNO.replace(hour=23, minute=30))
+        self.assertIsNone(desired.hvac)
+        self.assertIsNone(desired.setpoint)
+        self.assertIn("non lo accendo", desired.reason)
+
+    def test_daytime_profile_returns_after_the_switch_off(self):
+        ctrl = self._smart_controller(room=27.0)
+        self._profilo_notte(ctrl)
+        desired = ctrl._compute(GIORNO.replace(hour=12, minute=0))
+        self.assertEqual(desired.setpoint, 25.0)
+        self.assertEqual(desired.hvac, "cool")
 
     def test_event_burst_collapses_into_one_evaluation(self):
         ctrl = make_controller()

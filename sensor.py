@@ -15,6 +15,7 @@ from .const import (
     PHASE_GAP,
     PHASE_NIGHT,
     PHASE_SLEEP,
+    PHASE_WIND_DOWN,
 )
 from .entity import ClimaSmartEntity
 
@@ -39,7 +40,13 @@ class ClimaSmartPhaseSensor(ClimaSmartEntity, SensorEntity):
     _attr_icon = "mdi:clock-outline"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_device_class = SensorDeviceClass.ENUM
-    _attr_options = [PHASE_DAY, PHASE_NIGHT, PHASE_SLEEP, PHASE_GAP]
+    _attr_options = [
+        PHASE_DAY,
+        PHASE_NIGHT,
+        PHASE_SLEEP,
+        PHASE_WIND_DOWN,
+        PHASE_GAP,
+    ]
 
     def __init__(self, controller) -> None:
         super().__init__(controller, "phase")

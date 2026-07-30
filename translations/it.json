@@ -95,7 +95,8 @@
           "day": "Giorno",
           "night": "Notte",
           "gap": "Fascia spenta",
-          "sleep": "Notte fonda"
+          "sleep": "Notte fonda",
+          "wind_down": "Scarico mattutino"
         }
       },
       "target": {

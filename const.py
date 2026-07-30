@@ -114,12 +114,23 @@ DRY_HUMIDITY_OFF = 55.0
 # Above this gap the room needs cooling, not dehumidifying.
 DRY_MAX_DELTA = 1.0
 
-# --- Day phases (only meaningful in MODE_AUTO) ---
+# --- Day phases (only meaningful in MODE_AUTO / MODE_SMART) ---
 PHASE_DAY = "day"
 PHASE_NIGHT = "night"
 PHASE_GAP = "gap"
 # Inside the night, the stretch where the colder sleep target applies.
 PHASE_SLEEP = "sleep"
+# Between the end of the sleep window and the morning switch-off: keep holding the
+# night target, but at the lowest fan step.
+PHASE_WIND_DOWN = "wind_down"
+
+# --- MODE_SMART, sleep window: only two steps, and never `high` ---
+# Medium until the room reaches the night target, then low to hold it.
+FAN_BANDS_SLEEP: tuple[tuple[float, str], ...] = ((0.3, "medium"), (0.0, "low"))
+# The morning switch-off is a one-shot, not a state to enforce: outside this many
+# minutes past its time it is not attempted at all, so a restart later in the
+# morning cannot switch off a unit the user has just turned back on.
+MORNING_OFF_WINDOW_MINUTES = 30
 
 # HVAC constants we rely on (kept as literals to avoid importing climate internals).
 HVAC_COOL = "cool"

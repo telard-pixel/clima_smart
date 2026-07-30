@@ -95,7 +95,8 @@
           "day": "Day",
           "night": "Night",
           "gap": "Off window",
-          "sleep": "Deep night"
+          "sleep": "Deep night",
+          "wind_down": "Morning wind-down"
         }
       },
       "target": {
