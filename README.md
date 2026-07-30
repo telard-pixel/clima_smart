@@ -63,7 +63,8 @@ dire 25 mentre all'unità arriva 24.
 
 - **Switch** `Attivo` — abilita/disabilita il controllo (off = controllo manuale del clima).
 - **Select** `Modo` — adattivo / auto / comfort / away / notte / spento.
-- **Number** — target casa/fuori, isteresi eco, soglie eco-esterno, soglia stagione calda, override (min).
+- **Number** — target casa/fuori/notte fonda, correzione setpoint, isteresi eco,
+  soglie eco-esterno, soglia stagione calda, override (min).
 - **Sensor** (diagnostici) — fase corrente, target attivo, stato/motivo dell'ultima decisione.
 
 ## Installazione
