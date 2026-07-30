@@ -21,9 +21,12 @@ decide da sé:
   a posto, `cool` in tutti gli altri casi. Serve un sensore di umidità interna
   configurato: senza quello resta sempre su `cool`.
 
-Di notte la ventola **non** viene comandata: con il muto acceso questa unità rifiuta
-una velocità imposta e torna su `auto` dopo circa un minuto, e quel ritorno veniva
-letto come un intervento manuale, con un'ora di controllo ceduta ogni volta.
+**Sul muto:** finché uno switch «muto» resta collegato, la ventola non viene
+comandata mentre è acceso. Questa unità con il muto attivo rifiuta una velocità
+imposta e torna su `auto` dopo circa un minuto, e quel ritorno veniva letto come un
+intervento manuale, con un'ora di controllo ceduta ogni volta. Se il silenzio lo
+vuoi ottenere dalla velocità, lascia il campo «muto» vuoto e la ventola resta
+governata dal profilo.
 
 ### Il profilo notturno (modo Adattivo)
 
