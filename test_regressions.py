@@ -569,7 +569,9 @@ class ControllerRegressionTests(unittest.TestCase):
     def test_setpoint_offset_shifts_the_command_not_the_target(self):
         ctrl = self._smart_controller(room=27.0)
         ctrl.entry.options = dict(ctrl.entry.options, setpoint_offset=-1.0)
-        desired = ctrl._compute(NOW)
+        # GIORNO, non NOW: con l'ora vera questa prova falliva fra le 23:30 e le
+        # 08:30, quando la fase diventa notte fonda e il target e' un altro.
+        desired = ctrl._compute(GIORNO)
         self.assertEqual(desired.setpoint, 25.0)      # l'obiettivo resta 25
         self.assertEqual(ctrl.active_target, 25.0)    # e il sensore pure
         sent = []
