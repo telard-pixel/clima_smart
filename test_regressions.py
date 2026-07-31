@@ -897,6 +897,55 @@ class ControllerRegressionTests(unittest.TestCase):
         asyncio.run(ctrl.async_evaluate("prova"))
         self.assertEqual(inviati, [])
 
+    def _con_casa(self, room=26.0, altre=(27.0, 26.5, 25.5), outdoor=31.0):
+        ctrl = self._smart_controller(room=room, outdoor=outdoor)
+        self._profilo_notte(ctrl)
+        for i, valore in enumerate(altre):
+            ctrl.hass.states.values[f"sensor.stanza{i}"] = State(
+                str(valore), {"unit_of_measurement": "°C"}
+            )
+        ctrl.entry.data = dict(
+            ctrl.entry.data,
+            house_sensors=[f"sensor.stanza{i}" for i in range(len(altre))],
+        )
+        ctrl.entry.options = dict(
+            ctrl.entry.options,
+            auto_start_room=28.0,
+            auto_start_house=26.0,
+            auto_start_outdoor=28.0,
+        )
+        ctrl.hass.states.values["climate.test"].state = "off"
+        return ctrl
+
+    def test_house_average_skips_unusable_readings(self):
+        ctrl = self._con_casa(altre=(27.0, 26.0))
+        self.assertAlmostEqual(ctrl._house_average(), 26.5)
+        ctrl.hass.states.values["sensor.stanza1"] = State("unavailable")
+        self.assertAlmostEqual(ctrl._house_average(), 27.0)
+        ctrl.hass.states.values["sensor.stanza0"] = State("unknown")
+        self.assertIsNone(ctrl._house_average())
+
+    def test_house_average_starts_before_the_bedroom_gets_hot(self):
+        """La camera e' ancora sotto la sua soglia, ma il resto della casa no:
+        e' il segnale che permette di partire prima del picco."""
+        ctrl = self._con_casa(room=26.0, altre=(27.0, 26.5, 25.5))
+        desired = ctrl._compute(GIORNO.replace(hour=12, minute=0))
+        self.assertEqual(desired.hvac, "cool")
+        self.assertIn("casa", desired.reason)
+
+    def test_cool_day_never_starts_by_itself(self):
+        ctrl = self._con_casa(altre=(29.0, 29.0), outdoor=24.0)
+        desired = ctrl._compute(GIORNO.replace(hour=12, minute=0))
+        self.assertIsNone(desired.hvac)
+
+    def test_without_house_sensors_only_the_room_counts(self):
+        ctrl = self._con_casa(room=26.0, altre=())
+        ctrl.entry.data = {
+            k: v for k, v in ctrl.entry.data.items() if k != "house_sensors"
+        }
+        self.assertIsNone(ctrl._house_average())
+        self.assertIsNone(ctrl._compute(GIORNO.replace(hour=12, minute=0)).hvac)
+
     def test_no_daytime_start_below_the_threshold(self):
         ctrl = self._smart_controller(room=27.0)
         self._profilo_notte(ctrl)

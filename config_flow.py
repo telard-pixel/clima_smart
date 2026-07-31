@@ -20,6 +20,8 @@ from .validation import (
     validate_options,
 )
 from .const import (
+    CONF_AUTO_START_HOUSE,
+    CONF_AUTO_START_OUTDOOR,
     CONF_AUTO_START_ROOM,
     CONF_AUTO_START_SLEEP,
     CONF_CLIMATE,
@@ -28,6 +30,7 @@ from .const import (
     CONF_ECO_OUTDOOR_OFF,
     CONF_ECO_OUTDOOR_ON,
     CONF_ECO_SWITCH,
+    CONF_HOUSE_SENSORS,
     CONF_HUMIDITY,
     CONF_MORNING_OFF_START,
     CONF_MUTE_SWITCH,
@@ -45,6 +48,8 @@ from .const import (
     CONF_TARGET_AWAY,
     CONF_TARGET_HOME,
     CONF_TARGET_SLEEP,
+    DEFAULT_AUTO_START_HOUSE,
+    DEFAULT_AUTO_START_OUTDOOR,
     DEFAULT_AUTO_START_ROOM,
     DEFAULT_AUTO_START_SLEEP,
     DEFAULT_DAY_START,
@@ -101,6 +106,11 @@ def _setup_schema(defaults: dict[str, Any]) -> vol.Schema:
             ),
             _optional(CONF_HUMIDITY, defaults): _entity(
                 "sensor", device_class="humidity"
+            ),
+            _optional(CONF_HOUSE_SENSORS, defaults): selector.EntitySelector(
+                selector.EntitySelectorConfig(
+                    domain="sensor", device_class="temperature", multiple=True
+                )
             ),
             _optional(CONF_ECO_SWITCH, defaults): _entity("switch"),
             _optional(CONF_MUTE_SWITCH, defaults): _entity("switch"),
@@ -261,6 +271,14 @@ class ClimaSmartOptionsFlow(OptionsFlow):
                     CONF_AUTO_START_ROOM,
                     default=_num(CONF_AUTO_START_ROOM, DEFAULT_AUTO_START_ROOM),
                 ): vol.All(vol.Coerce(float), vol.Range(min=0, max=35)),
+                vol.Required(
+                    CONF_AUTO_START_HOUSE,
+                    default=_num(CONF_AUTO_START_HOUSE, DEFAULT_AUTO_START_HOUSE),
+                ): vol.All(vol.Coerce(float), vol.Range(min=0, max=35)),
+                vol.Required(
+                    CONF_AUTO_START_OUTDOOR,
+                    default=_num(CONF_AUTO_START_OUTDOOR, DEFAULT_AUTO_START_OUTDOOR),
+                ): vol.All(vol.Coerce(float), vol.Range(min=0, max=45)),
                 vol.Required(
                     CONF_AUTO_START_SLEEP,
                     default=_num(CONF_AUTO_START_SLEEP, DEFAULT_AUTO_START_SLEEP),

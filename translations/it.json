@@ -12,7 +12,11 @@
           "eco_switch": "Switch Eco",
           "mute_switch": "Switch Muto",
           "night_switch": "Switch Modalità Notte",
-          "humidity_sensor": "Sensore di umidità interna (opzionale)"
+          "humidity_sensor": "Sensore di umidità interna (opzionale)",
+          "house_sensors": "Termometri delle altre stanze"
+        },
+        "data_description": {
+          "house_sensors": "Il resto della casa si scalda prima della camera: la loro media è il segnale che permette di partire prima del picco."
         }
       },
       "reconfigure": {
@@ -26,7 +30,11 @@
           "eco_switch": "Switch Eco",
           "mute_switch": "Switch Muto",
           "night_switch": "Switch Modalità Notte",
-          "humidity_sensor": "Sensore di umidità interna (opzionale)"
+          "humidity_sensor": "Sensore di umidità interna (opzionale)",
+          "house_sensors": "Termometri delle altre stanze"
+        },
+        "data_description": {
+          "house_sensors": "Il resto della casa si scalda prima della camera: la loro media è il segnale che permette di partire prima del picco."
         }
       }
     },
@@ -60,11 +68,15 @@
           "sleep_start": "Inizio notte fonda",
           "sleep_end": "Fine notte fonda",
           "auto_start_sleep": "Avvia il clima all'inizio della notte fonda",
-          "auto_start_room": "Accendi da solo quando la stanza supera (°C)"
+          "auto_start_room": "Accendi da solo quando la stanza supera (°C)",
+          "auto_start_house": "...oppure quando la media delle altre stanze supera (°C)",
+          "auto_start_outdoor": "Solo se fuori ci sono almeno (°C)"
         },
         "data_description": {
           "auto_start_sleep": "Se il clima è spento all'orario di inizio, lo accende una volta sola. Fuori da quel momento il controller non accende mai da sé.",
-          "auto_start_room": "Avvio diurno: se il clima è spento e la stanza supera questa temperatura, viene acceso una volta al giorno. 0 disattiva."
+          "auto_start_room": "Avvio diurno: se il clima è spento e la stanza supera questa temperatura, viene acceso una volta al giorno. 0 disattiva.",
+          "auto_start_house": "Seconda condizione per l'avvio diurno, indipendente dalla soglia della stanza. 0 disattiva.",
+          "auto_start_outdoor": "Nessun avvio diurno sotto questa temperatura esterna. 0 toglie il vincolo."
         }
       }
     },

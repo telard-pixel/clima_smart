@@ -12,7 +12,11 @@
           "eco_switch": "Eco switch",
           "mute_switch": "Mute switch",
           "night_switch": "Night mode switch",
-          "humidity_sensor": "Indoor humidity sensor (optional)"
+          "humidity_sensor": "Indoor humidity sensor (optional)",
+          "house_sensors": "Thermometers in the other rooms"
+        },
+        "data_description": {
+          "house_sensors": "The rest of the house warms up before the bedroom: their average is the signal that allows starting before the peak."
         }
       },
       "reconfigure": {
@@ -26,7 +30,11 @@
           "eco_switch": "Eco switch",
           "mute_switch": "Mute switch",
           "night_switch": "Night mode switch",
-          "humidity_sensor": "Indoor humidity sensor (optional)"
+          "humidity_sensor": "Indoor humidity sensor (optional)",
+          "house_sensors": "Thermometers in the other rooms"
+        },
+        "data_description": {
+          "house_sensors": "The rest of the house warms up before the bedroom: their average is the signal that allows starting before the peak."
         }
       }
     },
@@ -60,11 +68,15 @@
           "sleep_start": "Deep night starts",
           "sleep_end": "Deep night ends",
           "auto_start_sleep": "Start the unit when the deep-night window opens",
-          "auto_start_room": "Start by itself when the room goes above (°C)"
+          "auto_start_room": "Start by itself when the room goes above (°C)",
+          "auto_start_house": "...or when the other rooms average goes above (°C)",
+          "auto_start_outdoor": "Only if it is at least this warm outside (°C)"
         },
         "data_description": {
           "auto_start_sleep": "If the unit is off at that time, it is switched on once. Outside that moment the controller never starts it by itself.",
-          "auto_start_room": "Daytime start: if the unit is off and the room goes above this, it is switched on once a day. 0 disables it."
+          "auto_start_room": "Daytime start: if the unit is off and the room goes above this, it is switched on once a day. 0 disables it.",
+          "auto_start_house": "Second condition for the daytime start, independent of the room threshold. 0 disables it.",
+          "auto_start_outdoor": "No daytime start below this outdoor temperature. 0 removes the guard."
         }
       }
     },

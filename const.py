@@ -48,6 +48,15 @@ CONF_AUTO_START_SLEEP = "auto_start_sleep"
 # hot and someone has to close the windows - while the evening one is just the
 # night schedule beginning.
 CONF_AUTO_START_ROOM = "auto_start_room"
+# Other rooms' thermometers. The rest of the house warms up before the bedroom, so
+# their average is the earlier signal: it lets the unit start before the outdoor
+# peak instead of chasing it. Measured on this house, the bedroom's own Tado valve
+# read 22.99 against the Haier's 26.5 in the same room with the unit off for an
+# hour and a half, so it is not in this list by default.
+CONF_HOUSE_SENSORS = "house_sensors"
+CONF_AUTO_START_HOUSE = "auto_start_house"
+# Guard: no daytime start at all unless it is really a hot day outside.
+CONF_AUTO_START_OUTDOOR = "auto_start_outdoor"
 
 # --- Defaults (validated values from the original automation) ---
 DEFAULT_TARGET_HOME = 26.0
@@ -66,6 +75,8 @@ DEFAULT_SLEEP_END = "07:30:00"
 DEFAULT_SETPOINT_OFFSET = 0.0
 DEFAULT_AUTO_START_SLEEP = False
 DEFAULT_AUTO_START_ROOM = 0.0
+DEFAULT_AUTO_START_HOUSE = 0.0
+DEFAULT_AUTO_START_OUTDOOR = 0.0
 DEFAULT_PRESENCE_HOME_STATE = "home"
 
 # While the unit is already cooling, the season threshold drops by this much, so a

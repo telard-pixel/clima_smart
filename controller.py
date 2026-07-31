@@ -26,7 +26,10 @@ from homeassistant.util import dt as dt_util
 from homeassistant.util.unit_conversion import TemperatureConverter
 
 from .const import (
+    AUX_REFUSAL_BACKOFF_SECONDS,
     COMMAND_SETTLE_SECONDS,
+    CONF_AUTO_START_HOUSE,
+    CONF_AUTO_START_OUTDOOR,
     CONF_AUTO_START_ROOM,
     CONF_AUTO_START_SLEEP,
     CONF_CLIMATE,
@@ -35,11 +38,12 @@ from .const import (
     CONF_ECO_OUTDOOR_OFF,
     CONF_ECO_OUTDOOR_ON,
     CONF_ECO_SWITCH,
+    CONF_HOUSE_SENSORS,
     CONF_HUMIDITY,
     CONF_MORNING_OFF_START,
     CONF_MUTE_SWITCH,
-    CONF_NIGHT_SWITCH,
     CONF_NIGHT_START,
+    CONF_NIGHT_SWITCH,
     CONF_OUTDOOR,
     CONF_OUTDOOR_FALLBACK,
     CONF_OVERRIDE_MINUTES,
@@ -52,6 +56,8 @@ from .const import (
     CONF_TARGET_AWAY,
     CONF_TARGET_HOME,
     CONF_TARGET_SLEEP,
+    DEFAULT_AUTO_START_HOUSE,
+    DEFAULT_AUTO_START_OUTDOOR,
     DEFAULT_AUTO_START_ROOM,
     DEFAULT_AUTO_START_SLEEP,
     DEFAULT_DAY_START,
@@ -71,10 +77,10 @@ from .const import (
     DEFAULT_TARGET_SLEEP,
     DOMAIN,
     DRY_DELTA_HYSTERESIS,
-    EVENT_STARTED,
     DRY_HUMIDITY_OFF,
     DRY_HUMIDITY_ON,
     DRY_MAX_DELTA,
+    EVENT_STARTED,
     FAN_BANDS,
     FAN_BANDS_SLEEP,
     FAN_HYSTERESIS,
@@ -83,15 +89,14 @@ from .const import (
     HVAC_DRY,
     HVAC_HEAT,
     HVAC_OFF,
-    AUX_REFUSAL_BACKOFF_SECONDS,
     MIN_FAN_DWELL_SECONDS,
+    MODES,
     MODE_AUTO,
     MODE_AWAY,
     MODE_COMFORT,
     MODE_NIGHT,
     MODE_OFF,
     MODE_SMART,
-    MODES,
     MORNING_OFF_WINDOW_MINUTES,
     PHASE_DAY,
     PHASE_GAP,
@@ -815,6 +820,67 @@ class ClimaSmartController:
         )
         return begin <= now < begin + timedelta(minutes=MORNING_OFF_WINDOW_MINUTES)
 
+    def _house_average(self) -> float | None:
+        """Average of the other rooms' thermometers, in Celsius.
+
+        Sensors that are missing, unavailable or not numeric are simply skipped;
+        with none left there is no average and the house condition cannot fire.
+        """
+        entities = self._cfg(CONF_HOUSE_SENSORS) or []
+        if isinstance(entities, str):
+            entities = [entities]
+        letture = []
+        for ent in entities:
+            st = self.hass.states.get(ent)
+            if st is None:
+                continue
+            value = _to_float(st.state)
+            if value is None:
+                continue
+            value = _convert_temperature(
+                value,
+                st.attributes.get("unit_of_measurement"),
+                UnitOfTemperature.CELSIUS,
+            )
+            if value is not None:
+                letture.append(value)
+        if not letture:
+            return None
+        return sum(letture) / len(letture)
+
+    def _day_start_due(
+        self, now: datetime, room: float | None, outdoor: float | None
+    ) -> str | None:
+        """Why the unit should be started now, or None to leave it off.
+
+        Two independent signals, because they answer different questions: the
+        bedroom being hot means it is already uncomfortable, the house average
+        being hot means it is about to be. Both are gated on the outdoor reading,
+        so a cool day never triggers a start.
+        """
+        if self._day_start_done_on == now.date():
+            return None
+        guard = float(
+            self._cfg(CONF_AUTO_START_OUTDOOR, DEFAULT_AUTO_START_OUTDOOR) or 0.0
+        )
+        if guard > 0 and (outdoor is None or outdoor < guard):
+            return None
+
+        soglia_stanza = float(
+            self._cfg(CONF_AUTO_START_ROOM, DEFAULT_AUTO_START_ROOM) or 0.0
+        )
+        if soglia_stanza > 0 and room is not None and room >= soglia_stanza:
+            return f"stanza {room:.1f} oltre {soglia_stanza:.1f}"
+
+        soglia_casa = float(
+            self._cfg(CONF_AUTO_START_HOUSE, DEFAULT_AUTO_START_HOUSE) or 0.0
+        )
+        if soglia_casa > 0:
+            casa = self._house_average()
+            if casa is not None and casa >= soglia_casa:
+                return f"casa {casa:.1f} oltre {soglia_casa:.1f}"
+        return None
+
     def _sleep_start_due(self, now: datetime) -> bool:
         """Whether the one-shot evening start still has to happen tonight.
 
@@ -1099,26 +1165,22 @@ class ClimaSmartController:
                         ),
                         reason=f"smart {phase}: avvio della notte, target {target}",
                     )
-                soglia = float(
-                    self._cfg(CONF_AUTO_START_ROOM, DEFAULT_AUTO_START_ROOM) or 0.0
+                perche = (
+                    self._day_start_due(now, room, outdoor)
+                    if phase == PHASE_DAY
+                    else None
                 )
-                if (
-                    phase == PHASE_DAY
-                    and soglia > 0
-                    and room is not None
-                    and room >= soglia
-                    and self._day_start_done_on != now.date()
-                ):
+                if perche is not None:
                     self._sleep_start_armed = True
                     self._start_reason = START_REASON_DAY
                     self.active_target = self._reachable_target(target, climate)
                     return Desired(
                         hvac=HVAC_COOL,
                         setpoint=target,
-                        fan=_fan_band(room - target, FAN_BANDS),
-                        reason=(
-                            f"smart {phase}: avvio, stanza {room:.1f} oltre {soglia:.1f}"
+                        fan=_fan_band(
+                            (room - target) if room is not None else 0.0, FAN_BANDS
                         ),
+                        reason=f"smart {phase}: avvio, {perche}",
                     )
                 self.active_target = None
                 return Desired(reason=f"smart {phase}: clima spento, non lo accendo io")

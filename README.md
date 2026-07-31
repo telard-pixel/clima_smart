@@ -84,7 +84,12 @@ I parametri di tuning si regolano poi dalle entità `number`/`select`, oppure da
 ## Note
 
 - Testata su Home Assistant 2026.7.2.
-- Stato attuale: `0.11.0` — **avvio diurno**: se di giorno il clima è spento e la
+- Stato attuale: `0.12.0` — l'avvio diurno guarda anche i **termometri delle
+  altre stanze**: il resto della casa si scalda prima della camera, quindi la loro
+  media fa partire l'unità prima del picco esterno. Due condizioni indipendenti
+  (camera oppure media di casa), entrambe subordinate a una temperatura esterna
+  minima, così una giornata fresca non fa partire niente.
+- `0.11.0` — **avvio diurno**: se di giorno il clima è spento e la
   stanza supera una soglia, viene acceso una volta al giorno. È l'avvio vero, e
   l'evento `clima_smart_avviato` porta `motivo: giorno`, distinto dal `motivo:
   notte` dell'apertura della notte fonda, che è solo l'orario che comincia.
