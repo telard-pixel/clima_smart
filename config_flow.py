@@ -259,7 +259,10 @@ class ClimaSmartOptionsFlow(OptionsFlow):
                 ): vol.All(vol.Coerce(float), vol.Range(min=-3, max=3)),
                 vol.Required(
                     CONF_AUTO_START_ROOM,
-    CONF_AUTO_START_SLEEP,
+                    default=_num(CONF_AUTO_START_ROOM, DEFAULT_AUTO_START_ROOM),
+                ): vol.All(vol.Coerce(float), vol.Range(min=0, max=35)),
+                vol.Required(
+                    CONF_AUTO_START_SLEEP,
                     default=_num(CONF_AUTO_START_SLEEP, DEFAULT_AUTO_START_SLEEP),
                 ): bool,
                 vol.Required(CONF_SLEEP_START, default=_num(CONF_SLEEP_START, DEFAULT_SLEEP_START)): selector.TimeSelector(),
