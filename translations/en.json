@@ -58,9 +58,12 @@
           "target_sleep": "Deep-night target (°C)",
           "setpoint_offset": "Setpoint correction (°C)",
           "sleep_start": "Deep night starts",
-          "sleep_end": "Deep night ends"
+          "sleep_end": "Deep night ends",
+          "auto_start_sleep": "Start the unit when the deep-night window opens"
         },
-        "data_description": {}
+        "data_description": {
+          "auto_start_sleep": "If the unit is off at that time, it is switched on once. Outside that moment the controller never starts it by itself."
+        }
       }
     },
     "error": {

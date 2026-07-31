@@ -39,8 +39,11 @@ governata dal profilo.
   volta sola**, dentro una finestra di mezz'ora. Non è uno stato imposto: se
   riaccendi il clima in mattinata viene gestito col profilo di giorno, non rispento.
 
-In questo modo il controller **non accende mai** l'unità: decidi tu quando parte,
-lui decide come lavora, e l'unico spegnimento che fa è quello programmato.
+In questo modo il controller **non accende mai** l'unità di sua iniziativa: decidi
+tu quando parte, lui decide come lavora. Le uniche due eccezioni sono programmate e
+avvengono una volta sola: lo spegnimento del mattino e — se attivi «avvio
+automatico» — l'accensione all'apertura della notte fonda, che lancia l'evento
+`clima_smart_avviato` per chi vuole annunciarla.
 
 ### Correzione setpoint
 
@@ -81,7 +84,11 @@ I parametri di tuning si regolano poi dalle entità `number`/`select`, oppure da
 ## Note
 
 - Testata su Home Assistant 2026.7.2.
-- Stato attuale: `0.9.1` — quando l'unità rifiuta un comando su uno switch
+- Stato attuale: `0.10.0` — avvio serale facoltativo: all'apertura della notte
+  fonda, se il clima è spento, lo accende **una volta sola** e lancia l'evento
+  `clima_smart_avviato`, così un'automazione può annunciarlo a voce. Fuori da quel
+  momento vale sempre la regola: il controller non accende mai da sé.
+- `0.9.1` — quando l'unità rifiuta un comando su uno switch
   ausiliario (rimettendolo com'era una sessantina di secondi dopo, senza contesto
   utente) non viene più scambiato per un intervento manuale, e quello switch resta
   in pace per mezz'ora invece di essere ricomandato a ogni passata.

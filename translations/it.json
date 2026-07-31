@@ -58,9 +58,12 @@
           "target_sleep": "Target notte fonda (°C)",
           "setpoint_offset": "Correzione setpoint (°C)",
           "sleep_start": "Inizio notte fonda",
-          "sleep_end": "Fine notte fonda"
+          "sleep_end": "Fine notte fonda",
+          "auto_start_sleep": "Avvia il clima all'inizio della notte fonda"
         },
-        "data_description": {}
+        "data_description": {
+          "auto_start_sleep": "Se il clima è spento all'orario di inizio, lo accende una volta sola. Fuori da quel momento il controller non accende mai da sé."
+        }
       }
     },
     "error": {

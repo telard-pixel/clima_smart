@@ -20,6 +20,7 @@ from .validation import (
     validate_options,
 )
 from .const import (
+    CONF_AUTO_START_SLEEP,
     CONF_CLIMATE,
     CONF_DAY_START,
     CONF_ECO_BAND,
@@ -43,6 +44,7 @@ from .const import (
     CONF_TARGET_AWAY,
     CONF_TARGET_HOME,
     CONF_TARGET_SLEEP,
+    DEFAULT_AUTO_START_SLEEP,
     DEFAULT_DAY_START,
     DEFAULT_ECO_BAND,
     DEFAULT_ECO_OUTDOOR_OFF,
@@ -253,6 +255,10 @@ class ClimaSmartOptionsFlow(OptionsFlow):
                     CONF_SETPOINT_OFFSET,
                     default=_num(CONF_SETPOINT_OFFSET, DEFAULT_SETPOINT_OFFSET),
                 ): vol.All(vol.Coerce(float), vol.Range(min=-3, max=3)),
+                vol.Required(
+                    CONF_AUTO_START_SLEEP,
+                    default=_num(CONF_AUTO_START_SLEEP, DEFAULT_AUTO_START_SLEEP),
+                ): bool,
                 vol.Required(CONF_SLEEP_START, default=_num(CONF_SLEEP_START, DEFAULT_SLEEP_START)): selector.TimeSelector(),
                 vol.Required(CONF_SLEEP_END, default=_num(CONF_SLEEP_END, DEFAULT_SLEEP_END)): selector.TimeSelector(),
                 vol.Required(CONF_MORNING_OFF_START, default=_num(CONF_MORNING_OFF_START, DEFAULT_MORNING_OFF_START)): selector.TimeSelector(),

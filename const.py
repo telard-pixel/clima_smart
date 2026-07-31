@@ -39,6 +39,10 @@ CONF_PRESENCE_HOME_STATE = "presence_home_state"
 # room settled 0.5-1.0 above a 25.0 setpoint. This shifts what we send to the unit
 # without touching the target we aim the room at, so the diagnostics stay honest.
 CONF_SETPOINT_OFFSET = "setpoint_offset"
+# MODE_SMART normally never starts the unit. With this on, and only at the opening
+# of the sleep window, it may: one attempt per night, so that switching the climate
+# off later in the night is not undone at the next pass.
+CONF_AUTO_START_SLEEP = "auto_start_sleep"
 
 # --- Defaults (validated values from the original automation) ---
 DEFAULT_TARGET_HOME = 26.0
@@ -55,6 +59,7 @@ DEFAULT_TARGET_SLEEP = 23.0
 DEFAULT_SLEEP_START = "23:30:00"
 DEFAULT_SLEEP_END = "07:30:00"
 DEFAULT_SETPOINT_OFFSET = 0.0
+DEFAULT_AUTO_START_SLEEP = False
 DEFAULT_PRESENCE_HOME_STATE = "home"
 
 # While the unit is already cooling, the season threshold drops by this much, so a
@@ -138,6 +143,13 @@ FAN_BANDS_SLEEP: tuple[tuple[float, str], ...] = ((0.3, "medium"), (0.0, "low"))
 # minutes past its time it is not attempted at all, so a restart later in the
 # morning cannot switch off a unit the user has just turned back on.
 MORNING_OFF_WINDOW_MINUTES = 30
+# Same idea for the evening start: one attempt inside this window after
+# sleep_start, so a climate switched off at 01:00 stays off.
+SLEEP_START_WINDOW_MINUTES = 30
+
+# Fired when the controller starts the unit by itself, so an automation can
+# announce it. Data: entity_id, target, phase.
+EVENT_STARTED = "clima_smart_avviato"
 
 # Measured twice on this unit: an aux switch we just turned on comes back to its
 # previous value about 60-70 s later, with no user context, when the unit does not

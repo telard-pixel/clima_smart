@@ -27,6 +27,7 @@ from homeassistant.util.unit_conversion import TemperatureConverter
 
 from .const import (
     COMMAND_SETTLE_SECONDS,
+    CONF_AUTO_START_SLEEP,
     CONF_CLIMATE,
     CONF_DAY_START,
     CONF_ECO_BAND,
@@ -50,6 +51,7 @@ from .const import (
     CONF_TARGET_AWAY,
     CONF_TARGET_HOME,
     CONF_TARGET_SLEEP,
+    DEFAULT_AUTO_START_SLEEP,
     DEFAULT_DAY_START,
     DEFAULT_ECO_BAND,
     DEFAULT_ECO_OUTDOOR_OFF,
@@ -67,6 +69,7 @@ from .const import (
     DEFAULT_TARGET_SLEEP,
     DOMAIN,
     DRY_DELTA_HYSTERESIS,
+    EVENT_STARTED,
     DRY_HUMIDITY_OFF,
     DRY_HUMIDITY_ON,
     DRY_MAX_DELTA,
@@ -95,6 +98,7 @@ from .const import (
     PHASE_WIND_DOWN,
     RESTORE_TIMEOUT_SECONDS,
     SERVICE_CALL_TIMEOUT_SECONDS,
+    SLEEP_START_WINDOW_MINUTES,
     SUMMER_HYSTERESIS,
     UPDATE_INTERVAL_SECONDS,
 )
@@ -260,6 +264,9 @@ class ClimaSmartController:
         # della passata in corso che lo ha deciso.
         self._morning_off_done_on = None
         self._morning_off_armed = False
+        # Stessa coppia per l'avvio serale.
+        self._sleep_start_done_on = None
+        self._sleep_start_armed = False
 
         # Diagnostics (read by sensors)
         self.current_phase: str | None = None
@@ -802,6 +809,25 @@ class ClimaSmartController:
         )
         return begin <= now < begin + timedelta(minutes=MORNING_OFF_WINDOW_MINUTES)
 
+    def _sleep_start_due(self, now: datetime) -> bool:
+        """Whether the one-shot evening start still has to happen tonight.
+
+        Same shape as the morning switch-off: bounded and marked once done, so a
+        climate the user turns off at one in the morning is not switched back on at
+        the next pass.
+        """
+        if not self._cfg(CONF_AUTO_START_SLEEP, DEFAULT_AUTO_START_SLEEP):
+            return False
+        if self._sleep_start_done_on == now.date():
+            return False
+        start = _parse_time(
+            self._cfg(CONF_SLEEP_START, DEFAULT_SLEEP_START), DEFAULT_SLEEP_START
+        )
+        begin = now.replace(
+            hour=start.hour, minute=start.minute, second=0, microsecond=0
+        )
+        return begin <= now < begin + timedelta(minutes=SLEEP_START_WINDOW_MINUTES)
+
     def _read_humidity(self) -> float | None:
         """Indoor relative humidity, if a sensor was configured (MODE_SMART only)."""
         ent = self._cfg(CONF_HUMIDITY)
@@ -1052,6 +1078,20 @@ class ClimaSmartController:
             # MODE_SMART never starts the unit: the user decides when it runs, we
             # decide how it runs, and the only switch-off we do is the scheduled one.
             if cur_mode == HVAC_OFF:
+                # L'unica eccezione alla regola "non accendo mai": l'avvio della
+                # notte, se l'utente l'ha chiesto, e una volta sola.
+                if phase == PHASE_SLEEP and self._sleep_start_due(now):
+                    self._sleep_start_armed = True
+                    self.active_target = self._reachable_target(target, climate)
+                    return Desired(
+                        hvac=HVAC_COOL,
+                        setpoint=target,
+                        fan=_fan_band(
+                            (room - target) if room is not None else 0.0,
+                            FAN_BANDS_SLEEP,
+                        ),
+                        reason=f"smart {phase}: avvio della notte, target {target}",
+                    )
                 self.active_target = None
                 return Desired(reason=f"smart {phase}: clima spento, non lo accendo io")
 
@@ -1135,12 +1175,24 @@ class ClimaSmartController:
             now = dt_util.now()
             try:
                 self._morning_off_armed = False
+                self._sleep_start_armed = False
                 desired = self._compute(now)
                 self._apply_errors.clear()
                 await self._apply(desired)
                 if self._morning_off_armed and not self._apply_errors:
                     # The switch-off went through: no second attempt today.
                     self._morning_off_done_on = now.date()
+                if self._sleep_start_armed and not self._apply_errors:
+                    self._sleep_start_done_on = now.date()
+                    # Chi vuole annunciarlo (per esempio a voce) ascolta questo.
+                    self.hass.bus.async_fire(
+                        EVENT_STARTED,
+                        {
+                            "entity_id": self.climate_entity,
+                            "target": self.active_target,
+                            "phase": self.current_phase,
+                        },
+                    )
             except Exception as err:  # noqa: BLE001 - one bad pass must not wedge the loop silently
                 _LOGGER.exception(
                     "Clima Smart: errore durante la valutazione (%s)", trigger
@@ -1227,9 +1279,10 @@ class ClimaSmartController:
                 self._last_hvac_cmd = prev
                 self._settle_hvac_until = None
                 self._settle_mode_change_until = None
-                # A morning switch-off that did not go through must not be recorded
-                # as done, or it is never attempted again today.
+                # Un comando che non e' andato a buon fine non va registrato come
+                # fatto, altrimenti oggi non lo si ritenta piu'.
                 self._morning_off_armed = False
+                self._sleep_start_armed = False
                 return
             # Treat the unit as already in the target mode for the rest of this pass.
             cur_mode = desired.hvac

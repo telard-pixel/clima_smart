@@ -117,9 +117,20 @@ class States:
         return self.values.get(entity_id)
 
 
+class Bus:
+    """Registra gli eventi lanciati, per poterli verificare."""
+
+    def __init__(self):
+        self.eventi = []
+
+    def async_fire(self, tipo, dati=None):
+        self.eventi.append((tipo, dati or {}))
+
+
 class Hass:
     def __init__(self, states=None):
         self.states = States(states or {})
+        self.bus = Bus()
         self.config = types.SimpleNamespace(
             units=types.SimpleNamespace(temperature_unit="°C")
         )
@@ -822,6 +833,65 @@ class ControllerRegressionTests(unittest.TestCase):
             self.assertEqual(
                 ctrl._compute(GIORNO).hvac, atteso, f"stanza {temperatura}"
             )
+
+    # ------------------------------------------------- avvio serale una tantum
+    def _pronto_per_avvio(self):
+        ctrl = self._smart_controller(room=27.0)
+        self._profilo_notte(ctrl)
+        ctrl.entry.options = dict(
+            ctrl.entry.options, auto_start_sleep=True, sleep_start="22:00:00"
+        )
+        ctrl.hass.states.values["climate.test"].state = "off"
+        ctrl._restore_event.set()
+        return ctrl
+
+    def test_evening_start_turns_the_unit_on_once(self):
+        ctrl = self._pronto_per_avvio()
+        inviati = []
+
+        async def riesce(domain, service, data=None):
+            inviati.append(service)
+            return True
+
+        ctrl._call = riesce
+        self._orologio(GIORNO.replace(hour=22, minute=1))
+        asyncio.run(ctrl.async_evaluate("prova"))
+        self.assertIn("set_hvac_mode", inviati)
+        self.assertEqual(ctrl._sleep_start_done_on, GIORNO.date())
+        # E ha annunciato l'avvio a chi ascolta.
+        tipi = [t for t, _ in ctrl.hass.bus.eventi]
+        self.assertIn(controller_module.EVENT_STARTED, tipi)
+
+        # Spento dall'utente piu' tardi: non lo riaccende.
+        inviati.clear()
+        self._orologio(GIORNO.replace(hour=23, minute=30))
+        asyncio.run(ctrl.async_evaluate("prova"))
+        self.assertEqual(inviati, [])
+
+    def test_evening_start_is_off_unless_asked_for(self):
+        ctrl = self._pronto_per_avvio()
+        ctrl.entry.options = dict(ctrl.entry.options, auto_start_sleep=False)
+        self._orologio(GIORNO.replace(hour=22, minute=1))
+        desired = ctrl._compute(GIORNO.replace(hour=22, minute=1))
+        self.assertIsNone(desired.hvac)
+        self.assertIn("non lo accendo", desired.reason)
+
+    def test_evening_start_not_attempted_late(self):
+        ctrl = self._pronto_per_avvio()
+        desired = ctrl._compute(GIORNO.replace(hour=23, minute=0))
+        self.assertIsNone(desired.hvac)
+
+    def test_evening_start_retries_when_the_command_fails(self):
+        ctrl = self._pronto_per_avvio()
+
+        async def fallisce(domain, service, data=None):
+            return False
+
+        ctrl._call = fallisce
+        self._orologio(GIORNO.replace(hour=22, minute=1))
+        asyncio.run(ctrl.async_evaluate("prova"))
+        self.assertIsNone(ctrl._sleep_start_done_on)
+        self.assertEqual(ctrl.hass.bus.eventi, [])
 
     # ------------------------------- l'unita' che rifiuta uno switch ausiliario
     def _con_eco(self):
