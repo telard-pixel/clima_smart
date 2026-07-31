@@ -84,7 +84,11 @@ I parametri di tuning si regolano poi dalle entità `number`/`select`, oppure da
 ## Note
 
 - Testata su Home Assistant 2026.7.2.
-- Stato attuale: `0.10.0` — avvio serale facoltativo: all'apertura della notte
+- Stato attuale: `0.11.0` — **avvio diurno**: se di giorno il clima è spento e la
+  stanza supera una soglia, viene acceso una volta al giorno. È l'avvio vero, e
+  l'evento `clima_smart_avviato` porta `motivo: giorno`, distinto dal `motivo:
+  notte` dell'apertura della notte fonda, che è solo l'orario che comincia.
+- `0.10.0` — avvio serale facoltativo: all'apertura della notte
   fonda, se il clima è spento, lo accende **una volta sola** e lancia l'evento
   `clima_smart_avviato`, così un'automazione può annunciarlo a voce. Fuori da quel
   momento vale sempre la regola: il controller non accende mai da sé.

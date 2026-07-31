@@ -43,6 +43,11 @@ CONF_SETPOINT_OFFSET = "setpoint_offset"
 # of the sleep window, it may: one attempt per night, so that switching the climate
 # off later in the night is not undone at the next pass.
 CONF_AUTO_START_SLEEP = "auto_start_sleep"
+# Daytime start: the room temperature at which the controller switches the unit on
+# by itself, once a day. Zero disables it. This is a real start - the room has got
+# hot and someone has to close the windows - while the evening one is just the
+# night schedule beginning.
+CONF_AUTO_START_ROOM = "auto_start_room"
 
 # --- Defaults (validated values from the original automation) ---
 DEFAULT_TARGET_HOME = 26.0
@@ -60,6 +65,7 @@ DEFAULT_SLEEP_START = "23:30:00"
 DEFAULT_SLEEP_END = "07:30:00"
 DEFAULT_SETPOINT_OFFSET = 0.0
 DEFAULT_AUTO_START_SLEEP = False
+DEFAULT_AUTO_START_ROOM = 0.0
 DEFAULT_PRESENCE_HOME_STATE = "home"
 
 # While the unit is already cooling, the season threshold drops by this much, so a
@@ -148,8 +154,11 @@ MORNING_OFF_WINDOW_MINUTES = 30
 SLEEP_START_WINDOW_MINUTES = 30
 
 # Fired when the controller starts the unit by itself, so an automation can
-# announce it. Data: entity_id, target, phase.
+# announce it. Data: entity_id, target, phase, and `motivo`, which tells the two
+# apart: "giorno" is the room getting hot, "notte" is the schedule beginning.
 EVENT_STARTED = "clima_smart_avviato"
+START_REASON_DAY = "giorno"
+START_REASON_NIGHT = "notte"
 
 # Measured twice on this unit: an aux switch we just turned on comes back to its
 # previous value about 60-70 s later, with no user context, when the unit does not

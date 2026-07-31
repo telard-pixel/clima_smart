@@ -27,6 +27,7 @@ from homeassistant.util.unit_conversion import TemperatureConverter
 
 from .const import (
     COMMAND_SETTLE_SECONDS,
+    CONF_AUTO_START_ROOM,
     CONF_AUTO_START_SLEEP,
     CONF_CLIMATE,
     CONF_DAY_START,
@@ -51,6 +52,7 @@ from .const import (
     CONF_TARGET_AWAY,
     CONF_TARGET_HOME,
     CONF_TARGET_SLEEP,
+    DEFAULT_AUTO_START_ROOM,
     DEFAULT_AUTO_START_SLEEP,
     DEFAULT_DAY_START,
     DEFAULT_ECO_BAND,
@@ -99,6 +101,8 @@ from .const import (
     RESTORE_TIMEOUT_SECONDS,
     SERVICE_CALL_TIMEOUT_SECONDS,
     SLEEP_START_WINDOW_MINUTES,
+    START_REASON_DAY,
+    START_REASON_NIGHT,
     SUMMER_HYSTERESIS,
     UPDATE_INTERVAL_SECONDS,
 )
@@ -267,6 +271,8 @@ class ClimaSmartController:
         # Stessa coppia per l'avvio serale.
         self._sleep_start_done_on = None
         self._sleep_start_armed = False
+        self._day_start_done_on = None
+        self._start_reason: str | None = None
 
         # Diagnostics (read by sensors)
         self.current_phase: str | None = None
@@ -1082,6 +1088,7 @@ class ClimaSmartController:
                 # notte, se l'utente l'ha chiesto, e una volta sola.
                 if phase == PHASE_SLEEP and self._sleep_start_due(now):
                     self._sleep_start_armed = True
+                    self._start_reason = START_REASON_NIGHT
                     self.active_target = self._reachable_target(target, climate)
                     return Desired(
                         hvac=HVAC_COOL,
@@ -1091,6 +1098,27 @@ class ClimaSmartController:
                             FAN_BANDS_SLEEP,
                         ),
                         reason=f"smart {phase}: avvio della notte, target {target}",
+                    )
+                soglia = float(
+                    self._cfg(CONF_AUTO_START_ROOM, DEFAULT_AUTO_START_ROOM) or 0.0
+                )
+                if (
+                    phase == PHASE_DAY
+                    and soglia > 0
+                    and room is not None
+                    and room >= soglia
+                    and self._day_start_done_on != now.date()
+                ):
+                    self._sleep_start_armed = True
+                    self._start_reason = START_REASON_DAY
+                    self.active_target = self._reachable_target(target, climate)
+                    return Desired(
+                        hvac=HVAC_COOL,
+                        setpoint=target,
+                        fan=_fan_band(room - target, FAN_BANDS),
+                        reason=(
+                            f"smart {phase}: avvio, stanza {room:.1f} oltre {soglia:.1f}"
+                        ),
                     )
                 self.active_target = None
                 return Desired(reason=f"smart {phase}: clima spento, non lo accendo io")
@@ -1183,7 +1211,10 @@ class ClimaSmartController:
                     # The switch-off went through: no second attempt today.
                     self._morning_off_done_on = now.date()
                 if self._sleep_start_armed and not self._apply_errors:
-                    self._sleep_start_done_on = now.date()
+                    if self._start_reason == START_REASON_DAY:
+                        self._day_start_done_on = now.date()
+                    else:
+                        self._sleep_start_done_on = now.date()
                     # Chi vuole annunciarlo (per esempio a voce) ascolta questo.
                     self.hass.bus.async_fire(
                         EVENT_STARTED,
@@ -1191,6 +1222,7 @@ class ClimaSmartController:
                             "entity_id": self.climate_entity,
                             "target": self.active_target,
                             "phase": self.current_phase,
+                            "motivo": self._start_reason,
                         },
                     )
             except Exception as err:  # noqa: BLE001 - one bad pass must not wedge the loop silently

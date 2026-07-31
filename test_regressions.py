@@ -868,6 +868,62 @@ class ControllerRegressionTests(unittest.TestCase):
         asyncio.run(ctrl.async_evaluate("prova"))
         self.assertEqual(inviati, [])
 
+    def test_daytime_start_when_the_room_gets_hot(self):
+        """L'avvio vero: la stanza si e' scaldata e qualcuno deve chiudere le
+        finestre. L'evento porta il motivo, cosi' l'annuncio distingue."""
+        ctrl = self._smart_controller(room=28.5)
+        self._profilo_notte(ctrl)
+        ctrl.entry.options = dict(ctrl.entry.options, auto_start_room=28.0)
+        ctrl.hass.states.values["climate.test"].state = "off"
+        ctrl._restore_event.set()
+        inviati = []
+
+        async def riesce(domain, service, data=None):
+            inviati.append(service)
+            return True
+
+        ctrl._call = riesce
+        self._orologio(GIORNO.replace(hour=12, minute=0))
+        asyncio.run(ctrl.async_evaluate("prova"))
+        self.assertIn("set_hvac_mode", inviati)
+        tipo, dati = ctrl.hass.bus.eventi[-1]
+        self.assertEqual(tipo, controller_module.EVENT_STARTED)
+        self.assertEqual(dati["motivo"], controller_module.START_REASON_DAY)
+
+        # Spento a mano piu' tardi: non lo riaccende oggi.
+        inviati.clear()
+        ctrl.hass.states.values["climate.test"].state = "off"
+        self._orologio(GIORNO.replace(hour=15, minute=0))
+        asyncio.run(ctrl.async_evaluate("prova"))
+        self.assertEqual(inviati, [])
+
+    def test_no_daytime_start_below_the_threshold(self):
+        ctrl = self._smart_controller(room=27.0)
+        self._profilo_notte(ctrl)
+        ctrl.entry.options = dict(ctrl.entry.options, auto_start_room=28.0)
+        ctrl.hass.states.values["climate.test"].state = "off"
+        desired = ctrl._compute(GIORNO.replace(hour=12, minute=0))
+        self.assertIsNone(desired.hvac)
+
+    def test_daytime_start_disabled_by_default(self):
+        ctrl = self._smart_controller(room=31.0)
+        self._profilo_notte(ctrl)
+        ctrl.hass.states.values["climate.test"].state = "off"
+        desired = ctrl._compute(GIORNO.replace(hour=12, minute=0))
+        self.assertIsNone(desired.hvac)
+
+    def test_night_start_carries_its_own_reason(self):
+        ctrl = self._pronto_per_avvio()
+
+        async def riesce(domain, service, data=None):
+            return True
+
+        ctrl._call = riesce
+        self._orologio(GIORNO.replace(hour=22, minute=1))
+        asyncio.run(ctrl.async_evaluate("prova"))
+        tipo, dati = ctrl.hass.bus.eventi[-1]
+        self.assertEqual(dati["motivo"], controller_module.START_REASON_NIGHT)
+
     def test_evening_start_is_off_unless_asked_for(self):
         ctrl = self._pronto_per_avvio()
         ctrl.entry.options = dict(ctrl.entry.options, auto_start_sleep=False)

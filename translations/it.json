@@ -59,10 +59,12 @@
           "setpoint_offset": "Correzione setpoint (°C)",
           "sleep_start": "Inizio notte fonda",
           "sleep_end": "Fine notte fonda",
-          "auto_start_sleep": "Avvia il clima all'inizio della notte fonda"
+          "auto_start_sleep": "Avvia il clima all'inizio della notte fonda",
+          "auto_start_room": "Accendi da solo quando la stanza supera (°C)"
         },
         "data_description": {
-          "auto_start_sleep": "Se il clima è spento all'orario di inizio, lo accende una volta sola. Fuori da quel momento il controller non accende mai da sé."
+          "auto_start_sleep": "Se il clima è spento all'orario di inizio, lo accende una volta sola. Fuori da quel momento il controller non accende mai da sé.",
+          "auto_start_room": "Avvio diurno: se il clima è spento e la stanza supera questa temperatura, viene acceso una volta al giorno. 0 disattiva."
         }
       }
     },
