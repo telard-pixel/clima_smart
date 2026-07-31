@@ -139,6 +139,13 @@ FAN_BANDS_SLEEP: tuple[tuple[float, str], ...] = ((0.3, "medium"), (0.0, "low"))
 # morning cannot switch off a unit the user has just turned back on.
 MORNING_OFF_WINDOW_MINUTES = 30
 
+# Measured twice on this unit: an aux switch we just turned on comes back to its
+# previous value about 60-70 s later, with no user context, when the unit does not
+# accept it (mute, then eco, both while a fan step was forced). After such a
+# refusal the switch is left alone for this long instead of being re-commanded at
+# every pass.
+AUX_REFUSAL_BACKOFF_SECONDS = 1800
+
 # HVAC constants we rely on (kept as literals to avoid importing climate internals).
 HVAC_COOL = "cool"
 HVAC_HEAT = "heat"

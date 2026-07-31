@@ -78,6 +78,7 @@ from .const import (
     HVAC_DRY,
     HVAC_HEAT,
     HVAC_OFF,
+    AUX_REFUSAL_BACKOFF_SECONDS,
     MIN_FAN_DWELL_SECONDS,
     MODE_AUTO,
     MODE_AWAY,
@@ -243,6 +244,8 @@ class ClimaSmartController:
         self._last_hvac_cmd: str | None = None
         self._last_fan_cmd: str | None = None
         self._last_aux_cmd: dict[str, bool] = {}
+        # Quando l'unita' ha rifiutato un nostro comando su uno switch ausiliario.
+        self._aux_refused_at: dict[str, datetime] = {}
         # Fail safe to the last trustworthy presence value. At startup, an
         # unavailable tracker is treated as home instead of silently switching to
         # the away target.
@@ -597,11 +600,23 @@ class ClimaSmartController:
             return
         settle_until = self._settle_aux_until.get(conf_key)
         want = new_state.state == "on"
-        if (
-            settle_until is not None
-            and now < settle_until
-            and self._last_aux_cmd.get(conf_key) == want
-        ):
+        if settle_until is not None and now < settle_until:
+            if self._last_aux_cmd.get(conf_key) == want:
+                return
+            # The opposite of what we just asked, right after asking it: the unit
+            # refused the command. Measured twice, about 60-70 s later and always
+            # without user context. Reading it as a manual action cost an hour of
+            # control each time; re-sending it at the next pass would just repeat
+            # the whole dance, so the switch is left alone for a while.
+            self._aux_refused_at[conf_key] = now
+            self.last_reason = f"{conf_key}: comando rifiutato dall'unita'"
+            _LOGGER.info(
+                "Clima Smart: %s ha rifiutato il comando (%s), non insisto per %d minuti",
+                conf_key,
+                "on" if self._last_aux_cmd.get(conf_key) else "off",
+                AUX_REFUSAL_BACKOFF_SECONDS // 60,
+            )
+            self._notify_entities()
             return
 
         self._start_override(f"comando manuale su {conf_key}")
@@ -1317,6 +1332,13 @@ class ClimaSmartController:
         if want == is_on:
             return False
         now = dt_util.now()
+        refused_at = self._aux_refused_at.get(conf_key)
+        if (
+            refused_at is not None
+            and (now - refused_at).total_seconds() < AUX_REFUSAL_BACKOFF_SECONDS
+        ):
+            self._apply_errors.append(f"{conf_key}: rifiutato dall'unita', riprovo dopo")
+            return False
         settle_until = self._settle_aux_until.get(conf_key)
         settle_active = settle_until is not None and now < settle_until
         if settle_active and self._last_aux_cmd.get(conf_key) == want:

@@ -823,6 +823,81 @@ class ControllerRegressionTests(unittest.TestCase):
                 ctrl._compute(GIORNO).hvac, atteso, f"stanza {temperatura}"
             )
 
+    # ------------------------------- l'unita' che rifiuta uno switch ausiliario
+    def _con_eco(self):
+        data = {"climate_entity": "climate.test", "eco_switch": "switch.eco"}
+        ctrl = make_controller(
+            {
+                "climate.test": State("cool", {"temperature": 22.0, "fan_mode": "low"}),
+                "switch.eco": State("off"),
+            },
+            data,
+        )
+        return ctrl
+
+    def test_unit_refusing_an_aux_switch_is_not_a_manual_command(self):
+        """Misurato due volte: acceso il muto alle 22:03:41 l'unita' rimette `auto`
+        66 s dopo; acceso l'eco alle 02:09:45 lo spegne 68 s dopo. Senza contesto
+        utente, e ogni volta costava un'ora di controllo ceduta."""
+        ctrl = self._con_eco()
+        ctrl._last_aux_cmd["eco_switch"] = True
+        ctrl._settle_aux_until["eco_switch"] = NOW + timedelta(seconds=120)
+        ctrl._maybe_flag_manual_switch(
+            "eco_switch", Event(State("on"), State("off"))
+        )
+        self.assertFalse(ctrl.override_active)
+        self.assertIn("eco_switch", ctrl._aux_refused_at)
+        self.assertIn("rifiutato", ctrl.last_reason)
+
+    def test_a_refused_switch_is_not_commanded_again_right_away(self):
+        ctrl = self._con_eco()
+        ctrl._aux_refused_at["eco_switch"] = NOW
+        inviati = []
+
+        async def record(domain, service, entity_id, data=None):
+            inviati.append((service, entity_id))
+            return True
+
+        ctrl._call_target = record
+        acceso = asyncio.run(ctrl._apply_switch("eco_switch", True))
+        self.assertFalse(acceso)
+        self.assertEqual(inviati, [])
+        self.assertTrue(any("rifiutato" in e for e in ctrl._apply_errors))
+
+    def test_a_refused_switch_is_tried_again_after_the_backoff(self):
+        ctrl = self._con_eco()
+        ctrl._aux_refused_at["eco_switch"] = NOW - timedelta(
+            seconds=controller_module.AUX_REFUSAL_BACKOFF_SECONDS + 1
+        )
+        inviati = []
+
+        async def record(domain, service, entity_id, data=None):
+            inviati.append((service, entity_id))
+            return True
+
+        ctrl._call_target = record
+        self.assertTrue(asyncio.run(ctrl._apply_switch("eco_switch", True)))
+        self.assertEqual(inviati, [("turn_on", "switch.eco")])
+
+    def test_a_real_hand_on_an_aux_switch_still_wins(self):
+        ctrl = self._con_eco()
+        ctrl._last_aux_cmd["eco_switch"] = True
+        ctrl._settle_aux_until["eco_switch"] = NOW + timedelta(seconds=120)
+        ctrl._maybe_flag_manual_switch(
+            "eco_switch", Event(State("on"), State("off", user_id="utente"))
+        )
+        self.assertTrue(ctrl.override_active)
+
+    def test_an_aux_change_outside_the_window_is_still_manual(self):
+        ctrl = self._con_eco()
+        ctrl._last_aux_cmd["eco_switch"] = True
+        ctrl._settle_aux_until["eco_switch"] = NOW - timedelta(seconds=1)
+        ctrl._maybe_flag_manual_switch(
+            "eco_switch", Event(State("on"), State("off"))
+        )
+        self.assertTrue(ctrl.override_active)
+        self.assertNotIn("eco_switch", ctrl._aux_refused_at)
+
     def test_event_burst_collapses_into_one_evaluation(self):
         ctrl = make_controller()
         ctrl._queue_evaluate("evento")

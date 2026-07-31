@@ -81,7 +81,11 @@ I parametri di tuning si regolano poi dalle entità `number`/`select`, oppure da
 ## Note
 
 - Testata su Home Assistant 2026.7.2.
-- Stato attuale: `0.9.0` — giro di correzioni dopo una revisione a due voci: lo
+- Stato attuale: `0.9.1` — quando l'unità rifiuta un comando su uno switch
+  ausiliario (rimettendolo com'era una sessantina di secondi dopo, senza contesto
+  utente) non viene più scambiato per un intervento manuale, e quello switch resta
+  in pace per mezz'ora invece di essere ricomandato a ogni passata.
+- `0.9.0` — giro di correzioni dopo una revisione a due voci: lo
   spegnimento del mattino non tocca più un riscaldamento acceso e viene segnato
   solo se il comando riesce; la ventola sale al gradino intermedio invece di
   restare bassa; la barriera di ripristino non blocca più il controller se
