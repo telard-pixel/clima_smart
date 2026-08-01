@@ -56,6 +56,8 @@ from .const import (
     CONF_TARGET_AWAY,
     CONF_TARGET_HOME,
     CONF_TARGET_SLEEP,
+    CONF_VANE_DAY_H,
+    CONF_VANE_DAY_V,
     CONF_VANE_H,
     CONF_VANE_SLEEP,
     CONF_VANE_V,
@@ -78,6 +80,7 @@ from .const import (
     DEFAULT_TARGET_AWAY,
     DEFAULT_TARGET_HOME,
     DEFAULT_TARGET_SLEEP,
+    DEFAULT_VANE_DAY,
     DEFAULT_VANE_SLEEP,
     DOMAIN,
     DRY_DELTA_HYSTERESIS,
@@ -217,7 +220,8 @@ class Desired:
     eco: bool | None = None          # True=on, False=off, None=leave
     mute: bool | None = None
     night: bool | None = None
-    vane: str | None = None          # position asked of both air-direction selects
+    vane_h: str | None = None        # posizione chiesta all'aletta orizzontale
+    vane_v: str | None = None        # e a quella verticale
     reason: str = ""
 
 
@@ -282,6 +286,7 @@ class ClimaSmartController:
         self._sleep_start_done_on = None
         self._sleep_start_armed = False
         self._day_start_done_on = None
+        self._vane_restored_on = None
         self._start_reason: str | None = None
 
         # Diagnostics (read by sensors)
@@ -896,6 +901,10 @@ class ClimaSmartController:
                 return f"casa {casa:.1f} oltre {soglia_casa:.1f}"
         return None
 
+    def _vane_day_due(self, now: datetime) -> bool:
+        """Whether the vanes still have to be put back for the day."""
+        return self._vane_restored_on != now.date()
+
     def _sleep_start_due(self, now: datetime) -> bool:
         """Whether the one-shot evening start still has to happen tonight.
 
@@ -1219,11 +1228,16 @@ class ClimaSmartController:
                     climate.attributes.get("fan_modes"),
                     FAN_BANDS_SLEEP if phase == PHASE_SLEEP else FAN_BANDS,
                 )
-            alette = (
-                self._cfg(CONF_VANE_SLEEP, DEFAULT_VANE_SLEEP)
-                if phase == PHASE_SLEEP
-                else None
-            )
+            if phase == PHASE_SLEEP:
+                alette_h = alette_v = self._cfg(CONF_VANE_SLEEP, DEFAULT_VANE_SLEEP)
+            elif phase == PHASE_WIND_DOWN and self._vane_day_due(now):
+                # Fine della notte: le alette tornano ferme, una volta sola.
+                self._vane_restored_on = now.date()
+                alette_h = self._cfg(CONF_VANE_DAY_H, DEFAULT_VANE_DAY) or None
+                alette_v = self._cfg(CONF_VANE_DAY_V, DEFAULT_VANE_DAY) or None
+            else:
+                alette_h = alette_v = None
+            alette = alette_h
             detail = f"{program}, ventola {fan or 'invariata'}"
             if alette:
                 detail += f", alette {alette}"
@@ -1238,7 +1252,8 @@ class ClimaSmartController:
                 eco=self._eco_decision(room, target, outdoor),
                 mute=is_night,
                 night=is_night,
-                vane=alette,
+                vane_h=alette_h,
+                vane_v=alette_v,
                 reason=f"smart {phase}: target {target}, {detail}",
             )
 
@@ -1472,8 +1487,8 @@ class ClimaSmartController:
         await self._apply_switch(CONF_MUTE_SWITCH, desired.mute)
         await self._apply_switch(CONF_NIGHT_SWITCH, desired.night)
         # Alette: chieste solo dentro la notte fonda, fuori restano dove sono.
-        await self._apply_select(CONF_VANE_H, desired.vane)
-        await self._apply_select(CONF_VANE_V, desired.vane)
+        await self._apply_select(CONF_VANE_H, desired.vane_h)
+        await self._apply_select(CONF_VANE_V, desired.vane_v)
 
     def _quiet_mode_on(self, desired: Desired) -> bool:
         """Whether the unit is in (or is being put into) quiet mode this pass.

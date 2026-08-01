@@ -85,7 +85,10 @@ I parametri di tuning si regolano poi dalle entità `number`/`select`, oppure da
 ## Note
 
 - Testata su Home Assistant 2026.7.2.
-- Stato attuale: `0.15.0` — nuovo sensore diagnostico **Media di casa**: mostra la
+- Stato attuale: `0.16.0` — le alette tornano **ferme di giorno**: la posizione
+  diurna viene ripristinata una volta sola alla fine della notte fonda, così lo
+  `swing` resta confinato alla notte invece di proseguire tutto il giorno.
+- `0.15.0` — nuovo sensore diagnostico **Media di casa**: mostra la
   media dei termometri delle altre stanze così come la legge la regola di avvio
   diurno, con negli attributi i sensori usati, la soglia e se è superata.
 - `0.14.0` — nella notte fonda vengono messe in posizione anche le

@@ -75,14 +75,18 @@
           "auto_start_room": "Start by itself when the room goes above (°C)",
           "auto_start_house": "...or when the other rooms average goes above (°C)",
           "auto_start_outdoor": "Only if it is at least this warm outside (°C)",
-          "vane_sleep_position": "Vane position during the deep night"
+          "vane_sleep_position": "Vane position during the deep night",
+          "vane_day_horizontal": "Horizontal vane during the day",
+          "vane_day_vertical": "Vertical vane during the day"
         },
         "data_description": {
           "auto_start_sleep": "If the unit is off at that time, it is switched on once. Outside that moment the controller never starts it by itself.",
           "auto_start_room": "Daytime start: if the unit is off and the room goes above this, it is switched on once a day. 0 disables it.",
           "auto_start_house": "Second condition for the daytime start, independent of the room threshold. 0 disables it.",
           "auto_start_outdoor": "No daytime start below this outdoor temperature. 0 removes the guard.",
-          "vane_sleep_position": "Usually `swing`: keeps the air moving instead of pointing it at the bed. Outside the deep night the vanes are left alone."
+          "vane_sleep_position": "Usually `swing`: keeps the air moving instead of pointing it at the bed. Outside the deep night the vanes are left alone.",
+          "vane_day_horizontal": "Position restored when the deep night ends, once. Empty: the vanes are left where they are.",
+          "vane_day_vertical": "Position restored when the deep night ends, once. Empty: the vanes are left where they are."
         }
       }
     },

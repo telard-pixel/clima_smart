@@ -1026,7 +1026,8 @@ class ControllerRegressionTests(unittest.TestCase):
         ctrl = self._con_alette()
         desired = ctrl._compute(GIORNO.replace(hour=23, minute=30))
         self.assertEqual(ctrl.current_phase, "sleep")
-        self.assertEqual(desired.vane, "swing")
+        self.assertEqual(desired.vane_h, "swing")
+        self.assertEqual(desired.vane_v, "swing")
         inviati = []
 
         async def record(domain, service, entity_id, data=None):
@@ -1040,8 +1041,8 @@ class ControllerRegressionTests(unittest.TestCase):
 
     def test_vanes_are_left_alone_outside_the_deep_night(self):
         ctrl = self._con_alette()
-        self.assertIsNone(ctrl._compute(GIORNO.replace(hour=12)).vane)
-        self.assertIsNone(ctrl._compute(GIORNO.replace(hour=22, minute=0)).vane)
+        self.assertIsNone(ctrl._compute(GIORNO.replace(hour=12)).vane_h)
+        self.assertIsNone(ctrl._compute(GIORNO.replace(hour=22, minute=0)).vane_h)
 
     def test_vane_already_in_position_is_not_commanded(self):
         ctrl = self._con_alette(posizioni=("swing", "position_3", "swing"))
@@ -1067,6 +1068,29 @@ class ControllerRegressionTests(unittest.TestCase):
         self.assertTrue(
             any("non prevista" in e for e in ctrl._apply_errors), ctrl._apply_errors
         )
+
+    def test_vanes_go_back_to_the_day_position_once(self):
+        """Fine della notte fonda: tornano ferme, e una volta sola - se poi le
+        sposti a mano non te le rimette al passaggio dopo."""
+        ctrl = self._con_alette(posizioni=("swing", "position_0", "position_5"))
+        ctrl.entry.options = dict(
+            ctrl.entry.options,
+            vane_day_horizontal="position_0",
+            vane_day_vertical="position_5",
+        )
+        mattina = GIORNO.replace(hour=8, minute=0)
+        desired = ctrl._compute(mattina)
+        self.assertEqual(ctrl.current_phase, "wind_down")
+        self.assertEqual(desired.vane_h, "position_0")
+        self.assertEqual(desired.vane_v, "position_5")
+        # Seconda passata nella stessa fascia: non le tocca piu'.
+        self.assertIsNone(ctrl._compute(mattina + timedelta(minutes=10)).vane_h)
+
+    def test_no_day_position_configured_leaves_the_vanes_alone(self):
+        ctrl = self._con_alette(posizioni=("swing", "position_0", "position_5"))
+        desired = ctrl._compute(GIORNO.replace(hour=8, minute=0))
+        self.assertIsNone(desired.vane_h)
+        self.assertIsNone(desired.vane_v)
 
     def test_a_hand_on_the_vanes_still_counts_as_manual(self):
         ctrl = self._con_alette()

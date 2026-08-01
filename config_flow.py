@@ -48,6 +48,8 @@ from .const import (
     CONF_TARGET_AWAY,
     CONF_TARGET_HOME,
     CONF_TARGET_SLEEP,
+    CONF_VANE_DAY_H,
+    CONF_VANE_DAY_V,
     CONF_VANE_H,
     CONF_VANE_SLEEP,
     CONF_VANE_V,
@@ -70,6 +72,7 @@ from .const import (
     DEFAULT_TARGET_AWAY,
     DEFAULT_TARGET_HOME,
     DEFAULT_TARGET_SLEEP,
+    DEFAULT_VANE_DAY,
     DEFAULT_VANE_SLEEP,
     DOMAIN,
 )
@@ -275,6 +278,14 @@ class ClimaSmartOptionsFlow(OptionsFlow):
                 ): vol.All(vol.Coerce(float), vol.Range(min=-3, max=3)),
                 vol.Required(
                     CONF_VANE_SLEEP, default=_num(CONF_VANE_SLEEP, DEFAULT_VANE_SLEEP)
+                ): str,
+                vol.Optional(
+                    CONF_VANE_DAY_H,
+                    description={"suggested_value": _num(CONF_VANE_DAY_H, DEFAULT_VANE_DAY)},
+                ): str,
+                vol.Optional(
+                    CONF_VANE_DAY_V,
+                    description={"suggested_value": _num(CONF_VANE_DAY_V, DEFAULT_VANE_DAY)},
                 ): str,
                 vol.Required(
                     CONF_AUTO_START_ROOM,

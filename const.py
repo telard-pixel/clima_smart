@@ -48,6 +48,11 @@ CONF_SETPOINT_OFFSET = "setpoint_offset"
 # moving instead of pointing it at the bed, and is offered by both selects on this
 # unit; any other value the selects accept works too.
 CONF_VANE_SLEEP = "vane_sleep_position"
+# Positions restored when the sleep window ends: during the day the vanes stay
+# still. Applied once, at the wind-down transition, so moving them by hand later
+# is not undone at the next pass.
+CONF_VANE_DAY_H = "vane_day_horizontal"
+CONF_VANE_DAY_V = "vane_day_vertical"
 # MODE_SMART normally never starts the unit. With this on, and only at the opening
 # of the sleep window, it may: one attempt per night, so that switching the climate
 # off later in the night is not undone at the next pass.
@@ -83,6 +88,7 @@ DEFAULT_SLEEP_START = "23:30:00"
 DEFAULT_SLEEP_END = "07:30:00"
 DEFAULT_SETPOINT_OFFSET = 0.0
 DEFAULT_VANE_SLEEP = "swing"
+DEFAULT_VANE_DAY = ""
 DEFAULT_AUTO_START_SLEEP = False
 DEFAULT_AUTO_START_ROOM = 0.0
 DEFAULT_AUTO_START_HOUSE = 0.0
