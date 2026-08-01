@@ -31,8 +31,9 @@ governata dal profilo.
 ### Il profilo notturno (modo Adattivo)
 
 - **notte fonda** (`sleep_start` → `sleep_end`, di norma `23:00` → `07:30`): target
-  proprio, più basso, e ventola a due soli passi — `medium` finché la stanza non
-  arriva, poi `low` per mantenere. Mai `high`.
+  proprio, più basso, e ventola a due soli passi — `medium` fino al target e anche
+  un po' sotto, `low` solo quando la stanza è chiaramente più fredda del target.
+  Mai `high`.
 - **scarico mattutino** (dalla fine della notte fonda allo spegnimento): programma
   `dry` con ventola `auto`, per togliere l'afa senza raffreddare ancora.
 - **spegnimento del mattino** (`morning_off_start`, di norma `08:30`): avviene **una
@@ -84,7 +85,12 @@ I parametri di tuning si regolano poi dalle entità `number`/`select`, oppure da
 ## Note
 
 - Testata su Home Assistant 2026.7.2.
-- Stato attuale: `0.12.0` — l'avvio diurno guarda anche i **termometri delle
+- Stato attuale: `0.13.0` — nella notte fonda la ventola resta su `medium` fino al
+  target e scende a `low` solo se la stanza va sotto. Misurato su una notte
+  intera: rallentare la ventola a target raggiunto faceva scendere il compressore
+  da 41 a 30 Hz, la camera perdeva due gradi in mezz'ora e ci metteva tre ore e
+  mezza a rientrare. Su questa unità ventola e compressore sono legati.
+- `0.12.0` — l'avvio diurno guarda anche i **termometri delle
   altre stanze**: il resto della casa si scalda prima della camera, quindi la loro
   media fa partire l'unità prima del picco esterno. Due condizioni indipendenti
   (camera oppure media di casa), entrambe subordinate a una temperatura esterna

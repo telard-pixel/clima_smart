@@ -661,7 +661,10 @@ class ControllerRegressionTests(unittest.TestCase):
             night_start="22:00:00",
         )
 
-    def test_night_profile_fan_medium_until_target_then_low(self):
+    def test_night_profile_holds_medium_down_to_the_target(self):
+        """Misurato su una notte intera: scendere a `low` al target fa rallentare
+        il compressore da 41 a 30 Hz e la camera se ne va di due gradi. Quindi
+        `medium` fino al target, e `low` solo se la stanza va sotto."""
         ctrl = self._smart_controller(room=26.0)
         self._profilo_notte(ctrl)
         notte = GIORNO.replace(hour=23, minute=30)
@@ -669,9 +672,15 @@ class ControllerRegressionTests(unittest.TestCase):
         self.assertEqual(ctrl.current_phase, "sleep")
         self.assertEqual(desired.setpoint, 22.0)
         self.assertEqual(desired.fan, "medium")   # 4 gradi da scendere
-        # Arrivato al target passa a low, dopo l'attesa anti-ticchettio.
-        ctrl.hass.states.values["climate.test"].attributes["current_temperature"] = 22.0
         dopo = notte + timedelta(seconds=controller_module.MIN_FAN_DWELL_SECONDS + 1)
+        # Al target resta medium: e' il punto che stanotte ci e' costato due gradi.
+        ctrl.hass.states.values["climate.test"].attributes["current_temperature"] = 22.0
+        self.assertEqual(ctrl._compute(dopo).fan, "medium")
+        # Mezzo grado sotto: ancora medium, siamo dentro il margine.
+        ctrl.hass.states.values["climate.test"].attributes["current_temperature"] = 21.6
+        self.assertEqual(ctrl._compute(dopo).fan, "medium")
+        # Un grado sotto: adesso ha senso rallentare.
+        ctrl.hass.states.values["climate.test"].attributes["current_temperature"] = 21.0
         self.assertEqual(ctrl._compute(dopo).fan, "low")
 
     def test_night_profile_never_uses_high(self):

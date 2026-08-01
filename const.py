@@ -154,8 +154,12 @@ PHASE_SLEEP = "sleep"
 PHASE_WIND_DOWN = "wind_down"
 
 # --- MODE_SMART, sleep window: only two steps, and never `high` ---
-# Medium until the room reaches the night target, then low to hold it.
-FAN_BANDS_SLEEP: tuple[tuple[float, str], ...] = ((0.3, "medium"), (0.0, "low"))
+# `medium` all the way down to the target, `low` only once the room is clearly
+# below it. Measured over a night: dropping to `low` at the target made this unit
+# throttle the compressor from 41 Hz to 30, the return-air reading climbed two
+# degrees in half an hour, and it took three and a half hours at 40 Hz to come
+# back. Slowing the fan here does not save anything, it just takes the room away.
+FAN_BANDS_SLEEP: tuple[tuple[float, str], ...] = ((-0.5, "medium"), (-100.0, "low"))
 # The morning switch-off is a one-shot, not a state to enforce: outside this many
 # minutes past its time it is not attempted at all, so a restart later in the
 # morning cannot switch off a unit the user has just turned back on.
