@@ -56,6 +56,9 @@ from .const import (
     CONF_TARGET_AWAY,
     CONF_TARGET_HOME,
     CONF_TARGET_SLEEP,
+    CONF_VANE_H,
+    CONF_VANE_SLEEP,
+    CONF_VANE_V,
     DEFAULT_AUTO_START_HOUSE,
     DEFAULT_AUTO_START_OUTDOOR,
     DEFAULT_AUTO_START_ROOM,
@@ -75,6 +78,7 @@ from .const import (
     DEFAULT_TARGET_AWAY,
     DEFAULT_TARGET_HOME,
     DEFAULT_TARGET_SLEEP,
+    DEFAULT_VANE_SLEEP,
     DOMAIN,
     DRY_DELTA_HYSTERESIS,
     DRY_HUMIDITY_OFF,
@@ -213,6 +217,7 @@ class Desired:
     eco: bool | None = None          # True=on, False=off, None=leave
     mute: bool | None = None
     night: bool | None = None
+    vane: str | None = None          # position asked of both air-direction selects
     reason: str = ""
 
 
@@ -371,6 +376,13 @@ class ClimaSmartController:
                 translation_domain=DOMAIN, translation_key="duplicate_aux_switch"
             )
         for conf_key, ent in aux_config.items():
+            if ent:
+                self._aux_entities[ent] = conf_key
+                watched.add(ent)
+        # Le alette seguono la stessa strada: sorvegliate, cosi' un tuo intervento
+        # su di esse vale come su qualunque altro comando.
+        for conf_key in (CONF_VANE_H, CONF_VANE_V):
+            ent = self._cfg(conf_key)
             if ent:
                 self._aux_entities[ent] = conf_key
                 watched.add(ent)
@@ -617,9 +629,12 @@ class ClimaSmartController:
             # changes: our command moved them, not a hand.
             return
         settle_until = self._settle_aux_until.get(conf_key)
-        want = new_state.state == "on"
+        # Switches are remembered as booleans, the air-direction selects as the
+        # option string: compare like with like.
+        atteso = self._last_aux_cmd.get(conf_key)
+        want = new_state.state == "on" if isinstance(atteso, bool) else new_state.state
         if settle_until is not None and now < settle_until:
-            if self._last_aux_cmd.get(conf_key) == want:
+            if atteso == want:
                 return
             # The opposite of what we just asked, right after asking it: the unit
             # refused the command. Measured twice, about 60-70 s later and always
@@ -1204,7 +1219,14 @@ class ClimaSmartController:
                     climate.attributes.get("fan_modes"),
                     FAN_BANDS_SLEEP if phase == PHASE_SLEEP else FAN_BANDS,
                 )
+            alette = (
+                self._cfg(CONF_VANE_SLEEP, DEFAULT_VANE_SLEEP)
+                if phase == PHASE_SLEEP
+                else None
+            )
             detail = f"{program}, ventola {fan or 'invariata'}"
+            if alette:
+                detail += f", alette {alette}"
             if delta is not None:
                 detail += f", scarto {delta:+.1f}"
             if humidity is not None:
@@ -1216,6 +1238,7 @@ class ClimaSmartController:
                 eco=self._eco_decision(room, target, outdoor),
                 mute=is_night,
                 night=is_night,
+                vane=alette,
                 reason=f"smart {phase}: target {target}, {detail}",
             )
 
@@ -1448,6 +1471,9 @@ class ClimaSmartController:
         # hvac mode (see _compute's heat branch in MODE_AUTO).
         await self._apply_switch(CONF_MUTE_SWITCH, desired.mute)
         await self._apply_switch(CONF_NIGHT_SWITCH, desired.night)
+        # Alette: chieste solo dentro la notte fonda, fuori restano dove sono.
+        await self._apply_select(CONF_VANE_H, desired.vane)
+        await self._apply_select(CONF_VANE_V, desired.vane)
 
     def _quiet_mode_on(self, desired: Desired) -> bool:
         """Whether the unit is in (or is being put into) quiet mode this pass.
@@ -1502,6 +1528,60 @@ class ClimaSmartController:
             "switch", "turn_on" if want else "turn_off", entity_id
         ):
             # Restore so the failed switch command is retried next pass.
+            if had_prev:
+                self._last_aux_cmd[conf_key] = prev
+            else:
+                self._last_aux_cmd.pop(conf_key, None)
+            self._settle_aux_until.pop(conf_key, None)
+            return False
+        return True
+
+    async def _apply_select(self, conf_key: str, wanted: str | None) -> bool:
+        """Same discipline as _apply_switch, for an option-valued entity.
+
+        Idempotent, respects the settle window and the unit's refusals, and leaves
+        the entity alone when nothing is configured or the option is not offered.
+        """
+        if wanted is None:
+            return False
+        entity_id = self._cfg(conf_key)
+        if not entity_id:
+            return False
+        st = self.hass.states.get(entity_id)
+        if st is None or st.state in _UNAVAILABLE:
+            return False
+        opzioni = st.attributes.get("options")
+        if opzioni and wanted not in opzioni:
+            self._apply_errors.append(f"{conf_key}: posizione {wanted} non prevista")
+            return False
+        if st.state == wanted:
+            return False
+        now = dt_util.now()
+        refused_at = self._aux_refused_at.get(conf_key)
+        if (
+            refused_at is not None
+            and (now - refused_at).total_seconds() < AUX_REFUSAL_BACKOFF_SECONDS
+        ):
+            self._apply_errors.append(f"{conf_key}: rifiutato dall'unita', riprovo dopo")
+            return False
+        settle_until = self._settle_aux_until.get(conf_key)
+        if (
+            settle_until is not None
+            and now < settle_until
+            and self._last_aux_cmd.get(conf_key) == wanted
+        ):
+            return False
+        if self._stopped or not self.enabled:
+            return False
+        had_prev = conf_key in self._last_aux_cmd
+        prev = self._last_aux_cmd.get(conf_key)
+        self._last_aux_cmd[conf_key] = wanted
+        self._settle_aux_until[conf_key] = now + timedelta(
+            seconds=COMMAND_SETTLE_SECONDS
+        )
+        if not await self._call_target(
+            "select", "select_option", entity_id, {"option": wanted}
+        ):
             if had_prev:
                 self._last_aux_cmd[conf_key] = prev
             else:

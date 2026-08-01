@@ -17,6 +17,11 @@ CONF_NIGHT_SWITCH = "night_switch"
 # Optional indoor humidity source, only used by MODE_SMART to pick the `dry`
 # program. Left empty the mode still works, it just never dehumidifies.
 CONF_HUMIDITY = "humidity_sensor"
+# The two air-direction selects, if the unit exposes them. Only MODE_SMART uses
+# them, and only inside the sleep window: outside it they are left to whoever set
+# them last.
+CONF_VANE_H = "vane_horizontal"
+CONF_VANE_V = "vane_vertical"
 
 # --- Option keys (tunable at runtime via the options flow / number / select) ---
 CONF_TARGET_HOME = "target_home"
@@ -39,6 +44,10 @@ CONF_PRESENCE_HOME_STATE = "presence_home_state"
 # room settled 0.5-1.0 above a 25.0 setpoint. This shifts what we send to the unit
 # without touching the target we aim the room at, so the diagnostics stay honest.
 CONF_SETPOINT_OFFSET = "setpoint_offset"
+# Position asked of both vanes during the sleep window. `swing` keeps the air
+# moving instead of pointing it at the bed, and is offered by both selects on this
+# unit; any other value the selects accept works too.
+CONF_VANE_SLEEP = "vane_sleep_position"
 # MODE_SMART normally never starts the unit. With this on, and only at the opening
 # of the sleep window, it may: one attempt per night, so that switching the climate
 # off later in the night is not undone at the next pass.
@@ -73,6 +82,7 @@ DEFAULT_TARGET_SLEEP = 23.0
 DEFAULT_SLEEP_START = "23:30:00"
 DEFAULT_SLEEP_END = "07:30:00"
 DEFAULT_SETPOINT_OFFSET = 0.0
+DEFAULT_VANE_SLEEP = "swing"
 DEFAULT_AUTO_START_SLEEP = False
 DEFAULT_AUTO_START_ROOM = 0.0
 DEFAULT_AUTO_START_HOUSE = 0.0

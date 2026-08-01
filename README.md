@@ -85,7 +85,11 @@ I parametri di tuning si regolano poi dalle entità `number`/`select`, oppure da
 ## Note
 
 - Testata su Home Assistant 2026.7.2.
-- Stato attuale: `0.13.0` — nella notte fonda la ventola resta su `medium` fino al
+- Stato attuale: `0.14.0` — nella notte fonda vengono messe in posizione anche le
+  **alette**, orizzontale e verticale, di norma su `swing` per tenere l'aria in
+  movimento invece di puntarla sul letto. Fuori da quella fascia non si toccano, e
+  un tuo intervento su di esse vale come su qualunque altro comando.
+- `0.13.0` — nella notte fonda la ventola resta su `medium` fino al
   target e scende a `low` solo se la stanza va sotto. Misurato su una notte
   intera: rallentare la ventola a target raggiunto faceva scendere il compressore
   da 41 a 30 Hz, la camera perdeva due gradi in mezz'ora e ci metteva tre ore e

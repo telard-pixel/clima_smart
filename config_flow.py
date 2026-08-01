@@ -48,6 +48,9 @@ from .const import (
     CONF_TARGET_AWAY,
     CONF_TARGET_HOME,
     CONF_TARGET_SLEEP,
+    CONF_VANE_H,
+    CONF_VANE_SLEEP,
+    CONF_VANE_V,
     DEFAULT_AUTO_START_HOUSE,
     DEFAULT_AUTO_START_OUTDOOR,
     DEFAULT_AUTO_START_ROOM,
@@ -67,6 +70,7 @@ from .const import (
     DEFAULT_TARGET_AWAY,
     DEFAULT_TARGET_HOME,
     DEFAULT_TARGET_SLEEP,
+    DEFAULT_VANE_SLEEP,
     DOMAIN,
 )
 
@@ -112,6 +116,8 @@ def _setup_schema(defaults: dict[str, Any]) -> vol.Schema:
                     domain="sensor", device_class="temperature", multiple=True
                 )
             ),
+            _optional(CONF_VANE_H, defaults): _entity("select"),
+            _optional(CONF_VANE_V, defaults): _entity("select"),
             _optional(CONF_ECO_SWITCH, defaults): _entity("switch"),
             _optional(CONF_MUTE_SWITCH, defaults): _entity("switch"),
             _optional(CONF_NIGHT_SWITCH, defaults): _entity("switch"),
@@ -267,6 +273,9 @@ class ClimaSmartOptionsFlow(OptionsFlow):
                     CONF_SETPOINT_OFFSET,
                     default=_num(CONF_SETPOINT_OFFSET, DEFAULT_SETPOINT_OFFSET),
                 ): vol.All(vol.Coerce(float), vol.Range(min=-3, max=3)),
+                vol.Required(
+                    CONF_VANE_SLEEP, default=_num(CONF_VANE_SLEEP, DEFAULT_VANE_SLEEP)
+                ): str,
                 vol.Required(
                     CONF_AUTO_START_ROOM,
                     default=_num(CONF_AUTO_START_ROOM, DEFAULT_AUTO_START_ROOM),

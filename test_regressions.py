@@ -1007,6 +1007,76 @@ class ControllerRegressionTests(unittest.TestCase):
         self.assertIsNone(ctrl._sleep_start_done_on)
         self.assertEqual(ctrl.hass.bus.eventi, [])
 
+    # --------------------------------------------- alette nella notte fonda
+    def _con_alette(self, posizioni=("position_0", "position_3", "swing")):
+        ctrl = self._smart_controller(room=26.0)
+        self._profilo_notte(ctrl)
+        ctrl.entry.data = dict(
+            ctrl.entry.data,
+            vane_horizontal="select.aletta_h",
+            vane_vertical="select.aletta_v",
+        )
+        for eid in ("select.aletta_h", "select.aletta_v"):
+            ctrl.hass.states.values[eid] = State(
+                posizioni[0], {"options": list(posizioni)}
+            )
+        return ctrl
+
+    def test_vanes_go_to_swing_in_the_deep_night(self):
+        ctrl = self._con_alette()
+        desired = ctrl._compute(GIORNO.replace(hour=23, minute=30))
+        self.assertEqual(ctrl.current_phase, "sleep")
+        self.assertEqual(desired.vane, "swing")
+        inviati = []
+
+        async def record(domain, service, entity_id, data=None):
+            inviati.append((entity_id, (data or {}).get("option")))
+            return True
+
+        ctrl._call_target = record
+        asyncio.run(ctrl._apply(desired))
+        self.assertIn(("select.aletta_h", "swing"), inviati)
+        self.assertIn(("select.aletta_v", "swing"), inviati)
+
+    def test_vanes_are_left_alone_outside_the_deep_night(self):
+        ctrl = self._con_alette()
+        self.assertIsNone(ctrl._compute(GIORNO.replace(hour=12)).vane)
+        self.assertIsNone(ctrl._compute(GIORNO.replace(hour=22, minute=0)).vane)
+
+    def test_vane_already_in_position_is_not_commanded(self):
+        ctrl = self._con_alette(posizioni=("swing", "position_3", "swing"))
+        inviati = []
+
+        async def record(domain, service, entity_id, data=None):
+            if domain == "select":
+                inviati.append(entity_id)
+            return True
+
+        ctrl._call_target = record
+        asyncio.run(
+            ctrl._apply(ctrl._compute(GIORNO.replace(hour=23, minute=30)))
+        )
+        self.assertEqual(inviati, [])
+
+    def test_vane_position_the_unit_does_not_offer_is_reported(self):
+        ctrl = self._con_alette(posizioni=("position_0", "position_3"))
+        ctrl.entry.options = dict(ctrl.entry.options, vane_sleep_position="swing")
+        asyncio.run(
+            ctrl._apply(ctrl._compute(GIORNO.replace(hour=23, minute=30)))
+        )
+        self.assertTrue(
+            any("non prevista" in e for e in ctrl._apply_errors), ctrl._apply_errors
+        )
+
+    def test_a_hand_on_the_vanes_still_counts_as_manual(self):
+        ctrl = self._con_alette()
+        ctrl._last_aux_cmd["vane_horizontal"] = "swing"
+        ctrl._settle_aux_until["vane_horizontal"] = NOW - timedelta(seconds=1)
+        ctrl._maybe_flag_manual_switch(
+            "vane_horizontal", Event(State("swing"), State("position_4"))
+        )
+        self.assertTrue(ctrl.override_active)
+
     # ------------------------------- l'unita' che rifiuta uno switch ausiliario
     def _con_eco(self):
         data = {"climate_entity": "climate.test", "eco_switch": "switch.eco"}
