@@ -129,6 +129,9 @@
       },
       "reason": {
         "name": "Status"
+      },
+      "house_average": {
+        "name": "House average"
       }
     },
     "number": {

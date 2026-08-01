@@ -69,7 +69,7 @@ dire 25 mentre all'unità arriva 24.
 - **Select** `Modo` — adattivo / auto / comfort / away / notte / spento.
 - **Number** — target casa/fuori/notte fonda, correzione setpoint, isteresi eco,
   soglie eco-esterno, soglia stagione calda, override (min).
-- **Sensor** (diagnostici) — fase corrente, target attivo, stato/motivo dell'ultima decisione.
+- **Sensor** (diagnostici) — fase corrente, target attivo, media di casa, stato/motivo dell'ultima decisione.
 
 ## Installazione
 
@@ -85,7 +85,10 @@ I parametri di tuning si regolano poi dalle entità `number`/`select`, oppure da
 ## Note
 
 - Testata su Home Assistant 2026.7.2.
-- Stato attuale: `0.14.0` — nella notte fonda vengono messe in posizione anche le
+- Stato attuale: `0.15.0` — nuovo sensore diagnostico **Media di casa**: mostra la
+  media dei termometri delle altre stanze così come la legge la regola di avvio
+  diurno, con negli attributi i sensori usati, la soglia e se è superata.
+- `0.14.0` — nella notte fonda vengono messe in posizione anche le
   **alette**, orizzontale e verticale, di norma su `swing` per tenere l'aria in
   movimento invece di puntarla sul letto. Fuori da quella fascia non si toccano, e
   un tuo intervento su di esse vale come su qualunque altro comando.

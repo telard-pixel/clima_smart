@@ -30,9 +30,45 @@ async def async_setup_entry(
         [
             ClimaSmartPhaseSensor(controller),
             ClimaSmartTargetSensor(controller),
+            ClimaSmartHouseSensor(controller),
             ClimaSmartReasonSensor(controller),
         ]
     )
+
+
+class ClimaSmartHouseSensor(ClimaSmartEntity, SensorEntity):
+    """The other rooms' average, exactly as the daytime start rule reads it.
+
+    Deliberately the controller's own value rather than a template that redoes the
+    arithmetic: if a sensor drops out, what is shown here is what actually decides.
+    """
+
+    _attr_translation_key = "house_average"
+    _attr_icon = "mdi:home-thermometer-outline"
+    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
+    _attr_suggested_display_precision = 1
+
+    def __init__(self, controller) -> None:
+        super().__init__(controller, "house_average")
+
+    @property
+    def native_value(self) -> float | None:
+        return self._controller._house_average()
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        ctrl = self._controller
+        entities = ctrl._cfg("house_sensors") or []
+        if isinstance(entities, str):
+            entities = [entities]
+        soglia = float(ctrl._cfg("auto_start_house", 0.0) or 0.0)
+        media = ctrl._house_average()
+        return {
+            "sensori": list(entities),
+            "soglia_avvio": soglia or None,
+            "sopra_soglia": None if media is None or not soglia else media >= soglia,
+        }
 
 
 class ClimaSmartPhaseSensor(ClimaSmartEntity, SensorEntity):

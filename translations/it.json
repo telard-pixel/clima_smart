@@ -129,6 +129,9 @@
       },
       "reason": {
         "name": "Stato"
+      },
+      "house_average": {
+        "name": "Media di casa"
       }
     },
     "number": {
