@@ -6,17 +6,15 @@ Non crea un nuovo `climate`: **pilota quello che hai già** tramite normali serv
 call, replicando — e rendendo configurabile da UI — una logica di automazione
 validata per il comfort con risparmio energetico.
 
-## Il modo Adattivo, che è l'unico
+## Il modo Adattivo, che è l'unico controllo automatico
 
-Il modo per «imposto 25 gradi e al resto pensa tu». Tiene **un solo target** (quello
-di casa, la presenza non conta), applica le stesse fasce orarie di `auto`, e in più
+Il modo per «imposto il target e al resto pensa tu». Applica le fasce orarie e
 decide da sé:
 
-- **la ventola**, in base a quanto la stanza è ancora sopra il target: 2 gradi o più
-  → `high`, 1 o più → `medium`, sotto → `low`. Entrambe le direzioni chiedono 0.3 di
-  margine oltre il confine della banda, e le discese anche 10 minuti dall'ultimo
-  cambio: senza, un'unità che riporta a mezzi gradi fa ticchettare la ventola
-  restando appoggiata sul confine.
+- **la ventola di giorno**, in base a quanto la stanza è sopra il target: 2 °C o più
+  → `high`, 1 °C o più → `medium`, sotto → `low`. Per evitare oscillazioni, ogni
+  passaggio richiede 0,3 °C oltre il confine della fascia; le discese richiedono
+  anche 10 minuti dall'ultimo cambio.
 - **il programma**: `dry` quando l'aria è umida (oltre il 60%) ma la temperatura è già
   a posto, `cool` in tutti gli altri casi. Serve un sensore di umidità interna
   configurato: senza quello resta sempre su `cool`.
@@ -30,21 +28,23 @@ governata dal profilo.
 
 ### Il profilo notturno (modo Adattivo)
 
-- **notte fonda** (`sleep_start` → `sleep_end`, di norma `23:00` → `07:30`): target
-  proprio, più basso, e ventola a due soli passi — `medium` fino al target e anche
-  un po' sotto, `low` solo quando la stanza è chiaramente più fredda del target.
-  Mai `high`.
-- **scarico mattutino** (dalla fine della notte fonda allo spegnimento): programma
+- **notte** (dalle `22:00`): abilita gli switch muto e modalità notte, se collegati.
+- **sonno** (`sleep_start` → `sleep_end`, di norma `23:30` → `07:30`): usa il target
+  sonno. Nei primi 15 minuti la ventola va a `high` solo se la stanza è almeno
+  0,3 °C sopra quel target; poi usa le bande notturne, `medium` fino a 0,5 °C sotto
+  il target e `low` solo oltre quella soglia.
+- **scarico mattutino** (dalla fine del sonno allo spegnimento): programma
   `dry` con ventola `auto`, per togliere l'afa senza raffreddare ancora.
-- **spegnimento del mattino** (`morning_off_start`, di norma `08:30`): avviene **una
+- **spegnimento del mattino** (`morning_off_start`, di norma `08:00`): avviene **una
   volta sola**, dentro una finestra di mezz'ora. Non è uno stato imposto: se
   riaccendi il clima in mattinata viene gestito col profilo di giorno, non rispento.
 
-In questo modo il controller **non accende mai** l'unità di sua iniziativa: decidi
-tu quando parte, lui decide come lavora. Le uniche due eccezioni sono programmate e
-avvengono una volta sola: lo spegnimento del mattino e — se attivi «avvio
-automatico» — l'accensione all'apertura della notte fonda, che lancia l'evento
-`clima_smart_avviato` per chi vuole annunciarla.
+Di norma il controller non accende l'unità. Può però farlo una volta al giorno nella
+fase diurna se superi la soglia configurata della stanza oppure della media dei
+sensori di casa, con l'eventuale soglia minima esterna come guardia. Può anche farlo
+una volta all'apertura del sonno se abiliti l'avvio automatico del sonno. Entrambi
+gli avvii emettono `clima_smart_avviato`, con `motivo: giorno` per il superamento
+della soglia diurna e `motivo: notte` per l'inizio programmato del sonno.
 
 ### Target adattivo sull'esterna
 
@@ -52,8 +52,7 @@ Chiedere 25 gradi con 28 fuori e con 36 fuori non è la stessa richiesta. Sopra 
 soglia configurabile il target sale in proporzione, fino a un massimo: meno divario
 da colmare significa compressore a frequenza più bassa, e su questa unità la
 potenza misurata segue `W = 17.7 × Hz − 194`, quindi il rendimento migliora
-scendendo di frequenza. Vale solo nel percorso automatico: i modi forzati a mano
-restano quello che hai chiesto. Disattivato di default.
+scendendo di frequenza. È disattivato di default.
 
 ### Correzione setpoint
 
@@ -65,10 +64,10 @@ dire 25 mentre all'unità arriva 24.
 ## Cosa fa
 
 - Si controlla sulla **temperatura interna** del clima (non su un sensore nel flusso d'aria).
-- Setpoint **fisso** in raffreddamento: 26 °C a casa, 27 °C fuori casa (presenza via `device_tracker`).
+- Target predefiniti: 26 °C di giorno e 23 °C nel sonno.
 - **Eco con isteresi asimmetrica** anti-flapping (banda morta tra ON e OFF).
-- Fasce orarie in modalità `auto`: giorno (ventola auto), notte (muto + modalità notte),
-  e una fascia mattutina in cui spegne solo se sta raffreddando (non tocca il riscaldamento).
+- Fasce predefinite: notte dalle 22:00, sonno 23:30–07:30, spegnimento mattutino
+  alle 08:00 e fase diurna dalle 10:00.
 - **Rilevamento override manuale**: se intervieni a mano, cede il controllo per un tempo configurabile.
 - Rispetta stagione e riscaldamento: non forza mai il `cool` in inverno o mentre l'unità riscalda.
 
@@ -76,8 +75,8 @@ dire 25 mentre all'unità arriva 24.
 
 - **Switch** `Attivo` — abilita/disabilita il controllo (off = controllo manuale del clima).
 - **Select** `Modo` — **adattivo** oppure **tieni spento**. Nient'altro.
-- **Number** — target casa/fuori/notte fonda, correzione setpoint, isteresi eco,
-  soglie eco-esterno, soglia stagione calda, override (min).
+- **Number** — target diurno/sonno, correzione setpoint, isteresi eco, soglie
+  eco-esterno, soglia stagione calda, override e soglie degli avvii automatici.
 - **Sensor** (diagnostici) — fase corrente, target attivo, media di casa, stato/motivo dell'ultima decisione.
 
 ## Installazione
@@ -85,73 +84,17 @@ dire 25 mentre all'unità arriva 24.
 1. Copia la cartella `clima_smart/` in `config/custom_components/`.
 2. Riavvia Home Assistant.
 3. **Impostazioni → Dispositivi e servizi → Aggiungi integrazione → "Clima Smart"** e
-   seleziona il `climate` da pilotare, il `device_tracker` di presenza, i sensori di
-   temperatura esterna (principale + fallback), il sensore di umidità interna
-   (opzionale, serve al modo Adattivo) e gli switch ausiliari (eco / muto / notte).
+   seleziona il `climate` da pilotare, i sensori di temperatura esterna primario e
+   fallback, il sensore di umidità interna (opzionale), i sensori di temperatura
+   delle altre stanze, gli switch eco/muto/modalità notte e i selettori delle
+   alette orizzontale e verticale. Tutti gli ingressi tranne il `climate` sono
+   opzionali e si collegano solo quando disponibili.
 
 I parametri di tuning si regolano poi dalle entità `number`/`select`, oppure dal flusso opzioni.
 
 ## Note
 
 - Testata su Home Assistant 2026.7.2.
-- Stato attuale: `0.18.0` — **restano due soli modi**, adattivo e «tieni spento»:
-  auto, comfort, away e notte erano il ricalco dell'automazione originale e la
-  logica adattiva li comprende tutti. Con loro se ne vanno presenza, target fuori
-  e stato «a casa», che servivano solo a quelli. «Tieni spento» non è un doppione
-  dello switch master: quello ferma il controller, questo tiene spenta l'unità.
-- `0.17.0` — **target adattivo sull'esterna**: sopra una soglia il
-  target sale in proporzione fino a un massimo, a mezzi gradi, così nell'ora più
-  calda la macchina non insegue un divario che non le compete.
-- `0.16.0` — le alette tornano **ferme di giorno**: la posizione
-  diurna viene ripristinata una volta sola alla fine della notte fonda, così lo
-  `swing` resta confinato alla notte invece di proseguire tutto il giorno.
-- `0.15.0` — nuovo sensore diagnostico **Media di casa**: mostra la
-  media dei termometri delle altre stanze così come la legge la regola di avvio
-  diurno, con negli attributi i sensori usati, la soglia e se è superata.
-- `0.14.0` — nella notte fonda vengono messe in posizione anche le
-  **alette**, orizzontale e verticale, di norma su `swing` per tenere l'aria in
-  movimento invece di puntarla sul letto. Fuori da quella fascia non si toccano, e
-  un tuo intervento su di esse vale come su qualunque altro comando.
-- `0.13.0` — nella notte fonda la ventola resta su `medium` fino al
-  target e scende a `low` solo se la stanza va sotto. Misurato su una notte
-  intera: rallentare la ventola a target raggiunto faceva scendere il compressore
-  da 41 a 30 Hz, la camera perdeva due gradi in mezz'ora e ci metteva tre ore e
-  mezza a rientrare. Su questa unità ventola e compressore sono legati.
-- `0.12.0` — l'avvio diurno guarda anche i **termometri delle
-  altre stanze**: il resto della casa si scalda prima della camera, quindi la loro
-  media fa partire l'unità prima del picco esterno. Due condizioni indipendenti
-  (camera oppure media di casa), entrambe subordinate a una temperatura esterna
-  minima, così una giornata fresca non fa partire niente.
-- `0.11.0` — **avvio diurno**: se di giorno il clima è spento e la
-  stanza supera una soglia, viene acceso una volta al giorno. È l'avvio vero, e
-  l'evento `clima_smart_avviato` porta `motivo: giorno`, distinto dal `motivo:
-  notte` dell'apertura della notte fonda, che è solo l'orario che comincia.
-- `0.10.0` — avvio serale facoltativo: all'apertura della notte
-  fonda, se il clima è spento, lo accende **una volta sola** e lancia l'evento
-  `clima_smart_avviato`, così un'automazione può annunciarlo a voce. Fuori da quel
-  momento vale sempre la regola: il controller non accende mai da sé.
-- `0.9.1` — quando l'unità rifiuta un comando su uno switch
-  ausiliario (rimettendolo com'era una sessantina di secondi dopo, senza contesto
-  utente) non viene più scambiato per un intervento manuale, e quello switch resta
-  in pace per mezz'ora invece di essere ricomandato a ogni passata.
-- `0.9.0` — giro di correzioni dopo una revisione a due voci: lo
-  spegnimento del mattino non tocca più un riscaldamento acceso e viene segnato
-  solo se il comando riesce; la ventola sale al gradino intermedio invece di
-  restare bassa; la barriera di ripristino non blocca più il controller se
-  un'entità è disabilitata; la fusione delle raffiche funziona davvero; un nostro
-  cambio di programma non viene più scambiato per un tuo comando; `cool`/`dry` ha
-  isteresi anche sullo scarto. Validazioni nuove nel form, messaggi d'errore
-  tradotti, e 59 prove fra cui la prima batteria sulle regole del form.
-- `0.8.0` — profilo notturno completo: notte fonda con ventola a
-  due passi, scarico mattutino in `dry`, spegnimento una tantum, e il controller
-  non accende mai l'unità da sé.
-- `0.7.0` — finestra di notte fonda con target proprio e correzione setpoint
-  configurabile.
-- `0.6.x` — nuovo modo **Adattivo**, che decide ventola e programma
-  dai sensori invece di tenerli fissi, più il campo opzionale per il sensore di
-  umidità interna.
-- `0.5.0` — il target diagnostico coincide con quello che l'unità riceve davvero,
-  muto/notte non si fermano più su una modalità HVAC non supportata, la
-  diagnostica si azzera quando il clima è irraggiungibile, override a 0 minuti non
-  annuncia più una scadenza inesistente e le raffiche di eventi si fondono in una
-  sola valutazione.
+- `1.0.1` — aggiunta la spinta iniziale del sonno: per i primi 15 minuti usa `high`
+  quando la stanza è almeno 0,3 °C sopra il target sonno; migliorato il tentativo
+  di ripristino delle alette diurne dopo un comando non riuscito; aggiunta la CI.
