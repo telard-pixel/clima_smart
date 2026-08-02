@@ -20,6 +20,9 @@ from .validation import (
     validate_options,
 )
 from .const import (
+    CONF_ADAPTIVE_MAX,
+    CONF_ADAPTIVE_SLOPE,
+    CONF_ADAPTIVE_START,
     CONF_AUTO_START_HOUSE,
     CONF_AUTO_START_OUTDOOR,
     CONF_AUTO_START_ROOM,
@@ -53,6 +56,9 @@ from .const import (
     CONF_VANE_H,
     CONF_VANE_SLEEP,
     CONF_VANE_V,
+    DEFAULT_ADAPTIVE_MAX,
+    DEFAULT_ADAPTIVE_SLOPE,
+    DEFAULT_ADAPTIVE_START,
     DEFAULT_AUTO_START_HOUSE,
     DEFAULT_AUTO_START_OUTDOOR,
     DEFAULT_AUTO_START_ROOM,
@@ -295,6 +301,18 @@ class ClimaSmartOptionsFlow(OptionsFlow):
                     CONF_AUTO_START_HOUSE,
                     default=_num(CONF_AUTO_START_HOUSE, DEFAULT_AUTO_START_HOUSE),
                 ): vol.All(vol.Coerce(float), vol.Range(min=0, max=35)),
+                vol.Required(
+                    CONF_ADAPTIVE_START,
+                    default=_num(CONF_ADAPTIVE_START, DEFAULT_ADAPTIVE_START),
+                ): vol.All(vol.Coerce(float), vol.Range(min=0, max=45)),
+                vol.Required(
+                    CONF_ADAPTIVE_SLOPE,
+                    default=_num(CONF_ADAPTIVE_SLOPE, DEFAULT_ADAPTIVE_SLOPE),
+                ): vol.All(vol.Coerce(float), vol.Range(min=0, max=1)),
+                vol.Required(
+                    CONF_ADAPTIVE_MAX,
+                    default=_num(CONF_ADAPTIVE_MAX, DEFAULT_ADAPTIVE_MAX),
+                ): vol.All(vol.Coerce(float), vol.Range(min=0, max=4)),
                 vol.Required(
                     CONF_AUTO_START_OUTDOOR,
                     default=_num(CONF_AUTO_START_OUTDOOR, DEFAULT_AUTO_START_OUTDOOR),

@@ -72,6 +72,16 @@ CONF_AUTO_START_HOUSE = "auto_start_house"
 # Guard: no daytime start at all unless it is really a hot day outside.
 CONF_AUTO_START_OUTDOOR = "auto_start_outdoor"
 
+# --- Target adattivo sull'esterna ---
+# Chiedere 25 gradi con 28 fuori e con 36 fuori non e' la stessa richiesta: nella
+# seconda la macchina insegue un divario che non le compete, e il grado in piu'
+# dentro non si sente. Sopra una soglia il target sale in proporzione, fino a un
+# massimo. Misurato su questa unita': W = 17.7 x Hz - 194, quindi ogni grado di
+# divario in meno si traduce in frequenza piu' bassa e rendimento migliore.
+CONF_ADAPTIVE_START = "adaptive_outdoor_start"
+CONF_ADAPTIVE_SLOPE = "adaptive_slope"
+CONF_ADAPTIVE_MAX = "adaptive_max"
+
 # --- Defaults (validated values from the original automation) ---
 DEFAULT_TARGET_HOME = 26.0
 DEFAULT_TARGET_AWAY = 27.0
@@ -93,11 +103,18 @@ DEFAULT_AUTO_START_SLEEP = False
 DEFAULT_AUTO_START_ROOM = 0.0
 DEFAULT_AUTO_START_HOUSE = 0.0
 DEFAULT_AUTO_START_OUTDOOR = 0.0
+DEFAULT_ADAPTIVE_START = 0.0      # zero disattiva del tutto l'adattamento
+DEFAULT_ADAPTIVE_SLOPE = 0.25     # un quarto di grado di target per grado esterno
+DEFAULT_ADAPTIVE_MAX = 1.5
 DEFAULT_PRESENCE_HOME_STATE = "home"
 
 # While the unit is already cooling, the season threshold drops by this much, so a
 # cycle in progress is not cut off by a small dip in the outdoor reading.
 SUMMER_HYSTERESIS = 2.0
+
+# L'adattamento si muove a mezzi gradi: la stazione riporta gradi interi, quindi
+# la compensazione cambia a scatti netti invece di oscillare sui decimali.
+ADAPTIVE_QUANTUM = 0.5
 
 # How long async_start waits for the master switch and the mode select to restore
 # before opening the barrier in degraded mode.

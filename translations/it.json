@@ -77,7 +77,10 @@
           "auto_start_outdoor": "Solo se fuori ci sono almeno (°C)",
           "vane_sleep_position": "Posizione delle alette nella notte fonda",
           "vane_day_horizontal": "Aletta orizzontale di giorno",
-          "vane_day_vertical": "Aletta verticale di giorno"
+          "vane_day_vertical": "Aletta verticale di giorno",
+          "adaptive_outdoor_start": "Adatta il target sopra questa esterna (°C)",
+          "adaptive_slope": "Quanto alzarlo per ogni grado esterno",
+          "adaptive_max": "Aumento massimo del target (°C)"
         },
         "data_description": {
           "auto_start_sleep": "Se il clima è spento all'orario di inizio, lo accende una volta sola. Fuori da quel momento il controller non accende mai da sé.",
@@ -86,7 +89,10 @@
           "auto_start_outdoor": "Nessun avvio diurno sotto questa temperatura esterna. 0 toglie il vincolo.",
           "vane_sleep_position": "Di norma `swing`: tiene l'aria in movimento invece di puntarla sul letto. Fuori dalla notte fonda le alette non vengono toccate.",
           "vane_day_horizontal": "Posizione ripristinata alla fine della notte fonda, una volta sola. Vuoto: le alette restano dove sono.",
-          "vane_day_vertical": "Posizione ripristinata alla fine della notte fonda, una volta sola. Vuoto: le alette restano dove sono."
+          "vane_day_vertical": "Posizione ripristinata alla fine della notte fonda, una volta sola. Vuoto: le alette restano dove sono.",
+          "adaptive_outdoor_start": "0 disattiva l'adattamento. Sotto questa temperatura il target resta quello impostato.",
+          "adaptive_slope": "Esempio: 0.25 significa mezzo grado di target ogni due gradi esterni in più.",
+          "adaptive_max": "Limite oltre il quale il target non sale più, per quanto faccia caldo."
         }
       }
     },

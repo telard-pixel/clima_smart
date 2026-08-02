@@ -46,6 +46,15 @@ avvengono una volta sola: lo spegnimento del mattino e — se attivi «avvio
 automatico» — l'accensione all'apertura della notte fonda, che lancia l'evento
 `clima_smart_avviato` per chi vuole annunciarla.
 
+### Target adattivo sull'esterna
+
+Chiedere 25 gradi con 28 fuori e con 36 fuori non è la stessa richiesta. Sopra una
+soglia configurabile il target sale in proporzione, fino a un massimo: meno divario
+da colmare significa compressore a frequenza più bassa, e su questa unità la
+potenza misurata segue `W = 17.7 × Hz − 194`, quindi il rendimento migliora
+scendendo di frequenza. Vale solo nel percorso automatico: i modi forzati a mano
+restano quello che hai chiesto. Disattivato di default.
+
 ### Correzione setpoint
 
 Le unità split leggono l'aria di ripresa e si fermano prima: qui la stanza si
@@ -85,7 +94,10 @@ I parametri di tuning si regolano poi dalle entità `number`/`select`, oppure da
 ## Note
 
 - Testata su Home Assistant 2026.7.2.
-- Stato attuale: `0.16.0` — le alette tornano **ferme di giorno**: la posizione
+- Stato attuale: `0.17.0` — **target adattivo sull'esterna**: sopra una soglia il
+  target sale in proporzione fino a un massimo, a mezzi gradi, così nell'ora più
+  calda la macchina non insegue un divario che non le compete.
+- `0.16.0` — le alette tornano **ferme di giorno**: la posizione
   diurna viene ripristinata una volta sola alla fine della notte fonda, così lo
   `swing` resta confinato alla notte invece di proseguire tutto il giorno.
 - `0.15.0` — nuovo sensore diagnostico **Media di casa**: mostra la

@@ -1007,6 +1007,47 @@ class ControllerRegressionTests(unittest.TestCase):
         self.assertIsNone(ctrl._sleep_start_done_on)
         self.assertEqual(ctrl.hass.bus.eventi, [])
 
+    # ------------------------------------------ target adattivo sull'esterna
+    def _con_adattivo(self, outdoor):
+        ctrl = self._smart_controller(room=28.0, outdoor=outdoor)
+        self._profilo_notte(ctrl)
+        ctrl.entry.options = dict(
+            ctrl.entry.options,
+            target_home=25.0,
+            adaptive_outdoor_start=33.0,
+            adaptive_slope=0.25,
+            adaptive_max=1.5,
+        )
+        return ctrl
+
+    def test_adaptive_target_raises_only_when_it_is_hot(self):
+        casi = {30.0: 25.0, 33.0: 25.0, 34.0: 25.5, 36.0: 26.0, 38.0: 26.5}
+        for esterna, atteso in casi.items():
+            ctrl = self._con_adattivo(esterna)
+            desired = ctrl._compute(GIORNO)
+            self.assertEqual(desired.setpoint, atteso, f"esterna {esterna}")
+
+    def test_adaptive_target_is_capped(self):
+        ctrl = self._con_adattivo(45.0)   # ben oltre il massimo
+        self.assertEqual(ctrl._compute(GIORNO).setpoint, 26.5)   # 25 + 1.5
+
+    def test_adaptive_target_moves_in_half_degrees(self):
+        """La stazione riporta gradi interi: la compensazione deve fare scatti
+        netti, non inseguire i decimali."""
+        valori = {self._con_adattivo(e)._adaptive_extra(e) for e in (34.0, 34.9)}
+        self.assertEqual(valori, {0.5})
+
+    def test_adaptive_target_off_by_default(self):
+        ctrl = self._smart_controller(room=28.0, outdoor=40.0)
+        self._profilo_notte(ctrl)
+        ctrl.entry.options = dict(ctrl.entry.options, target_home=25.0)
+        self.assertEqual(ctrl._compute(GIORNO).setpoint, 25.0)
+
+    def test_adaptive_target_does_not_touch_the_manual_modes(self):
+        ctrl = self._con_adattivo(38.0)
+        ctrl.mode = "comfort"
+        self.assertEqual(ctrl._compute(GIORNO).setpoint, 25.0)
+
     # --------------------------------------------- alette nella notte fonda
     def _con_alette(self, posizioni=("position_0", "position_3", "swing")):
         ctrl = self._smart_controller(room=26.0)

@@ -28,6 +28,10 @@ from homeassistant.util.unit_conversion import TemperatureConverter
 from .const import (
     AUX_REFUSAL_BACKOFF_SECONDS,
     COMMAND_SETTLE_SECONDS,
+    ADAPTIVE_QUANTUM,
+    CONF_ADAPTIVE_MAX,
+    CONF_ADAPTIVE_SLOPE,
+    CONF_ADAPTIVE_START,
     CONF_AUTO_START_HOUSE,
     CONF_AUTO_START_OUTDOOR,
     CONF_AUTO_START_ROOM,
@@ -61,6 +65,9 @@ from .const import (
     CONF_VANE_H,
     CONF_VANE_SLEEP,
     CONF_VANE_V,
+    DEFAULT_ADAPTIVE_MAX,
+    DEFAULT_ADAPTIVE_SLOPE,
+    DEFAULT_ADAPTIVE_START,
     DEFAULT_AUTO_START_HOUSE,
     DEFAULT_AUTO_START_OUTDOOR,
     DEFAULT_AUTO_START_ROOM,
@@ -292,6 +299,8 @@ class ClimaSmartController:
         # Diagnostics (read by sensors)
         self.current_phase: str | None = None
         self.active_target: float | None = None
+        # Quanto il target e' stato alzato per via del caldo esterno.
+        self.adaptive_extra: float = 0.0
         self.last_reason: str = "inizializzazione"
         # Fuori dallo stato del sensore: cambiano a ogni passata e riempirebbero
         # il recorder di righe identiche nel contenuto.
@@ -840,6 +849,23 @@ class ClimaSmartController:
         )
         return begin <= now < begin + timedelta(minutes=MORNING_OFF_WINDOW_MINUTES)
 
+    def _adaptive_extra(self, outdoor: float | None) -> float:
+        """How much to raise the target because it is very hot outside.
+
+        Zero below the threshold, then proportional and capped. Quantised to half
+        degrees: the station reports whole degrees, so the compensation moves in
+        clean steps instead of wobbling on decimals.
+        """
+        inizio = float(self._cfg(CONF_ADAPTIVE_START, DEFAULT_ADAPTIVE_START) or 0.0)
+        if inizio <= 0 or outdoor is None or outdoor <= inizio:
+            return 0.0
+        pendenza = float(self._cfg(CONF_ADAPTIVE_SLOPE, DEFAULT_ADAPTIVE_SLOPE) or 0.0)
+        massimo = float(self._cfg(CONF_ADAPTIVE_MAX, DEFAULT_ADAPTIVE_MAX) or 0.0)
+        if pendenza <= 0 or massimo <= 0:
+            return 0.0
+        grezzo = min((outdoor - inizio) * pendenza, massimo)
+        return math.floor(grezzo / ADAPTIVE_QUANTUM + 0.5) * ADAPTIVE_QUANTUM
+
     def _house_average(self) -> float | None:
         """Average of the other rooms' thermometers, in Celsius.
 
@@ -1168,6 +1194,11 @@ class ClimaSmartController:
             target = self.target_sleep
         else:
             target = self.target_home if (smart or is_home) else self.target_away
+        # Adattamento all'esterna: vale solo qui, nel percorso automatico. I modi
+        # forzati a mano restano quello che l'utente ha chiesto, senza sorprese.
+        compensazione = self._adaptive_extra(outdoor)
+        target += compensazione
+        self.adaptive_extra = compensazione
         self.active_target = self._reachable_target(target, climate)
 
         if smart:
@@ -1239,6 +1270,8 @@ class ClimaSmartController:
                 alette_h = alette_v = None
             alette = alette_h
             detail = f"{program}, ventola {fan or 'invariata'}"
+            if compensazione:
+                detail += f", +{compensazione:.1f} per esterna {outdoor:.0f}"
             if alette:
                 detail += f", alette {alette}"
             if delta is not None:
