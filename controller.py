@@ -1585,6 +1585,9 @@ class ClimaSmartController:
 
         Idempotent, respects the settle window and the unit's refusals, and leaves
         the entity alone when nothing is configured or the option is not offered.
+        Returns True when no entity is configured, the target is already satisfied,
+        or the requested option was applied successfully; returns False while a
+        requested target remains incomplete.
         """
         if wanted is None:
             return True

@@ -1211,6 +1211,73 @@ class ControllerRegressionTests(unittest.TestCase):
         self.assertIsNone(third.vane_h)
         self.assertIsNone(third.vane_v)
 
+    def test_day_vane_restore_retries_with_one_axis_unconfigured(self):
+        ctrl = self._con_alette(posizioni=("swing", "position_0", "position_5"))
+        ctrl.entry.data = dict(ctrl.entry.data)
+        ctrl.entry.data.pop("vane_vertical")
+        ctrl.entry.options = dict(
+            ctrl.entry.options,
+            vane_day_horizontal="position_0",
+            vane_day_vertical="position_5",
+        )
+        mattina = GIORNO.replace(hour=8, minute=0)
+        tentativi = []
+
+        async def fallisce_poi_riesce(domain, service, entity_id, data=None):
+            if domain == "select":
+                tentativi.append((entity_id, data["option"]))
+                return len(tentativi) > 1
+            return True
+
+        ctrl._call_target = fallisce_poi_riesce
+        asyncio.run(ctrl._apply(ctrl._compute(mattina)))
+        self.assertEqual(tentativi, [("select.aletta_h", "position_0")])
+        self.assertIsNone(ctrl._vane_restored_on)
+
+        asyncio.run(ctrl._apply(ctrl._compute(mattina + timedelta(minutes=5))))
+        self.assertEqual(
+            tentativi,
+            [
+                ("select.aletta_h", "position_0"),
+                ("select.aletta_h", "position_0"),
+            ],
+        )
+        self.assertEqual(ctrl._vane_restored_on, mattina.date())
+
+    def test_day_vane_restore_retries_with_one_axis_already_at_target(self):
+        ctrl = self._con_alette(posizioni=("swing", "position_0", "position_5"))
+        ctrl.hass.states.values["select.aletta_h"] = State(
+            "position_0", {"options": ["swing", "position_0", "position_5"]}
+        )
+        ctrl.entry.options = dict(
+            ctrl.entry.options,
+            vane_day_horizontal="position_0",
+            vane_day_vertical="position_5",
+        )
+        mattina = GIORNO.replace(hour=8, minute=0)
+        tentativi = []
+
+        async def fallisce_poi_riesce(domain, service, entity_id, data=None):
+            if domain == "select":
+                tentativi.append((entity_id, data["option"]))
+                return len(tentativi) > 1
+            return True
+
+        ctrl._call_target = fallisce_poi_riesce
+        asyncio.run(ctrl._apply(ctrl._compute(mattina)))
+        self.assertEqual(tentativi, [("select.aletta_v", "position_5")])
+        self.assertIsNone(ctrl._vane_restored_on)
+
+        asyncio.run(ctrl._apply(ctrl._compute(mattina + timedelta(minutes=5))))
+        self.assertEqual(
+            tentativi,
+            [
+                ("select.aletta_v", "position_5"),
+                ("select.aletta_v", "position_5"),
+            ],
+        )
+        self.assertEqual(ctrl._vane_restored_on, mattina.date())
+
     def test_no_day_position_configured_leaves_the_vanes_alone(self):
         ctrl = self._con_alette(posizioni=("swing", "position_0", "position_5"))
         desired = ctrl._compute(GIORNO.replace(hour=8, minute=0))
