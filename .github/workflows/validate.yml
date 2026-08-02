@@ -1,0 +1,27 @@
+name: Validate
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Compile Python
+        run: python -m compileall -q .
+      - name: Validate JSON
+        run: |
+          python -m json.tool manifest.json >/dev/null
+          python -m json.tool hacs.json >/dev/null
+          python -m json.tool translations/en.json >/dev/null
+          python -m json.tool translations/it.json >/dev/null
+      - name: Run regression suite
+        run: python -m unittest -v test_regressions.py
