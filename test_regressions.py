@@ -567,6 +567,50 @@ class ControllerRegressionTests(unittest.TestCase):
         # Fuori dalla finestra si torna al target di casa.
         self.assertEqual(ctrl._compute(NOW.replace(hour=12, minute=0)).setpoint, 25.0)
 
+    def test_sleep_boost_runs_the_fan_high_then_hands_back_to_the_bands(self):
+        """All'ingresso nella notte fonda il target scende di colpo: la ventola va
+        al massimo per i primi minuti, poi torna alle due bande della notte."""
+        ctrl = self._smart_controller(room=26.0)
+        self._orari(ctrl, target_sleep=23.0)   # finestra dalle 23:30
+        dentro = ctrl._compute(NOW.replace(hour=23, minute=35))
+        self.assertEqual(dentro.fan, "high")
+        self.assertIn("spinta iniziale", dentro.reason)
+        # Passati i quindici minuti la spinta finisce, la stanza e' ancora sopra
+        # il target e si torna a `medium`.
+        dopo = ctrl._compute(NOW.replace(hour=23, minute=50))
+        self.assertEqual(dopo.fan, "medium")
+        self.assertNotIn("spinta iniziale", dopo.reason)
+
+    def test_sleep_boost_does_not_hold_high_through_the_dwell(self):
+        """La permanenza minima frena i declassamenti fra bande, ma `high` non e'
+        una banda della notte: a spinta finita si rientra subito, senza attendere
+        i dieci minuti, altrimenti la ventola resterebbe al massimo in camera."""
+        ctrl = self._smart_controller(room=26.0)
+        self._orari(ctrl, target_sleep=23.0)
+        self.assertEqual(ctrl._compute(NOW.replace(hour=23, minute=35)).fan, "high")
+        # Un minuto dopo la fine della spinta, con la stanza gia' sotto il target:
+        # molto meno dei 600 secondi di permanenza.
+        ctrl.hass.states.values["climate.test"].attributes["current_temperature"] = 21.5
+        self.assertEqual(ctrl._compute(NOW.replace(hour=23, minute=46)).fan, "low")
+
+    def test_sleep_boost_skips_a_room_practically_at_target(self):
+        """Sotto la soglia di scarto la spinta non ha nulla da abbattere: decidono
+        le bande, che a due decimi dal target chiedono `medium`, non `high`."""
+        ctrl = self._smart_controller(room=23.2)
+        self._orari(ctrl, target_sleep=23.0)
+        desired = ctrl._compute(NOW.replace(hour=23, minute=35))
+        self.assertEqual(desired.fan, "medium")
+        self.assertNotIn("spinta iniziale", desired.reason)
+
+    def test_sleep_boost_survives_midnight(self):
+        """Con la finestra che apre a ridosso delle 24 il conteggio dei minuti
+        deve scavalcare la mezzanotte, non tornare negativo."""
+        ctrl = self._smart_controller(room=26.0)
+        self._orari(ctrl, target_sleep=23.0)
+        ctrl.entry.options = dict(ctrl.entry.options, sleep_start="23:55:00")
+        self.assertTrue(ctrl._sleep_boost_active(NOW.replace(hour=0, minute=5)))
+        self.assertFalse(ctrl._sleep_boost_active(NOW.replace(hour=0, minute=15)))
+
     def test_setpoint_offset_shifts_the_command_not_the_target(self):
         ctrl = self._smart_controller(room=27.0)
         ctrl.entry.options = dict(ctrl.entry.options, setpoint_offset=-1.0)

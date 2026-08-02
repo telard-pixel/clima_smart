@@ -111,6 +111,8 @@ from .const import (
     PHASE_WIND_DOWN,
     RESTORE_TIMEOUT_SECONDS,
     SERVICE_CALL_TIMEOUT_SECONDS,
+    SLEEP_BOOST_MIN_DELTA,
+    SLEEP_BOOST_MINUTES,
     SLEEP_START_WINDOW_MINUTES,
     START_REASON_DAY,
     START_REASON_NIGHT,
@@ -945,6 +947,35 @@ class ClimaSmartController:
         )
         return begin <= now < begin + timedelta(minutes=SLEEP_START_WINDOW_MINUTES)
 
+    def _sleep_boost_active(self, now: datetime) -> bool:
+        """The opening minutes of the sleep window, where the fan goes to `high`.
+
+        Read from the clock rather than from a remembered transition, so a restart
+        at 23:05 still knows the boost is running - and, just as important, one at
+        01:00 knows it is long over.
+        """
+        if SLEEP_BOOST_MINUTES <= 0:
+            return False
+        start = _parse_time(
+            self._cfg(CONF_SLEEP_START, DEFAULT_SLEEP_START), DEFAULT_SLEEP_START
+        )
+        elapsed = (now.hour * 60 + now.minute) - (start.hour * 60 + start.minute)
+        if elapsed < 0:
+            # The window normally wraps around midnight (23:00 -> 07:30).
+            elapsed += 24 * 60
+        return elapsed < SLEEP_BOOST_MINUTES
+
+    def _boost_fan(self, delta: float | None, fan_modes: list | None, now: datetime) -> str | None:
+        """`high` while the boost lasts, or None to leave the decision to the bands."""
+        if delta is None or delta < SLEEP_BOOST_MIN_DELTA:
+            return None
+        if fan_modes and "high" not in fan_modes:
+            return None
+        if self._last_fan_band != "high":
+            self._last_fan_band = "high"
+            self._last_fan_band_at = now
+        return "high"
+
     def _read_humidity(self) -> float | None:
         """Indoor relative humidity, if a sensor was configured (MODE_SMART only)."""
         ent = self._cfg(CONF_HUMIDITY)
@@ -1165,13 +1196,18 @@ class ClimaSmartController:
                 self._sleep_start_armed = True
                 self._start_reason = START_REASON_NIGHT
                 self.active_target = self._reachable_target(target, climate)
+                scarto = (room - target) if room is not None else 0.0
+                # L'avvio cade sempre dentro la spinta iniziale, e una stanza che
+                # arriva dal target del giorno e' proprio il caso per cui esiste.
+                partenza = (
+                    self._boost_fan(scarto, climate.attributes.get("fan_modes"), now)
+                    if self._sleep_boost_active(now)
+                    else None
+                )
                 return Desired(
                     hvac=HVAC_COOL,
                     setpoint=target,
-                    fan=_fan_band(
-                        (room - target) if room is not None else 0.0,
-                        FAN_BANDS_SLEEP,
-                    ),
+                    fan=partenza or _fan_band(scarto, FAN_BANDS_SLEEP),
                     reason=f"smart {phase}: avvio della notte, target {target}",
                 )
             perche = (
@@ -1197,6 +1233,7 @@ class ClimaSmartController:
         delta = None if room is None else room - target
         humidity = self._read_humidity()
         hvac_modes = climate.attributes.get("hvac_modes")
+        spinta = False
         if phase == PHASE_WIND_DOWN:
             # The hour before the switch-off: dehumidify with the fan on auto,
             # which takes the edge off the room without cooling it further.
@@ -1206,13 +1243,21 @@ class ClimaSmartController:
             fan = "auto"
         else:
             program = self._program_for(delta, humidity, hvac_modes)
-            fan = self._fan_for(
-                delta,
-                climate.attributes.get("fan_mode"),
-                now,
-                climate.attributes.get("fan_modes"),
-                FAN_BANDS_SLEEP if phase == PHASE_SLEEP else FAN_BANDS,
+            spinta = phase == PHASE_SLEEP and self._sleep_boost_active(now)
+            fan = (
+                self._boost_fan(delta, climate.attributes.get("fan_modes"), now)
+                if spinta
+                else None
             )
+            if fan is None:
+                spinta = False
+                fan = self._fan_for(
+                    delta,
+                    climate.attributes.get("fan_mode"),
+                    now,
+                    climate.attributes.get("fan_modes"),
+                    FAN_BANDS_SLEEP if phase == PHASE_SLEEP else FAN_BANDS,
+                )
         if phase == PHASE_SLEEP:
             alette_h = alette_v = self._cfg(CONF_VANE_SLEEP, DEFAULT_VANE_SLEEP)
         elif phase == PHASE_WIND_DOWN and self._vane_day_due(now):
@@ -1224,6 +1269,8 @@ class ClimaSmartController:
             alette_h = alette_v = None
         alette = alette_h
         detail = f"{program}, ventola {fan or 'invariata'}"
+        if spinta:
+            detail += " (spinta iniziale)"
         if compensazione:
             detail += f", +{compensazione:.1f} per esterna {outdoor:.0f}"
         if alette:

@@ -186,6 +186,15 @@ PHASE_WIND_DOWN = "wind_down"
 # degrees in half an hour, and it took three and a half hours at 40 Hz to come
 # back. Slowing the fan here does not save anything, it just takes the room away.
 FAN_BANDS_SLEEP: tuple[tuple[float, str], ...] = ((-0.5, "medium"), (-100.0, "low"))
+# ...con una sola eccezione, all'ingresso nella finestra: li' il target scende di
+# parecchi gradi in un colpo solo, e la ventola al massimo per i primi minuti
+# abbatte in fretta invece di far lavorare a lungo il compressore in salita.
+# Passata la spinta si torna alle bande qui sopra, e non serve alcuna attesa
+# perche' `high` non e' un passo di questa tabella: `_fan_for` lo scarta come
+# riferimento e riparte subito da media o bassa secondo lo scarto.
+SLEEP_BOOST_MINUTES = 15
+# Sotto questo scarto la stanza e' gia' a posto e la spinta non ha nulla da fare.
+SLEEP_BOOST_MIN_DELTA = 0.3
 # The morning switch-off is a one-shot, not a state to enforce: outside this many
 # minutes past its time it is not attempted at all, so a restart later in the
 # morning cannot switch off a unit the user has just turned back on.
