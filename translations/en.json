@@ -6,7 +6,6 @@
         "description": "Pick the climate to drive and (optionally) the supporting sensors/switches. The controller does not create a new thermostat: it commands the existing one.",
         "data": {
           "climate_entity": "Climate to drive",
-          "presence_entity": "Presence (person or device tracker)",
           "outdoor_sensor": "Outdoor temperature sensor",
           "outdoor_fallback_sensor": "Fallback outdoor sensor",
           "eco_switch": "Eco switch",
@@ -26,7 +25,6 @@
         "description": "Update the linked entities (e.g. after the climate or a switch changed) without losing the tuned parameters.",
         "data": {
           "climate_entity": "Climate to drive",
-          "presence_entity": "Presence (person or device tracker)",
           "outdoor_sensor": "Outdoor temperature sensor",
           "outdoor_fallback_sensor": "Fallback outdoor sensor",
           "eco_switch": "Eco switch",
@@ -57,7 +55,6 @@
         "description": "Values used by the logic. The times delimit the phases: GAP (off) from the morning start to the day start; DAY until the night start; NIGHT the rest.",
         "data": {
           "target_home": "Target when home (°C)",
-          "target_away": "Target when away (°C)",
           "eco_band": "Eco hysteresis (°C): eco OFF at target+band",
           "eco_outdoor_on": "Eco ON when outdoor below (°C)",
           "eco_outdoor_off": "Eco OFF when outdoor above (°C)",
@@ -66,7 +63,6 @@
           "morning_off_start": "Morning off phase start",
           "day_start": "Day phase start",
           "night_start": "Night phase start",
-          "presence_home_state": "Presence entity state meaning \"home\"",
           "target_sleep": "Deep-night target (°C)",
           "setpoint_offset": "Setpoint correction (°C)",
           "sleep_start": "Deep night starts",
@@ -100,8 +96,7 @@
       "invalid_time_order": "Times must be in order: morning off < day < night.",
       "invalid_eco_range": "\"Eco ON when outdoor below\" must be lower than \"Eco OFF when outdoor above\".",
       "invalid_sleep_window": "Deep night cannot start and end at the same time",
-      "invalid_wind_down": "The deep-night window must end before the morning switch-off",
-      "invalid_presence_state": "The presence “home” state cannot be empty"
+      "invalid_wind_down": "The deep-night window must end before the morning switch-off"
     }
   },
   "entity": {
@@ -109,12 +104,8 @@
       "mode": {
         "name": "Mode",
         "state": {
-          "smart": "Adaptive (fixed target, fan and program decided for you)",
-          "auto": "Auto",
-          "comfort": "Comfort",
-          "away": "Away",
-          "night": "Night",
-          "off": "Off"
+          "smart": "Adaptive",
+          "off": "Keep it off"
         }
       }
     },
@@ -147,9 +138,6 @@
     "number": {
       "target_home": {
         "name": "Target when home"
-      },
-      "target_away": {
-        "name": "Target when away"
       },
       "eco_band": {
         "name": "Eco hysteresis"

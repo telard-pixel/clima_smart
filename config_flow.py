@@ -14,11 +14,7 @@ from homeassistant.config_entries import (
 from homeassistant.core import callback
 from homeassistant.helpers import selector
 
-from .validation import (
-    aux_switches_are_distinct,
-    normalise_presence_state,
-    validate_options,
-)
+from .validation import aux_switches_are_distinct, validate_options
 from .const import (
     CONF_ADAPTIVE_MAX,
     CONF_ADAPTIVE_SLOPE,
@@ -42,13 +38,10 @@ from .const import (
     CONF_OUTDOOR,
     CONF_OUTDOOR_FALLBACK,
     CONF_OVERRIDE_MINUTES,
-    CONF_PRESENCE,
-    CONF_PRESENCE_HOME_STATE,
     CONF_SETPOINT_OFFSET,
     CONF_SLEEP_END,
     CONF_SLEEP_START,
     CONF_SUMMER_THRESHOLD,
-    CONF_TARGET_AWAY,
     CONF_TARGET_HOME,
     CONF_TARGET_SLEEP,
     CONF_VANE_DAY_H,
@@ -70,12 +63,10 @@ from .const import (
     DEFAULT_MORNING_OFF_START,
     DEFAULT_NIGHT_START,
     DEFAULT_OVERRIDE_MINUTES,
-    DEFAULT_PRESENCE_HOME_STATE,
     DEFAULT_SETPOINT_OFFSET,
     DEFAULT_SLEEP_END,
     DEFAULT_SLEEP_START,
     DEFAULT_SUMMER_THRESHOLD,
-    DEFAULT_TARGET_AWAY,
     DEFAULT_TARGET_HOME,
     DEFAULT_TARGET_SLEEP,
     DEFAULT_VANE_DAY,
@@ -110,7 +101,6 @@ def _setup_schema(defaults: dict[str, Any]) -> vol.Schema:
             vol.Required(CONF_CLIMATE, default=defaults.get(CONF_CLIMATE)): _entity(
                 "climate"
             ),
-            _optional(CONF_PRESENCE, defaults): _entity(["device_tracker", "person"]),
             _optional(CONF_OUTDOOR, defaults): _entity(
                 "sensor", device_class="temperature"
             ),
@@ -237,9 +227,6 @@ class ClimaSmartOptionsFlow(OptionsFlow):
         if user_input is not None:
             problem = validate_options(user_input)
             if problem is None:
-                user_input[CONF_PRESENCE_HOME_STATE] = normalise_presence_state(
-                    user_input[CONF_PRESENCE_HOME_STATE]
-                )
                 return self.async_create_entry(title="", data=user_input)
             errors["base"] = problem
             # Re-show the form with what the user just typed, not the old values.
@@ -256,9 +243,6 @@ class ClimaSmartOptionsFlow(OptionsFlow):
             {
                 vol.Required(
                     CONF_TARGET_HOME, default=_num(CONF_TARGET_HOME, DEFAULT_TARGET_HOME)
-                ): vol.All(vol.Coerce(float), vol.Range(min=16, max=30)),
-                vol.Required(
-                    CONF_TARGET_AWAY, default=_num(CONF_TARGET_AWAY, DEFAULT_TARGET_AWAY)
                 ): vol.All(vol.Coerce(float), vol.Range(min=16, max=30)),
                 vol.Required(
                     CONF_ECO_BAND, default=_num(CONF_ECO_BAND, DEFAULT_ECO_BAND)
@@ -326,7 +310,6 @@ class ClimaSmartOptionsFlow(OptionsFlow):
                 vol.Required(CONF_MORNING_OFF_START, default=_num(CONF_MORNING_OFF_START, DEFAULT_MORNING_OFF_START)): selector.TimeSelector(),
                 vol.Required(CONF_DAY_START, default=_num(CONF_DAY_START, DEFAULT_DAY_START)): selector.TimeSelector(),
                 vol.Required(CONF_NIGHT_START, default=_num(CONF_NIGHT_START, DEFAULT_NIGHT_START)): selector.TimeSelector(),
-                vol.Required(CONF_PRESENCE_HOME_STATE, default=_num(CONF_PRESENCE_HOME_STATE, DEFAULT_PRESENCE_HOME_STATE)): str,
             }
         )
         return self.async_show_form(step_id="init", data_schema=schema, errors=errors)

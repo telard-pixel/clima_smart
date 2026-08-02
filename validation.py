@@ -18,7 +18,6 @@ from .const import (
     CONF_MUTE_SWITCH,
     CONF_NIGHT_START,
     CONF_NIGHT_SWITCH,
-    CONF_PRESENCE_HOME_STATE,
     CONF_SLEEP_END,
     CONF_SLEEP_START,
 )
@@ -38,10 +37,6 @@ def aux_switches_are_distinct(values: dict[str, Any]) -> bool:
         if values.get(key)
     ]
     return len(selected) == len(set(selected))
-
-
-def normalise_presence_state(value: Any) -> str:
-    return str(value).strip()
 
 
 def validate_options(values: dict[str, Any]) -> str | None:
@@ -72,10 +67,5 @@ def validate_options(values: dict[str, Any]) -> str | None:
         # _eco_decision checks the "on" condition first: a swapped or equal pair
         # makes the "off" branch unreachable and eco gets stuck on.
         return "invalid_eco_range"
-
-    if not normalise_presence_state(values[CONF_PRESENCE_HOME_STATE]):
-        # An empty string never equals a tracker state, so the controller would
-        # silently use the away target forever.
-        return "invalid_presence_state"
 
     return None

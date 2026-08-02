@@ -6,7 +6,7 @@ Non crea un nuovo `climate`: **pilota quello che hai già** tramite normali serv
 call, replicando — e rendendo configurabile da UI — una logica di automazione
 validata per il comfort con risparmio energetico.
 
-## Modo Adattivo (`smart`)
+## Il modo Adattivo, che è l'unico
 
 Il modo per «imposto 25 gradi e al resto pensa tu». Tiene **un solo target** (quello
 di casa, la presenza non conta), applica le stesse fasce orarie di `auto`, e in più
@@ -75,7 +75,7 @@ dire 25 mentre all'unità arriva 24.
 ## Entità
 
 - **Switch** `Attivo` — abilita/disabilita il controllo (off = controllo manuale del clima).
-- **Select** `Modo` — adattivo / auto / comfort / away / notte / spento.
+- **Select** `Modo` — **adattivo** oppure **tieni spento**. Nient'altro.
 - **Number** — target casa/fuori/notte fonda, correzione setpoint, isteresi eco,
   soglie eco-esterno, soglia stagione calda, override (min).
 - **Sensor** (diagnostici) — fase corrente, target attivo, media di casa, stato/motivo dell'ultima decisione.
@@ -94,7 +94,12 @@ I parametri di tuning si regolano poi dalle entità `number`/`select`, oppure da
 ## Note
 
 - Testata su Home Assistant 2026.7.2.
-- Stato attuale: `0.17.0` — **target adattivo sull'esterna**: sopra una soglia il
+- Stato attuale: `0.18.0` — **restano due soli modi**, adattivo e «tieni spento»:
+  auto, comfort, away e notte erano il ricalco dell'automazione originale e la
+  logica adattiva li comprende tutti. Con loro se ne vanno presenza, target fuori
+  e stato «a casa», che servivano solo a quelli. «Tieni spento» non è un doppione
+  dello switch master: quello ferma il controller, questo tiene spenta l'unità.
+- `0.17.0` — **target adattivo sull'esterna**: sopra una soglia il
   target sale in proporzione fino a un massimo, a mezzi gradi, così nell'ora più
   calda la macchina non insegue un divario che non le compete.
 - `0.16.0` — le alette tornano **ferme di giorno**: la posizione

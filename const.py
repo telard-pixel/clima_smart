@@ -8,7 +8,6 @@ PLATFORMS: list[str] = ["switch", "select", "number", "sensor"]
 
 # --- Config-entry data keys (set once in the config flow) ---
 CONF_CLIMATE = "climate_entity"
-CONF_PRESENCE = "presence_entity"
 CONF_OUTDOOR = "outdoor_sensor"
 CONF_OUTDOOR_FALLBACK = "outdoor_fallback_sensor"
 CONF_ECO_SWITCH = "eco_switch"
@@ -25,7 +24,6 @@ CONF_VANE_V = "vane_vertical"
 
 # --- Option keys (tunable at runtime via the options flow / number / select) ---
 CONF_TARGET_HOME = "target_home"
-CONF_TARGET_AWAY = "target_away"
 CONF_ECO_BAND = "eco_band"
 CONF_ECO_OUTDOOR_ON = "eco_outdoor_on"
 CONF_ECO_OUTDOOR_OFF = "eco_outdoor_off"
@@ -39,7 +37,6 @@ CONF_MORNING_OFF_START = "morning_off_start"
 CONF_TARGET_SLEEP = "target_sleep"
 CONF_SLEEP_START = "sleep_start"
 CONF_SLEEP_END = "sleep_end"
-CONF_PRESENCE_HOME_STATE = "presence_home_state"
 # Split units read the return air, not the room, and stop short: measured here the
 # room settled 0.5-1.0 above a 25.0 setpoint. This shifts what we send to the unit
 # without touching the target we aim the room at, so the diagnostics stay honest.
@@ -84,7 +81,6 @@ CONF_ADAPTIVE_MAX = "adaptive_max"
 
 # --- Defaults (validated values from the original automation) ---
 DEFAULT_TARGET_HOME = 26.0
-DEFAULT_TARGET_AWAY = 27.0
 DEFAULT_ECO_BAND = 2.0
 DEFAULT_ECO_OUTDOOR_ON = 33.0
 DEFAULT_ECO_OUTDOOR_OFF = 34.0
@@ -106,7 +102,6 @@ DEFAULT_AUTO_START_OUTDOOR = 0.0
 DEFAULT_ADAPTIVE_START = 0.0      # zero disattiva del tutto l'adattamento
 DEFAULT_ADAPTIVE_SLOPE = 0.25     # un quarto di grado di target per grado esterno
 DEFAULT_ADAPTIVE_MAX = 1.5
-DEFAULT_PRESENCE_HOME_STATE = "home"
 
 # While the unit is already cooling, the season threshold drops by this much, so a
 # cycle in progress is not cut off by a small dip in the outdoor reading.
@@ -132,23 +127,15 @@ COMMAND_SETTLE_SECONDS = 180
 SERVICE_CALL_TIMEOUT_SECONDS = 60
 
 # --- Operating modes (the "Modo" select) ---
-MODE_AUTO = "auto"
-MODE_COMFORT = "comfort"
-MODE_AWAY = "away"
-MODE_NIGHT = "night"
 MODE_OFF = "off"
-# Fixed target (never the away one) plus the day/night phases, and on top of that
-# the fan step and the program are driven by indoor/outdoor readings instead of
-# being pinned to "auto".
+# L'unico modo di controllo: target fisso con le fasce orarie, ventola e programma
+# decisi dai sensori, target adattato alla temperatura esterna.
 MODE_SMART = "smart"
-MODES: list[str] = [
-    MODE_SMART,
-    MODE_AUTO,
-    MODE_COMFORT,
-    MODE_AWAY,
-    MODE_NIGHT,
-    MODE_OFF,
-]
+# Due soli modi. Gli altri quattro erano il ricalco dell'automazione originale e
+# nessuno li usava: la logica adattiva li comprende tutti. `off` resta perche' non
+# e' un doppione dello switch master - quello dice "non toccare niente", questo
+# dice "tienilo spento", che con gli avvii automatici e' un'altra cosa.
+MODES: list[str] = [MODE_SMART, MODE_OFF]
 
 # --- MODE_SMART: fan steps by how far the room still is above target ---
 # Read as: 2 degrees or more above -> high, 1 or more -> medium, otherwise low.

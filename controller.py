@@ -51,13 +51,10 @@ from .const import (
     CONF_OUTDOOR,
     CONF_OUTDOOR_FALLBACK,
     CONF_OVERRIDE_MINUTES,
-    CONF_PRESENCE,
-    CONF_PRESENCE_HOME_STATE,
     CONF_SETPOINT_OFFSET,
     CONF_SLEEP_END,
     CONF_SLEEP_START,
     CONF_SUMMER_THRESHOLD,
-    CONF_TARGET_AWAY,
     CONF_TARGET_HOME,
     CONF_TARGET_SLEEP,
     CONF_VANE_DAY_H,
@@ -79,12 +76,10 @@ from .const import (
     DEFAULT_MORNING_OFF_START,
     DEFAULT_NIGHT_START,
     DEFAULT_OVERRIDE_MINUTES,
-    DEFAULT_PRESENCE_HOME_STATE,
     DEFAULT_SETPOINT_OFFSET,
     DEFAULT_SLEEP_END,
     DEFAULT_SLEEP_START,
     DEFAULT_SUMMER_THRESHOLD,
-    DEFAULT_TARGET_AWAY,
     DEFAULT_TARGET_HOME,
     DEFAULT_TARGET_SLEEP,
     DEFAULT_VANE_DAY,
@@ -105,10 +100,6 @@ from .const import (
     HVAC_OFF,
     MIN_FAN_DWELL_SECONDS,
     MODES,
-    MODE_AUTO,
-    MODE_AWAY,
-    MODE_COMFORT,
-    MODE_NIGHT,
     MODE_OFF,
     MODE_SMART,
     MORNING_OFF_WINDOW_MINUTES,
@@ -254,7 +245,7 @@ class ClimaSmartController:
 
         # Runtime state (surfaced/edited through entities)
         self.enabled: bool = False      # fail-safe until master restore completes
-        self.mode: str = MODE_AUTO      # "Modo" select (restored on startup)
+        self.mode: str = MODE_SMART     # "Modo" select (restored on startup)
         self._override_until: datetime | None = None
         # Settle windows are tracked per command source, not as one shared
         # timestamp: an aux-switch command (eco/mute/night) must not mask
@@ -275,11 +266,6 @@ class ClimaSmartController:
         self._last_aux_cmd: dict[str, bool] = {}
         # Quando l'unita' ha rifiutato un nostro comando su uno switch ausiliario.
         self._aux_refused_at: dict[str, datetime] = {}
-        # Fail safe to the last trustworthy presence value. At startup, an
-        # unavailable tracker is treated as home instead of silently switching to
-        # the away target.
-        self._last_presence_home = True
-
         # MODE_SMART: the fan step we last decided and when, so a downgrade has to
         # wait out MIN_FAN_DWELL_SECONDS instead of chasing every tenth of a degree.
         self._last_fan_band: str | None = None
@@ -332,16 +318,8 @@ class ClimaSmartController:
         return self.entry.data[CONF_CLIMATE]
 
     @property
-    def presence_entity(self) -> str | None:
-        return self._cfg(CONF_PRESENCE) or None
-
-    @property
     def target_home(self) -> float:
         return float(self._cfg(CONF_TARGET_HOME, DEFAULT_TARGET_HOME))
-
-    @property
-    def target_away(self) -> float:
-        return float(self._cfg(CONF_TARGET_AWAY, DEFAULT_TARGET_AWAY))
 
     @property
     def target_sleep(self) -> float:
@@ -375,8 +353,6 @@ class ClimaSmartController:
     async def async_start(self) -> None:
         self._started = True
         watched = {self.climate_entity}
-        if self.presence_entity:
-            watched.add(self.presence_entity)
         for conf_key in (CONF_OUTDOOR, CONF_OUTDOOR_FALLBACK):
             if ent := self._cfg(conf_key):
                 watched.add(ent)
@@ -785,17 +761,6 @@ class ClimaSmartController:
         back = _convert_temperature(snapped, unit, UnitOfTemperature.CELSIUS)
         return target if back is None else back
 
-    def _is_home(self) -> bool:
-        ent = self.presence_entity
-        if not ent:
-            return True
-        st = self.hass.states.get(ent)
-        if st is None or st.state in _UNAVAILABLE:
-            return self._last_presence_home
-        home_state = self._cfg(CONF_PRESENCE_HOME_STATE, DEFAULT_PRESENCE_HOME_STATE)
-        self._last_presence_home = st.state == home_state
-        return self._last_presence_home
-
     def _phase(self, now: datetime) -> str:
         t = now.time()
         morning = _parse_time(
@@ -1086,7 +1051,6 @@ class ClimaSmartController:
             UnitOfTemperature.CELSIUS,
         )
         outdoor, outdoor_valid = self._read_outdoor()
-        is_home = self._is_home()
 
         if outdoor_valid:
             summer = (
@@ -1102,46 +1066,13 @@ class ClimaSmartController:
             # reading that could actually be caused by winter heating.
             summer = cur_mode == HVAC_COOL
 
-        # Forced manual modes ignore presence/time.
         if self.mode == MODE_OFF:
             self.current_phase = None
             self.active_target = None
             return Desired(hvac=HVAC_OFF, reason="modo Spento")
 
-        if self.mode in (MODE_COMFORT, MODE_AWAY, MODE_NIGHT):
-            # Forced modes ignore presence/time, but still respect season and a
-            # running heating cycle: never force cooling in winter or over heat.
-            self.current_phase = None
-            if cur_mode == HVAC_HEAT:
-                self.active_target = None
-                return Desired(
-                    reason=f"modo {self.mode}: clima in heat, non intervengo"
-                )
-            if not summer:
-                self.active_target = None
-                if cur_mode == HVAC_COOL:
-                    return Desired(
-                        hvac=HVAC_OFF,
-                        reason=f"modo {self.mode}: fuori stagione, spengo cool",
-                    )
-                return Desired(
-                    reason=f"modo {self.mode}: fuori stagione, non tocco"
-                )
-            target = self.target_away if self.mode == MODE_AWAY else self.target_home
-            self.active_target = self._reachable_target(target, climate)
-            night = self.mode == MODE_NIGHT
-            return Desired(
-                hvac=HVAC_COOL,
-                setpoint=target,
-                fan=None if night else "auto",
-                eco=self._eco_decision(room, target, outdoor),
-                mute=night,
-                night=night,
-                reason=f"modo {self.mode}",
-            )
-
-        # MODE_AUTO replicates the validated automation; MODE_SMART shares its
-        # phases and season guards and only decides target, fan and program itself.
+        # Da qui in poi c'e' un solo percorso: fasce orarie, guardie di stagione, e
+        # le decisioni prese dai sensori.
         phase = self._phase(now)
         self.current_phase = phase
         # The sleep window is a stretch of the night: same quiet behaviour, colder
@@ -1186,14 +1117,9 @@ class ClimaSmartController:
                 reason="clima in heat: non tocco hvac/setpoint, aggiorno muto/notte",
             )
 
-        # MODE_SMART keeps one target whatever the presence says: it is the mode for
-        # "I set 25 and you deal with the rest".
-        smart = self.mode == MODE_SMART
+        # Un solo target, sempre quello di casa: "imposto 25 e al resto pensa tu".
         night_window = phase in (PHASE_SLEEP, PHASE_WIND_DOWN)
-        if night_window:
-            target = self.target_sleep
-        else:
-            target = self.target_home if (smart or is_home) else self.target_away
+        target = self.target_sleep if night_window else self.target_home
         # Adattamento all'esterna: vale solo qui, nel percorso automatico. I modi
         # forzati a mano restano quello che l'utente ha chiesto, senza sorprese.
         compensazione = self._adaptive_extra(outdoor)
@@ -1201,104 +1127,94 @@ class ClimaSmartController:
         self.adaptive_extra = compensazione
         self.active_target = self._reachable_target(target, climate)
 
-        if smart:
-            # MODE_SMART never starts the unit: the user decides when it runs, we
-            # decide how it runs, and the only switch-off we do is the scheduled one.
-            if cur_mode == HVAC_OFF:
-                # L'unica eccezione alla regola "non accendo mai": l'avvio della
-                # notte, se l'utente l'ha chiesto, e una volta sola.
-                if phase == PHASE_SLEEP and self._sleep_start_due(now):
-                    self._sleep_start_armed = True
-                    self._start_reason = START_REASON_NIGHT
-                    self.active_target = self._reachable_target(target, climate)
-                    return Desired(
-                        hvac=HVAC_COOL,
-                        setpoint=target,
-                        fan=_fan_band(
-                            (room - target) if room is not None else 0.0,
-                            FAN_BANDS_SLEEP,
-                        ),
-                        reason=f"smart {phase}: avvio della notte, target {target}",
-                    )
-                perche = (
-                    self._day_start_due(now, room, outdoor)
-                    if phase == PHASE_DAY
-                    else None
+        # MODE_SMART never starts the unit: the user decides when it runs, we
+        # decide how it runs, and the only switch-off we do is the scheduled one.
+        if cur_mode == HVAC_OFF:
+            # L'unica eccezione alla regola "non accendo mai": l'avvio della
+            # notte, se l'utente l'ha chiesto, e una volta sola.
+            if phase == PHASE_SLEEP and self._sleep_start_due(now):
+                self._sleep_start_armed = True
+                self._start_reason = START_REASON_NIGHT
+                self.active_target = self._reachable_target(target, climate)
+                return Desired(
+                    hvac=HVAC_COOL,
+                    setpoint=target,
+                    fan=_fan_band(
+                        (room - target) if room is not None else 0.0,
+                        FAN_BANDS_SLEEP,
+                    ),
+                    reason=f"smart {phase}: avvio della notte, target {target}",
                 )
-                if perche is not None:
-                    self._sleep_start_armed = True
-                    self._start_reason = START_REASON_DAY
-                    self.active_target = self._reachable_target(target, climate)
-                    return Desired(
-                        hvac=HVAC_COOL,
-                        setpoint=target,
-                        fan=_fan_band(
-                            (room - target) if room is not None else 0.0, FAN_BANDS
-                        ),
-                        reason=f"smart {phase}: avvio, {perche}",
-                    )
-                self.active_target = None
-                return Desired(reason=f"smart {phase}: clima spento, non lo accendo io")
-
-            delta = None if room is None else room - target
-            humidity = self._read_humidity()
-            hvac_modes = climate.attributes.get("hvac_modes")
-            if phase == PHASE_WIND_DOWN:
-                # The hour before the switch-off: dehumidify with the fan on auto,
-                # which takes the edge off the room without cooling it further.
-                program = (
-                    HVAC_DRY if not hvac_modes or HVAC_DRY in hvac_modes else HVAC_COOL
-                )
-                fan = "auto"
-            else:
-                program = self._program_for(delta, humidity, hvac_modes)
-                fan = self._fan_for(
-                    delta,
-                    climate.attributes.get("fan_mode"),
-                    now,
-                    climate.attributes.get("fan_modes"),
-                    FAN_BANDS_SLEEP if phase == PHASE_SLEEP else FAN_BANDS,
-                )
-            if phase == PHASE_SLEEP:
-                alette_h = alette_v = self._cfg(CONF_VANE_SLEEP, DEFAULT_VANE_SLEEP)
-            elif phase == PHASE_WIND_DOWN and self._vane_day_due(now):
-                # Fine della notte: le alette tornano ferme, una volta sola.
-                self._vane_restored_on = now.date()
-                alette_h = self._cfg(CONF_VANE_DAY_H, DEFAULT_VANE_DAY) or None
-                alette_v = self._cfg(CONF_VANE_DAY_V, DEFAULT_VANE_DAY) or None
-            else:
-                alette_h = alette_v = None
-            alette = alette_h
-            detail = f"{program}, ventola {fan or 'invariata'}"
-            if compensazione:
-                detail += f", +{compensazione:.1f} per esterna {outdoor:.0f}"
-            if alette:
-                detail += f", alette {alette}"
-            if delta is not None:
-                detail += f", scarto {delta:+.1f}"
-            if humidity is not None:
-                detail += f", umidità {humidity:.0f}%"
-            return Desired(
-                hvac=program,
-                setpoint=target,
-                fan=fan,
-                eco=self._eco_decision(room, target, outdoor),
-                mute=is_night,
-                night=is_night,
-                vane_h=alette_h,
-                vane_v=alette_v,
-                reason=f"smart {phase}: target {target}, {detail}",
+            perche = (
+                self._day_start_due(now, room, outdoor)
+                if phase == PHASE_DAY
+                else None
             )
+            if perche is not None:
+                self._sleep_start_armed = True
+                self._start_reason = START_REASON_DAY
+                self.active_target = self._reachable_target(target, climate)
+                return Desired(
+                    hvac=HVAC_COOL,
+                    setpoint=target,
+                    fan=_fan_band(
+                        (room - target) if room is not None else 0.0, FAN_BANDS
+                    ),
+                    reason=f"smart {phase}: avvio, {perche}",
+                )
+            self.active_target = None
+            return Desired(reason=f"smart {phase}: clima spento, non lo accendo io")
 
+        delta = None if room is None else room - target
+        humidity = self._read_humidity()
+        hvac_modes = climate.attributes.get("hvac_modes")
+        if phase == PHASE_WIND_DOWN:
+            # The hour before the switch-off: dehumidify with the fan on auto,
+            # which takes the edge off the room without cooling it further.
+            program = (
+                HVAC_DRY if not hvac_modes or HVAC_DRY in hvac_modes else HVAC_COOL
+            )
+            fan = "auto"
+        else:
+            program = self._program_for(delta, humidity, hvac_modes)
+            fan = self._fan_for(
+                delta,
+                climate.attributes.get("fan_mode"),
+                now,
+                climate.attributes.get("fan_modes"),
+                FAN_BANDS_SLEEP if phase == PHASE_SLEEP else FAN_BANDS,
+            )
+        if phase == PHASE_SLEEP:
+            alette_h = alette_v = self._cfg(CONF_VANE_SLEEP, DEFAULT_VANE_SLEEP)
+        elif phase == PHASE_WIND_DOWN and self._vane_day_due(now):
+            # Fine della notte: le alette tornano ferme, una volta sola.
+            self._vane_restored_on = now.date()
+            alette_h = self._cfg(CONF_VANE_DAY_H, DEFAULT_VANE_DAY) or None
+            alette_v = self._cfg(CONF_VANE_DAY_V, DEFAULT_VANE_DAY) or None
+        else:
+            alette_h = alette_v = None
+        alette = alette_h
+        detail = f"{program}, ventola {fan or 'invariata'}"
+        if compensazione:
+            detail += f", +{compensazione:.1f} per esterna {outdoor:.0f}"
+        if alette:
+            detail += f", alette {alette}"
+        if delta is not None:
+            detail += f", scarto {delta:+.1f}"
+        if humidity is not None:
+            detail += f", umidità {humidity:.0f}%"
         return Desired(
-            hvac=HVAC_COOL,
+            hvac=program,
             setpoint=target,
-            fan=None if is_night else "auto",
+            fan=fan,
             eco=self._eco_decision(room, target, outdoor),
             mute=is_night,
             night=is_night,
-            reason=f"auto {phase}: target {target}{' (fuori)' if not is_home else ''}",
+            vane_h=alette_h,
+            vane_v=alette_v,
+            reason=f"smart {phase}: target {target}, {detail}",
         )
+
 
     # ---------------------------------------------------------------- apply
     async def async_evaluate(self, trigger: str) -> None:
@@ -1516,7 +1432,7 @@ class ClimaSmartController:
             await self._apply_switch(CONF_ECO_SWITCH, desired.eco)
 
         # Mute / night quietness follow the day/night phase independently of
-        # hvac mode (see _compute's heat branch in MODE_AUTO).
+        # hvac mode (vedi il ramo `heat` di _compute).
         await self._apply_switch(CONF_MUTE_SWITCH, desired.mute)
         await self._apply_switch(CONF_NIGHT_SWITCH, desired.night)
         # Alette: chieste solo dentro la notte fonda, fuori restano dove sono.

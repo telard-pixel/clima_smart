@@ -212,16 +212,6 @@ class ControllerRegressionTests(unittest.TestCase):
         )
         self.assertTrue(ctrl.override_active)
 
-    def test_unavailable_presence_keeps_last_known_value(self):
-        data = {
-            "climate_entity": "climate.test",
-            "presence_entity": "person.test",
-        }
-        ctrl = make_controller({"person.test": State("home")}, data)
-        self.assertTrue(ctrl._is_home())
-        ctrl.hass.states.values["person.test"] = State("unavailable")
-        self.assertTrue(ctrl._is_home())
-
     def test_failed_hvac_call_clears_settle_window(self):
         ctrl = make_controller(
             {"climate.test": State("off", {"temperature": 25})}
@@ -310,7 +300,7 @@ class ControllerRegressionTests(unittest.TestCase):
         )
         ctrl = make_controller({"climate.test": climate})
         ctrl.hass.config.units.temperature_unit = "°F"
-        ctrl.mode = "comfort"
+        ctrl.mode = "smart"
         desired = ctrl._compute(NOW)
         self.assertEqual(desired.setpoint, ctrl.target_home)
 
@@ -385,7 +375,7 @@ class ControllerRegressionTests(unittest.TestCase):
             },
         )
         ctrl = make_controller({"climate.test": climate})
-        ctrl.mode = "comfort"
+        ctrl.mode = "smart"
         ctrl.entry.options = {"target_home": 25.5}
         desired = ctrl._compute(NOW)
         # Il sensore diagnostico deve dire 26, non il 25.5 che nessuno terrà.
@@ -441,16 +431,6 @@ class ControllerRegressionTests(unittest.TestCase):
             desired = ctrl._compute(GIORNO)
             self.assertEqual(desired.fan, expected, f"stanza {room}")
             self.assertEqual(desired.setpoint, 25.0)
-
-    def test_smart_ignores_presence(self):
-        """Il target resta quello di casa anche con la presenza a 'not_home'."""
-        ctrl = self._smart_controller(room=27.0)
-        ctrl.entry.data = dict(
-            ctrl.entry.data, presence_entity="person.test"
-        )
-        ctrl.hass.states.values["person.test"] = State("not_home")
-        desired = ctrl._compute(GIORNO)
-        self.assertEqual(desired.setpoint, 25.0)   # non 30 (target_away)
 
     def test_smart_fan_upgrades_at_once_but_downgrades_slowly(self):
         ctrl = self._smart_controller(room=27.5)
@@ -1043,10 +1023,14 @@ class ControllerRegressionTests(unittest.TestCase):
         ctrl.entry.options = dict(ctrl.entry.options, target_home=25.0)
         self.assertEqual(ctrl._compute(GIORNO).setpoint, 25.0)
 
-    def test_adaptive_target_does_not_touch_the_manual_modes(self):
+    def test_keep_it_off_wins_over_everything(self):
+        """L'unico altro modo rimasto: il controller tiene spenta l'unita' e non
+        adatta un bel niente, per quanto faccia caldo."""
         ctrl = self._con_adattivo(38.0)
-        ctrl.mode = "comfort"
-        self.assertEqual(ctrl._compute(GIORNO).setpoint, 25.0)
+        ctrl.mode = "off"
+        desired = ctrl._compute(GIORNO)
+        self.assertEqual(desired.hvac, "off")
+        self.assertIsNone(desired.setpoint)
 
     # --------------------------------------------- alette nella notte fonda
     def _con_alette(self, posizioni=("position_0", "position_3", "swing")):
@@ -1241,7 +1225,6 @@ class ValidationTests(unittest.TestCase):
         "sleep_end": "07:30:00",
         "eco_outdoor_on": 33.0,
         "eco_outdoor_off": 35.0,
-        "presence_home_state": "home",
     }
 
     def valida(self, **cambi):
@@ -1276,17 +1259,6 @@ class ValidationTests(unittest.TestCase):
         self.assertEqual(
             self.valida(eco_outdoor_on=36.0), "invalid_eco_range"
         )
-
-    def test_stato_presenza_vuoto(self):
-        for valore in ("", "   "):
-            self.assertEqual(
-                self.valida(presence_home_state=valore),
-                "invalid_presence_state",
-                repr(valore),
-            )
-
-    def test_stato_presenza_ripulito(self):
-        self.assertEqual(validation.normalise_presence_state("  home "), "home")
 
     def test_switch_ausiliari_distinti(self):
         self.assertTrue(
