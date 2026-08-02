@@ -28,6 +28,7 @@ from homeassistant.util.unit_conversion import TemperatureConverter
 from .const import (
     AUX_REFUSAL_BACKOFF_SECONDS,
     COMMAND_SETTLE_SECONDS,
+    ADAPTIVE_MIN_DWELL_SECONDS,
     ADAPTIVE_QUANTUM,
     CONF_ADAPTIVE_MAX,
     CONF_ADAPTIVE_SLOPE,
@@ -285,8 +286,10 @@ class ClimaSmartController:
         # Diagnostics (read by sensors)
         self.current_phase: str | None = None
         self.active_target: float | None = None
-        # Quanto il target e' stato alzato per via del caldo esterno.
+        # Quanto il target e' stato alzato per via del caldo esterno, e quando e'
+        # cambiato l'ultima volta.
         self.adaptive_extra: float = 0.0
+        self._adaptive_changed_at: datetime | None = None
         self.last_reason: str = "inizializzazione"
         # Fuori dallo stato del sensore: cambiano a ogni passata e riempirebbero
         # il recorder di righe identiche nel contenuto.
@@ -814,12 +817,15 @@ class ClimaSmartController:
         )
         return begin <= now < begin + timedelta(minutes=MORNING_OFF_WINDOW_MINUTES)
 
-    def _adaptive_extra(self, outdoor: float | None) -> float:
+    def _adaptive_extra(self, outdoor: float | None, now: datetime) -> float:
         """How much to raise the target because it is very hot outside.
 
-        Zero below the threshold, then proportional and capped. Quantised to half
-        degrees: the station reports whole degrees, so the compensation moves in
-        clean steps instead of wobbling on decimals.
+        Zero below the threshold, then proportional and capped, quantised to half
+        degrees. Quantising alone was not enough: the station reports whole
+        degrees and swings across the threshold, so the compensation flipped every
+        few minutes and each flip was a setpoint command. Going up is immediate,
+        coming down needs a whole quantum of margin, and either way a change waits
+        out ADAPTIVE_MIN_DWELL_SECONDS.
         """
         inizio = float(self._cfg(CONF_ADAPTIVE_START, DEFAULT_ADAPTIVE_START) or 0.0)
         if inizio <= 0 or outdoor is None or outdoor <= inizio:
@@ -829,7 +835,22 @@ class ClimaSmartController:
         if pendenza <= 0 or massimo <= 0:
             return 0.0
         grezzo = min((outdoor - inizio) * pendenza, massimo)
-        return math.floor(grezzo / ADAPTIVE_QUANTUM + 0.5) * ADAPTIVE_QUANTUM
+        nuovo = math.floor(grezzo / ADAPTIVE_QUANTUM + 0.5) * ADAPTIVE_QUANTUM
+        corrente = self.adaptive_extra
+        if nuovo == corrente:
+            return corrente
+        if nuovo < corrente and grezzo > corrente - ADAPTIVE_QUANTUM:
+            # Non basta scendere sotto la meta' del gradino: serve tornare sotto
+            # la soglia che aveva fatto salire.
+            return corrente
+        if (
+            self._adaptive_changed_at is not None
+            and (now - self._adaptive_changed_at).total_seconds()
+            < ADAPTIVE_MIN_DWELL_SECONDS
+        ):
+            return corrente
+        self._adaptive_changed_at = now
+        return nuovo
 
     def _house_average(self) -> float | None:
         """Average of the other rooms' thermometers, in Celsius.
@@ -1122,7 +1143,7 @@ class ClimaSmartController:
         target = self.target_sleep if night_window else self.target_home
         # Adattamento all'esterna: vale solo qui, nel percorso automatico. I modi
         # forzati a mano restano quello che l'utente ha chiesto, senza sorprese.
-        compensazione = self._adaptive_extra(outdoor)
+        compensazione = self._adaptive_extra(outdoor, now)
         target += compensazione
         self.adaptive_extra = compensazione
         self.active_target = self._reachable_target(target, climate)

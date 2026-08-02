@@ -110,6 +110,12 @@ SUMMER_HYSTERESIS = 2.0
 # L'adattamento si muove a mezzi gradi: la stazione riporta gradi interi, quindi
 # la compensazione cambia a scatti netti invece di oscillare sui decimali.
 ADAPTIVE_QUANTUM = 0.5
+# Due difese contro il ballo, le stesse della ventola. Salire e' immediato: se
+# fuori si alza sul serio, il target deve seguire. Scendere richiede un quanto
+# intero di margine, cioe' che l'esterna torni sotto la soglia che aveva fatto
+# salire. E fra un cambio e l'altro passa comunque questo tempo, cosi' una
+# stazione che oscilla fra 33 e 35 non produce un comando ogni cinque minuti.
+ADAPTIVE_MIN_DWELL_SECONDS = 1200
 
 # How long async_start waits for the master switch and the mode select to restore
 # before opening the barrier in degraded mode.

@@ -1000,6 +1000,23 @@ class ControllerRegressionTests(unittest.TestCase):
         )
         return ctrl
 
+    def test_adaptive_target_does_not_flip_on_a_wobbling_station(self):
+        """La stazione riporta gradi interi e oscilla a cavallo della soglia: senza
+        difese la compensazione ballava ogni cinque minuti, e ogni ballo era un
+        comando di setpoint alla macchina - beep compreso."""
+        ctrl = self._con_adattivo(34.0)
+        t0 = GIORNO
+        self.assertEqual(ctrl._adaptive_extra(34.0, t0), 0.5)
+        # torna a 33: non deve ridiscendere subito
+        self.assertEqual(ctrl._adaptive_extra(33.0, t0 + timedelta(minutes=5)), 0.5)
+        # e nemmeno risalire e riscendere di continuo
+        self.assertEqual(ctrl._adaptive_extra(34.0, t0 + timedelta(minutes=10)), 0.5)
+        # passata l'attesa e tornata l'esterna sotto la soglia, scende
+        dopo = t0 + timedelta(
+            seconds=controller_module.ADAPTIVE_MIN_DWELL_SECONDS + 60
+        )
+        self.assertEqual(ctrl._adaptive_extra(32.0, dopo), 0.0)
+
     def test_adaptive_target_raises_only_when_it_is_hot(self):
         casi = {30.0: 25.0, 33.0: 25.0, 34.0: 25.5, 36.0: 26.0, 38.0: 26.5}
         for esterna, atteso in casi.items():
@@ -1014,7 +1031,7 @@ class ControllerRegressionTests(unittest.TestCase):
     def test_adaptive_target_moves_in_half_degrees(self):
         """La stazione riporta gradi interi: la compensazione deve fare scatti
         netti, non inseguire i decimali."""
-        valori = {self._con_adattivo(e)._adaptive_extra(e) for e in (34.0, 34.9)}
+        valori = {self._con_adattivo(e)._adaptive_extra(e, GIORNO) for e in (34.0, 34.9)}
         self.assertEqual(valori, {0.5})
 
     def test_adaptive_target_off_by_default(self):
