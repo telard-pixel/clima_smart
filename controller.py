@@ -1512,7 +1512,9 @@ class ClimaSmartController:
         await self._apply_switch(CONF_NIGHT_SWITCH, desired.night)
         # Alette: chieste solo dentro la notte fonda, fuori restano dove sono.
         restore_vanes = (
-            self.current_phase == PHASE_WIND_DOWN and self._vane_day_due(now)
+            self.current_phase == PHASE_WIND_DOWN
+            and self._vane_day_due(now)
+            and (desired.vane_h is not None or desired.vane_v is not None)
         )
         vane_h_done = await self._apply_select(CONF_VANE_H, desired.vane_h)
         vane_v_done = await self._apply_select(CONF_VANE_V, desired.vane_v)

@@ -301,7 +301,7 @@ class ControllerRegressionTests(unittest.TestCase):
         ctrl = make_controller({"climate.test": climate})
         ctrl.hass.config.units.temperature_unit = "°F"
         ctrl.mode = "smart"
-        desired = ctrl._compute(NOW)
+        desired = ctrl._compute(GIORNO)
         self.assertEqual(desired.setpoint, ctrl.target_home)
 
     def test_linked_entity_change_requires_reload(self):
@@ -377,7 +377,7 @@ class ControllerRegressionTests(unittest.TestCase):
         ctrl = make_controller({"climate.test": climate})
         ctrl.mode = "smart"
         ctrl.entry.options = {"target_home": 25.5}
-        desired = ctrl._compute(NOW)
+        desired = ctrl._compute(GIORNO)
         # Il sensore diagnostico deve dire 26, non il 25.5 che nessuno terrà.
         self.assertEqual(ctrl.active_target, 26.0)
 
@@ -1177,6 +1177,45 @@ class ControllerRegressionTests(unittest.TestCase):
         asyncio.run(ctrl._apply(desired))
         # Seconda passata nella stessa fascia: non le tocca piu'.
         self.assertIsNone(ctrl._compute(mattina + timedelta(minutes=10)).vane_h)
+
+    def test_wind_down_vane_marker_waits_for_an_actual_restore_request(self):
+        ctrl = self._con_alette(posizioni=("swing", "position_0", "position_5"))
+        ctrl.entry.options = dict(
+            ctrl.entry.options,
+            vane_day_horizontal="position_0",
+            vane_day_vertical="position_5",
+        )
+        mattina = GIORNO.replace(hour=8, minute=0)
+        ctrl.hass.states.values["climate.test"].state = "off"
+        richieste = []
+
+        async def succeeds(domain, service, entity_id, data=None):
+            if domain == "select":
+                richieste.append((entity_id, data["option"]))
+            return True
+
+        ctrl._call_target = succeeds
+        self._orologio(mattina)
+        first = ctrl._compute(mattina)
+        asyncio.run(ctrl._apply(first))
+        self.assertEqual(richieste, [])
+        self.assertIsNone(ctrl._vane_restored_on)
+
+        dopo = mattina + timedelta(minutes=5)
+        ctrl.hass.states.values["climate.test"].state = "cool"
+        self._orologio(dopo)
+        second = ctrl._compute(dopo)
+        self.assertEqual(second.vane_h, "position_0")
+        self.assertEqual(second.vane_v, "position_5")
+        asyncio.run(ctrl._apply(second))
+        self.assertEqual(
+            richieste,
+            [
+                ("select.aletta_h", "position_0"),
+                ("select.aletta_v", "position_5"),
+            ],
+        )
+        self.assertEqual(ctrl._vane_restored_on, mattina.date())
 
     def test_failed_day_vane_restore_is_retried(self):
         ctrl = self._con_alette(posizioni=("swing", "position_0", "position_5"))
