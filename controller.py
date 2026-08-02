@@ -1262,7 +1262,6 @@ class ClimaSmartController:
             alette_h = alette_v = self._cfg(CONF_VANE_SLEEP, DEFAULT_VANE_SLEEP)
         elif phase == PHASE_WIND_DOWN and self._vane_day_due(now):
             # Fine della notte: le alette tornano ferme, una volta sola.
-            self._vane_restored_on = now.date()
             alette_h = self._cfg(CONF_VANE_DAY_H, DEFAULT_VANE_DAY) or None
             alette_v = self._cfg(CONF_VANE_DAY_V, DEFAULT_VANE_DAY) or None
         else:
@@ -1512,8 +1511,13 @@ class ClimaSmartController:
         await self._apply_switch(CONF_MUTE_SWITCH, desired.mute)
         await self._apply_switch(CONF_NIGHT_SWITCH, desired.night)
         # Alette: chieste solo dentro la notte fonda, fuori restano dove sono.
-        await self._apply_select(CONF_VANE_H, desired.vane_h)
-        await self._apply_select(CONF_VANE_V, desired.vane_v)
+        restore_vanes = (
+            self.current_phase == PHASE_WIND_DOWN and self._vane_day_due(now)
+        )
+        vane_h_done = await self._apply_select(CONF_VANE_H, desired.vane_h)
+        vane_v_done = await self._apply_select(CONF_VANE_V, desired.vane_v)
+        if restore_vanes and vane_h_done and vane_v_done:
+            self._vane_restored_on = now.date()
 
     def _quiet_mode_on(self, desired: Desired) -> bool:
         """Whether the unit is in (or is being put into) quiet mode this pass.
@@ -1583,10 +1587,10 @@ class ClimaSmartController:
         the entity alone when nothing is configured or the option is not offered.
         """
         if wanted is None:
-            return False
+            return True
         entity_id = self._cfg(conf_key)
         if not entity_id:
-            return False
+            return True
         st = self.hass.states.get(entity_id)
         if st is None or st.state in _UNAVAILABLE:
             return False
@@ -1595,7 +1599,7 @@ class ClimaSmartController:
             self._apply_errors.append(f"{conf_key}: posizione {wanted} non prevista")
             return False
         if st.state == wanted:
-            return False
+            return True
         now = dt_util.now()
         refused_at = self._aux_refused_at.get(conf_key)
         if (

@@ -1165,12 +1165,51 @@ class ControllerRegressionTests(unittest.TestCase):
             vane_day_vertical="position_5",
         )
         mattina = GIORNO.replace(hour=8, minute=0)
+
+        async def succeeds(domain, service, entity_id, data=None):
+            return True
+
+        ctrl._call_target = succeeds
         desired = ctrl._compute(mattina)
         self.assertEqual(ctrl.current_phase, "wind_down")
         self.assertEqual(desired.vane_h, "position_0")
         self.assertEqual(desired.vane_v, "position_5")
+        asyncio.run(ctrl._apply(desired))
         # Seconda passata nella stessa fascia: non le tocca piu'.
         self.assertIsNone(ctrl._compute(mattina + timedelta(minutes=10)).vane_h)
+
+    def test_failed_day_vane_restore_is_retried(self):
+        ctrl = self._con_alette(posizioni=("swing", "position_0", "position_5"))
+        ctrl.entry.options = dict(
+            ctrl.entry.options,
+            vane_day_horizontal="position_0",
+            vane_day_vertical="position_5",
+        )
+        mattina = GIORNO.replace(hour=8, minute=0)
+        tentativi = []
+
+        async def fallisce(domain, service, entity_id, data=None):
+            if domain == "select":
+                tentativi.append((entity_id, data["option"]))
+                # First evaluation: both axes fail. Second evaluation: both succeed.
+                return len(tentativi) > 2
+            return True
+
+        ctrl._call_target = fallisce
+        first = ctrl._compute(mattina)
+        asyncio.run(ctrl._apply(first))
+        self.assertIsNone(ctrl._vane_restored_on)
+
+        second = ctrl._compute(mattina + timedelta(minutes=5))
+        self.assertEqual(second.vane_h, "position_0")
+        self.assertEqual(second.vane_v, "position_5")
+        asyncio.run(ctrl._apply(second))
+        self.assertEqual(len(tentativi), 4)
+        self.assertEqual(ctrl._vane_restored_on, mattina.date())
+
+        third = ctrl._compute(mattina + timedelta(minutes=10))
+        self.assertIsNone(third.vane_h)
+        self.assertIsNone(third.vane_v)
 
     def test_no_day_position_configured_leaves_the_vanes_alone(self):
         ctrl = self._con_alette(posizioni=("swing", "position_0", "position_5"))
