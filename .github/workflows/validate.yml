@@ -24,4 +24,4 @@ jobs:
           python -m json.tool translations/en.json >/dev/null
           python -m json.tool translations/it.json >/dev/null
       - name: Run regression suite
-        run: python -m unittest -v test_regressions.py
+        run: python -I test_regressions.py -v
