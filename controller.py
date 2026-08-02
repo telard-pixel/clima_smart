@@ -820,28 +820,36 @@ class ClimaSmartController:
     def _adaptive_extra(self, outdoor: float | None, now: datetime) -> float:
         """How much to raise the target because it is very hot outside.
 
-        Zero below the threshold, then proportional and capped, quantised to half
-        degrees. Quantising alone was not enough: the station reports whole
-        degrees and swings across the threshold, so the compensation flipped every
-        few minutes and each flip was a setpoint command. Going up is immediate,
-        coming down needs a whole quantum of margin, and either way a change waits
-        out ADAPTIVE_MIN_DWELL_SECONDS.
+        Proportional above the threshold, capped, quantised to half degrees. The
+        quantisation alone was not enough: the station reports whole degrees and
+        swings across the threshold, so the compensation flipped every few minutes
+        and every flip was a setpoint command to the unit - beep included. Going up
+        is immediate, because if it really is getting hotter the target must
+        follow; coming down needs a whole quantum of margin, meaning the outdoor
+        has to fall back below the value that raised it; and either way a change
+        waits out ADAPTIVE_MIN_DWELL_SECONDS.
+
+        One single path, on purpose: the early return for "below the threshold"
+        used to bypass both defences, so at exactly the threshold the compensation
+        collapsed anyway.
         """
         inizio = float(self._cfg(CONF_ADAPTIVE_START, DEFAULT_ADAPTIVE_START) or 0.0)
-        if inizio <= 0 or outdoor is None or outdoor <= inizio:
-            return 0.0
         pendenza = float(self._cfg(CONF_ADAPTIVE_SLOPE, DEFAULT_ADAPTIVE_SLOPE) or 0.0)
         massimo = float(self._cfg(CONF_ADAPTIVE_MAX, DEFAULT_ADAPTIVE_MAX) or 0.0)
-        if pendenza <= 0 or massimo <= 0:
+        if inizio <= 0 or pendenza <= 0 or massimo <= 0:
+            self.adaptive_extra = 0.0
             return 0.0
-        grezzo = min((outdoor - inizio) * pendenza, massimo)
+        if outdoor is None:
+            # Nessuna informazione nuova: si tiene quella di prima invece di
+            # cambiare il target perche' un sensore ha battuto le palpebre.
+            return self.adaptive_extra
+
+        grezzo = max(0.0, min((outdoor - inizio) * pendenza, massimo))
         nuovo = math.floor(grezzo / ADAPTIVE_QUANTUM + 0.5) * ADAPTIVE_QUANTUM
         corrente = self.adaptive_extra
         if nuovo == corrente:
             return corrente
         if nuovo < corrente and grezzo > corrente - ADAPTIVE_QUANTUM:
-            # Non basta scendere sotto la meta' del gradino: serve tornare sotto
-            # la soglia che aveva fatto salire.
             return corrente
         if (
             self._adaptive_changed_at is not None
@@ -850,6 +858,7 @@ class ClimaSmartController:
         ):
             return corrente
         self._adaptive_changed_at = now
+        self.adaptive_extra = nuovo
         return nuovo
 
     def _house_average(self) -> float | None:
@@ -1145,7 +1154,6 @@ class ClimaSmartController:
         # forzati a mano restano quello che l'utente ha chiesto, senza sorprese.
         compensazione = self._adaptive_extra(outdoor, now)
         target += compensazione
-        self.adaptive_extra = compensazione
         self.active_target = self._reachable_target(target, climate)
 
         # MODE_SMART never starts the unit: the user decides when it runs, we
