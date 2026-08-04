@@ -456,17 +456,19 @@ class ControllerRegressionTests(unittest.TestCase):
         ctrl.hass.states.values["climate.test"].attributes["current_temperature"] = 26.2
         self.assertEqual(ctrl._compute(GIORNO).fan, "low")   # +1.2: ancora dentro il margine
         ctrl.hass.states.values["climate.test"].attributes["current_temperature"] = 26.4
-        self.assertEqual(ctrl._compute(GIORNO).fan, "medium")  # +1.4: deriva vera
+        self.assertEqual(ctrl._compute(GIORNO).fan, "low")   # +1.4: margine allargato a 0.5
+        ctrl.hass.states.values["climate.test"].attributes["current_temperature"] = 26.5
+        self.assertEqual(ctrl._compute(GIORNO).fan, "medium")  # +1.5: deriva vera
 
     def test_smart_fan_holds_inside_the_hysteresis_band(self):
         ctrl = self._smart_controller(room=27.5)
         self.assertEqual(ctrl._compute(GIORNO).fan, "high")
         later = GIORNO + timedelta(seconds=controller_module.MIN_FAN_DWELL_SECONDS + 1)
-        # 1.9 sopra: dentro la banda di isteresi (2.0 - 0.3), la ventola tiene.
-        ctrl.hass.states.values["climate.test"].attributes["current_temperature"] = 26.9
-        self.assertEqual(ctrl._compute(later).fan, "high")
-        # 1.6 sopra: fuori dalla banda, adesso scende.
+        # 1.6 sopra: dentro la banda di isteresi (2.0 - 0.5), la ventola tiene.
         ctrl.hass.states.values["climate.test"].attributes["current_temperature"] = 26.6
+        self.assertEqual(ctrl._compute(later).fan, "high")
+        # 1.4 sopra: fuori dalla banda, adesso scende.
+        ctrl.hass.states.values["climate.test"].attributes["current_temperature"] = 26.4
         self.assertEqual(ctrl._compute(later).fan, "medium")
 
     def test_no_fan_command_when_a_mute_switch_is_linked_and_on(self):
@@ -813,8 +815,8 @@ class ControllerRegressionTests(unittest.TestCase):
         self.assertEqual(ctrl._compute(GIORNO).fan, "low")
         ctrl.hass.states.values["climate.test"].attributes["current_temperature"] = 27.0
         self.assertEqual(ctrl._compute(GIORNO).fan, "medium")   # non piu' low
-        ctrl.hass.states.values["climate.test"].attributes["current_temperature"] = 27.4
-        self.assertEqual(ctrl._compute(GIORNO).fan, "high")
+        ctrl.hass.states.values["climate.test"].attributes["current_temperature"] = 27.5
+        self.assertEqual(ctrl._compute(GIORNO).fan, "high")     # 2.0 + il margine 0.5
 
     def test_restore_timeout_opens_the_barrier_degraded(self):
         controller_module.RESTORE_TIMEOUT_SECONDS = 0.05
@@ -1062,21 +1064,54 @@ class ControllerRegressionTests(unittest.TestCase):
         self.assertEqual(ctrl._adaptive_extra(32.0, dopo), 0.0)
 
     def test_adaptive_target_raises_only_when_it_is_hot(self):
-        casi = {30.0: 25.0, 33.0: 25.0, 34.0: 25.5, 36.0: 26.0, 38.0: 26.5}
+        """Sulla macchina di prova, che ha passo 1.0, la compensazione si muove a
+        gradi interi: a 34 gradi esterni il quarto di grado calcolato non arriva
+        a mezzo passo e resta zero, a 36 diventa un grado pieno."""
+        casi = {30.0: 25.0, 33.0: 25.0, 34.0: 25.0, 36.0: 26.0, 38.0: 26.0}
         for esterna, atteso in casi.items():
             ctrl = self._con_adattivo(esterna)
             desired = ctrl._compute(GIORNO)
             self.assertEqual(desired.setpoint, atteso, f"esterna {esterna}")
 
     def test_adaptive_target_is_capped(self):
+        """Il tetto di 1.5 su una macchina a gradi interi vale 1.0: il mezzo grado
+        che avanza non saprebbe dove andare, e arrotondarlo in su sforerebbe il
+        massimo che l'utente ha impostato."""
         ctrl = self._con_adattivo(45.0)   # ben oltre il massimo
-        self.assertEqual(ctrl._compute(GIORNO).setpoint, 26.5)   # 25 + 1.5
+        self.assertEqual(ctrl._compute(GIORNO).setpoint, 26.0)
 
-    def test_adaptive_target_moves_in_half_degrees(self):
-        """La stazione riporta gradi interi: la compensazione deve fare scatti
-        netti, non inseguire i decimali."""
+    def test_adaptive_target_falls_back_to_half_degrees_without_a_step(self):
+        """Se la macchina non dichiara il proprio passo si torna al mezzo grado."""
         valori = {self._con_adattivo(e)._adaptive_extra(e, GIORNO) for e in (34.0, 34.9)}
         self.assertEqual(valori, {0.5})
+
+    def test_adaptive_target_quantises_on_the_machine_step(self):
+        """Il quanto lo detta la macchina: mezzo grado su un'unita' a passo 1.0
+        diventava un grado pieno una volta arrotondato, cioe' il doppio di quanto
+        deciso."""
+        ctrl = self._con_adattivo(36.0)
+        self.assertEqual(ctrl._adaptive_extra(36.0, GIORNO, 1.0), 1.0)
+        ctrl = self._con_adattivo(34.0)
+        self.assertEqual(ctrl._adaptive_extra(34.0, GIORNO, 1.0), 0.0)
+
+    def test_adaptive_target_survives_the_station_of_the_fourth_of_august(self):
+        """La traccia vera del 4 agosto: l'esterna ha attraversato la soglia dieci
+        volte fra le 12 e le 21 e il setpoint l'ha seguita ogni volta. Con il
+        quanto della macchina la banda morta va da 33 a 35, e quella sequenza
+        produce un solo scatto invece di dieci."""
+        ctrl = self._con_adattivo(33.0)
+        traccia = [33, 34, 33, 34, 35, 34, 33, 34, 33, 34, 35, 36, 35, 34, 33]
+        cambi = 0
+        prec = 0.0
+        for i, esterna in enumerate(traccia):
+            # Un campione ogni cinque minuti, come la stazione vera.
+            valore = ctrl._adaptive_extra(
+                float(esterna), GIORNO + timedelta(minutes=5 * i), 1.0
+            )
+            if valore != prec:
+                cambi += 1
+                prec = valore
+        self.assertLessEqual(cambi, 1, "il setpoint non deve rincorrere la stazione")
 
     def test_adaptive_target_off_by_default(self):
         ctrl = self._smart_controller(room=28.0, outdoor=40.0)

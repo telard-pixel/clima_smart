@@ -819,7 +819,9 @@ class ClimaSmartController:
         )
         return begin <= now < begin + timedelta(minutes=MORNING_OFF_WINDOW_MINUTES)
 
-    def _adaptive_extra(self, outdoor: float | None, now: datetime) -> float:
+    def _adaptive_extra(
+        self, outdoor: float | None, now: datetime, step: float | None = None
+    ) -> float:
         """How much to raise the target because it is very hot outside.
 
         Proportional above the threshold, capped, quantised to half degrees. The
@@ -846,12 +848,28 @@ class ClimaSmartController:
             # cambiare il target perche' un sensore ha battuto le palpebre.
             return self.adaptive_extra
 
+        # Il quanto e' quello della macchina, non un mezzo grado deciso a tavolino.
+        # Misurato su questa unita', che ha passo 1.0: mezzo grado di compensazione
+        # diventava 24.5 comandati, che lo snap portava a 25.0, cioe' un grado
+        # pieno. Il 4 agosto l'esterna ha attraversato la soglia dieci volte e il
+        # setpoint l'ha seguita dieci volte, trascinandosi dietro anche la ventola,
+        # perche' un grado di setpoint e' un grado di scarto e quindi un cambio di
+        # banda. Quantizzando sul passo vero, uno scatto avviene solo quando puo'
+        # davvero arrivare alla macchina, e l'isteresi sotto diventa larga quanto
+        # serve: con pendenza 0.25 si sale a 35 gradi esterni e si torna giu' solo
+        # sotto 33, due gradi pieni di banda morta.
+        quanto = step if step and step > 0 else ADAPTIVE_QUANTUM
+        # Il tetto va portato su un multiplo del quanto prima di arrotondare:
+        # altrimenti un massimo di 1.5 con passo 1.0 diventerebbe 2.0, sforandolo.
+        # Su una macchina a gradi interi un tetto di mezzo grado vale zero, ed e'
+        # corretto cosi': quel mezzo grado non saprebbe dove andare.
+        tetto = math.floor(massimo / quanto) * quanto
         grezzo = max(0.0, min((outdoor - inizio) * pendenza, massimo))
-        nuovo = math.floor(grezzo / ADAPTIVE_QUANTUM + 0.5) * ADAPTIVE_QUANTUM
+        nuovo = min(math.floor(grezzo / quanto + 0.5) * quanto, tetto)
         corrente = self.adaptive_extra
         if nuovo == corrente:
             return corrente
-        if nuovo < corrente and grezzo > corrente - ADAPTIVE_QUANTUM:
+        if nuovo < corrente and grezzo > corrente - quanto:
             return corrente
         if (
             self._adaptive_changed_at is not None
@@ -1183,7 +1201,9 @@ class ClimaSmartController:
         target = self.target_sleep if night_window else self.target_home
         # Adattamento all'esterna: vale solo qui, nel percorso automatico. I modi
         # forzati a mano restano quello che l'utente ha chiesto, senza sorprese.
-        compensazione = self._adaptive_extra(outdoor, now)
+        compensazione = self._adaptive_extra(
+            outdoor, now, _to_float(climate.attributes.get("target_temp_step"))
+        )
         target += compensazione
         self.active_target = self._reachable_target(target, climate)
 

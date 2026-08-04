@@ -107,15 +107,21 @@ DEFAULT_ADAPTIVE_MAX = 1.5
 # cycle in progress is not cut off by a small dip in the outdoor reading.
 SUMMER_HYSTERESIS = 2.0
 
-# L'adattamento si muove a mezzi gradi: la stazione riporta gradi interi, quindi
-# la compensazione cambia a scatti netti invece di oscillare sui decimali.
+# Ripiego, quando la macchina non dichiara il proprio passo: normalmente
+# l'adattamento si quantizza su `target_temp_step`, perche' uno scatto piu' fine
+# del passo del climatizzatore non arriva mai come lo si e' pensato. Misurato:
+# con questo mezzo grado il comando 24.5 diventava 25.0, un grado pieno.
 ADAPTIVE_QUANTUM = 0.5
 # Due difese contro il ballo, le stesse della ventola. Salire e' immediato: se
 # fuori si alza sul serio, il target deve seguire. Scendere richiede un quanto
 # intero di margine, cioe' che l'esterna torni sotto la soglia che aveva fatto
 # salire. E fra un cambio e l'altro passa comunque questo tempo, cosi' una
 # stazione che oscilla fra 33 e 35 non produce un comando ogni cinque minuti.
-ADAPTIVE_MIN_DWELL_SECONDS = 1200
+# Un'ora e non venti minuti: col vecchio valore l'attesa non frenava nulla, si
+# limitava a dettare il ritmo dell'oscillazione, che infatti il 4 agosto e' stata
+# di venti-venticinque minuti esatti. L'esterna si muove piano, ridecidere spesso
+# non aggiunge informazione.
+ADAPTIVE_MIN_DWELL_SECONDS = 3600
 
 # How long async_start waits for the master switch and the mode select to restore
 # before opening the barrier in degraded mode.
@@ -155,8 +161,15 @@ FAN_ORDER: tuple[str, ...] = ("low", "medium", "high")
 # A downgrade needs the gap to be this far inside the lower band, and this many
 # seconds since the last change: without both, a tenth of a degree of noise in
 # the reported temperature would cycle the fan up and down forever.
-FAN_HYSTERESIS = 0.3
-MIN_FAN_DWELL_SECONDS = 600
+# Mezzo grado, cioe' la risoluzione con cui questa unita' riporta la temperatura:
+# sotto quella soglia il margine non e' un margine, e' rumore. Con 0.3 gli ultimi
+# tre giorni hanno prodotto ventiquattro episodi sotto i quindici minuti,
+# alternati low-medium-low, un ciclo limite che si autoalimentava.
+FAN_HYSTERESIS = 0.5
+# Mezz'ora invece di dieci minuti. Ha senso perche' fra i due passi non c'e'
+# nulla da guadagnare: misurati a 45 Hz costanti, `low` 637 W e `medium` 645 W,
+# otto watt. Non vale un comando ogni dieci minuti.
+MIN_FAN_DWELL_SECONDS = 1800
 
 # --- MODE_SMART: `dry` program, only with a humidity sensor configured ---
 # Muggy but already at temperature: dehumidifying is what actually helps, and it
