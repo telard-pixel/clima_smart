@@ -1127,6 +1127,23 @@ class ClimaSmartController:
         )
         return begin <= now < begin + timedelta(minutes=SLEEP_START_WINDOW_MINUTES)
 
+    def _morning_off_window_closed(self, now: datetime) -> bool:
+        """Whether the morning switch-off has had its say and is behind us.
+
+        The only reason the daytime start waits at all: without it, the unit could
+        be switched off at 08:30 and started again at 08:31 by the very same house
+        average that was already above threshold - a pointless switch-off, and a
+        compressor stopped and restarted inside a minute.
+        """
+        start = _parse_time(
+            self._cfg(CONF_MORNING_OFF_START, DEFAULT_MORNING_OFF_START),
+            DEFAULT_MORNING_OFF_START,
+        )
+        chiusura = now.replace(
+            hour=start.hour, minute=start.minute, second=0, microsecond=0
+        ) + timedelta(minutes=MORNING_OFF_WINDOW_MINUTES)
+        return now >= chiusura
+
     def _sleep_boost_active(self, now: datetime) -> bool:
         """The opening minutes of the sleep window, where the fan goes to `high`.
 
@@ -1393,10 +1410,15 @@ class ClimaSmartController:
                     fan=partenza or _fan_band(scarto, FAN_BANDS_SLEEP),
                     reason=f"smart {phase}: avvio della notte, target {target}",
                 )
+            # Anche nella fascia fra lo spegnimento del mattino e l'inizio del
+            # giorno: quell'attesa era un orario fisso ereditato dai valori
+            # predefiniti, non una decisione. Dopo lo spegnimento decidono i
+            # sensori, che e' il punto di tutto il modo adattivo.
+            puo_partire = phase == PHASE_DAY or (
+                phase == PHASE_GAP and self._morning_off_window_closed(now)
+            )
             perche = (
-                self._day_start_due(now, room, outdoor)
-                if phase == PHASE_DAY
-                else None
+                self._day_start_due(now, room, outdoor) if puo_partire else None
             )
             if perche is not None:
                 self._sleep_start_armed = True

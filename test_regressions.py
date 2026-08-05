@@ -1086,6 +1086,27 @@ class ControllerRegressionTests(unittest.TestCase):
         ctrl.hass.states.values["climate.test"].state = "off"
         return ctrl
 
+    def test_the_start_no_longer_waits_for_an_arbitrary_hour(self):
+        """Fra lo spegnimento del mattino e l'inizio del giorno c'era un'attesa
+        fissa, ereditata dai valori predefiniti e mai chiesta: dopo lo spegnimento
+        decidono i sensori."""
+        ctrl = self._con_casa(room=29.0, altre=(28.0, 28.0), outdoor=31.0)
+        # Spegnimento alle 08:30 nel profilo di prova: alle 09:05 la finestra dello
+        # spegnimento e' chiusa e la casa e' ben oltre la soglia.
+        desired = ctrl._compute(GIORNO.replace(hour=9, minute=5))
+        self.assertEqual(ctrl.current_phase, "gap")
+        self.assertEqual(desired.hvac, "cool")
+        self.assertIn("avvio", desired.reason)
+
+    def test_the_start_does_not_undo_the_switch_off_a_minute_later(self):
+        """Ma non subito: spegnere alle 08:30 e riaccendere alle 08:31 renderebbe
+        lo spegnimento inutile e fermerebbe il compressore per un minuto."""
+        ctrl = self._con_casa(room=29.0, altre=(28.0, 28.0), outdoor=31.0)
+        desired = ctrl._compute(GIORNO.replace(hour=8, minute=35))
+        self.assertEqual(ctrl.current_phase, "gap")
+        self.assertIsNone(desired.hvac)
+        self.assertIn("non lo accendo io", desired.reason)
+
     def test_house_average_skips_unusable_readings(self):
         ctrl = self._con_casa(altre=(27.0, 26.0))
         self.assertAlmostEqual(ctrl._house_average(), 26.5)
