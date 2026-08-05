@@ -175,11 +175,25 @@ FAN_ORDER: tuple[str, ...] = ("low", "medium", "high")
 # A downgrade needs the gap to be this far inside the lower band, and this many
 # seconds since the last change: without both, a tenth of a degree of noise in
 # the reported temperature would cycle the fan up and down forever.
-# Mezzo grado, cioe' la risoluzione con cui questa unita' riporta la temperatura:
-# sotto quella soglia il margine non e' un margine, e' rumore. Con 0.3 gli ultimi
-# tre giorni hanno prodotto ventiquattro episodi sotto i quindici minuti,
-# alternati low-medium-low, un ciclo limite che si autoalimentava.
-FAN_HYSTERESIS = 0.5
+# **Piu' largo del guadagno dell'anello, che e' stato misurato e vale 1.0.**
+# La ventola decide su un numero che la ventola stessa sposta: un passo vale un
+# grado pieno sulla temperatura di ripresa, in un paio di minuti, con le altre
+# stanze ferme a due centesimi. Con una banda piu' stretta del guadagno
+# l'oscillazione e' aritmetica, non sfortuna: il 4 agosto i punti di inversione
+# sono caduti dodici volte esatte su 26.5 e 25.5, cioe' sui bordi di banda.
+#
+# E il passaggio da 0.3 a 0.5 non aveva cambiato **nulla**: questa unita' riporta
+# a passi di mezzo grado, quindi 1.0+0.3 e 1.0+0.5 arrotondano entrambi alla
+# stessa prima lettura raggiungibile, 1.5, e 1.0-0.3 e 1.0-0.5 entrambi a 0.5.
+# Numero cambiato, comportamento identico.
+FAN_HYSTERESIS = 1.5
+# Di notte no, e per un motivo che non e' tecnico: `low` e' il silenzio in camera,
+# ed e' la ragione per cui il muto e' scollegato. Con 1.5 la discesa avrebbe
+# preteso due gradi sotto il setpoint comandato, cioe' non sarebbe mai avvenuta.
+# E non serve: la notte fra il 4 e il 5 agosto, con questo valore, ha prodotto
+# **due soli cambi di ventola in sette ore**, perche' la tabella notturna ha un
+# bordo solo e la permanenza minima di mezz'ora basta gia'.
+FAN_HYSTERESIS_SLEEP = 0.5
 # Mezz'ora invece di dieci minuti. Ha senso perche' fra i due passi non c'e'
 # nulla da guadagnare: misurati a 45 Hz costanti, `low` 637 W e `medium` 645 W,
 # otto watt. Non vale un comando ogni dieci minuti.

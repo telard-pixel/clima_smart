@@ -95,6 +95,7 @@ from .const import (
     FAN_BANDS,
     FAN_BANDS_SLEEP,
     FAN_HYSTERESIS,
+    FAN_HYSTERESIS_SLEEP,
     FAN_ORDER,
     HVAC_COOL,
     HVAC_DRY,
@@ -758,14 +759,28 @@ class ClimaSmartController:
         target: float,
         compensazione: float,
     ) -> float | None:
-        """The signal the fan decision reads - deliberately not the one the fan moves.
+        """The signal the fan decision reads.
 
-        Measured on the unit: one fan step is worth a whole degree on the returned
-        `current_temperature`, within two minutes, with the house standing still.
-        The inversion points sat on 25.5 and 26.5 eleven times in one day while the
-        room thermometers moved by two hundredths. With a loop gain of 1.0 against
-        a hysteresis band of 0.5, the oscillation was arithmetic, not bad luck.
+        **Misurato il 5 agosto, e costato caro.** La media di casa era stata messa
+        qui come segnale diurno, perche' e' il carico vero e la ventola non lo
+        muove. Ma le due grandezze non stanno sullo stesso livello: lo scarto sulla
+        ripresa oscilla intorno a +1.0, quello sulla media di casa sta stabilmente
+        fra +1.6 e +2.2, perche' il resto della casa e' piu' caldo della camera in
+        cui vive la macchina. Con le stesse soglie la ventola e' salita a `high` e
+        non e' piu' scesa, e siccome la portata d'aria e' il **tetto** del
+        compressore, l'unita' ha potuto salire a 71 Hz e 1090 W invece di
+        strozzarsi sui 40. Risultato su una finestra di un'ora e tre quarti, a
+        parita' di raffrescamento consegnato e con l'esterna piu' fresca:
+        **2.002 kWh contro 1.334 e 1.288 dei due giorni prima, il 50% in piu'.**
+
+        Quindi di giorno si torna alla ripresa. Non e' un bel segnale - e' quello
+        che la ventola stessa sposta di un grado - ma quell'oscillazione costava
+        0.8 centesimi al giorno, misurati, e questa ne costava decine di volte
+        tanti. Il rimedio all'oscillazione e' l'isteresi larga (`FAN_HYSTERESIS`),
+        non un segnale diverso con le soglie di un altro.
         """
+        if room is None:
+            return None
         if phase == PHASE_SLEEP:
             # La notte resta sulla camera, perche' `low` non e' solo una portata:
             # e' il silenzio, ed e' il motivo per cui il muto e' scollegato. Cambia
@@ -773,19 +788,8 @@ class ClimaSmartController:
             # il target nominale. Col target nominale si scendeva a `low` esattamente
             # quando la macchina arrivava - la patologia che queste bande esistono
             # per impedire, vista sul campo il 5 agosto alle 05:53.
-            if room is None:
-                return None
             return room - (target + self.setpoint_offset)
-        casa = self._house_average()
-        if casa is None:
-            # Nessuna media: si torna alla ripresa, che e' imperfetta ma c'e'.
-            return None if room is None else room - target
-        # Di giorno decide il carico vero, letto da termometri che la ventola non
-        # muove, e sul target base: alzare l'obiettivo perche' fuori fa caldo e' una
-        # decisione di comfort, non un motivo per cambiare la portata d'aria. Cosi'
-        # un tremolio della stazione a quattro chilometri smette di comandare la
-        # ventola della camera, come faceva in quattro delle sei salite del 4 agosto.
-        return casa - (target - compensazione)
+        return room - target
 
     def _memoria(self) -> dict:
         """Snapshot of everything that must outlive the process."""
@@ -1195,6 +1199,7 @@ class ClimaSmartController:
         now: datetime,
         fan_modes: list | None,
         bands: tuple[tuple[float, str], ...] = FAN_BANDS,
+        hysteresis: float = FAN_HYSTERESIS,
     ) -> str | None:
         """Fan step for MODE_SMART: harder the further the room is above target.
 
@@ -1227,11 +1232,11 @@ class ClimaSmartController:
                 # fan, for every gap between a threshold and its margin.
                 while (
                     available.index(wanted) > available.index(reference)
-                    and delta < _band_threshold(wanted, bands) + FAN_HYSTERESIS
+                    and delta < _band_threshold(wanted, bands) + hysteresis
                 ):
                     wanted = available[available.index(wanted) - 1]
             else:
-                hold = delta > _band_threshold(reference, bands) - FAN_HYSTERESIS
+                hold = delta > _band_threshold(reference, bands) - hysteresis
                 too_soon = (
                     self._last_fan_band_at is not None
                     and (now - self._last_fan_band_at).total_seconds()
@@ -1468,6 +1473,7 @@ class ClimaSmartController:
                     now,
                     climate.attributes.get("fan_modes"),
                     FAN_BANDS_SLEEP if phase == PHASE_SLEEP else FAN_BANDS,
+                    FAN_HYSTERESIS_SLEEP if phase == PHASE_SLEEP else FAN_HYSTERESIS,
                 )
         if phase == PHASE_SLEEP:
             alette_h = alette_v = self._cfg(CONF_VANE_SLEEP, DEFAULT_VANE_SLEEP)
