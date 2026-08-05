@@ -95,9 +95,10 @@ from .const import (
     EVENT_STARTED,
     FAN_BANDS,
     FAN_BANDS_SLEEP,
-    FAN_HYSTERESIS,
+    FAN_HYSTERESIS_DOWN,
     FAN_HYSTERESIS_ROOM,
     FAN_HYSTERESIS_SLEEP,
+    FAN_HYSTERESIS_UP,
     FAN_ORDER,
     HVAC_COOL,
     HVAC_DRY,
@@ -893,7 +894,7 @@ class ClimaSmartController:
         # Not confirmed yet: carry on as if it were still summer.
         return True
 
-    def _fan_hysteresis(self, phase: str, misurata: bool) -> float:
+    def _fan_hysteresis(self, phase: str, misurata: bool) -> tuple[float, float]:
         """How much margin the fan decision needs before it moves.
 
         Sized to what the number can actually do. On the return air the margin has
@@ -903,8 +904,10 @@ class ClimaSmartController:
         tolerance for sensor noise, and nothing more.
         """
         if misurata:
-            return FAN_HYSTERESIS_ROOM
-        return FAN_HYSTERESIS_SLEEP if phase == PHASE_SLEEP else FAN_HYSTERESIS
+            return FAN_HYSTERESIS_ROOM, FAN_HYSTERESIS_ROOM
+        if phase == PHASE_SLEEP:
+            return FAN_HYSTERESIS_SLEEP, FAN_HYSTERESIS_SLEEP
+        return FAN_HYSTERESIS_UP, FAN_HYSTERESIS_DOWN
 
     def _read_room(self, ripresa: float | None) -> tuple[float | None, bool]:
         """The room temperature, and whether it was really measured in the room.
@@ -1248,7 +1251,7 @@ class ClimaSmartController:
         now: datetime,
         fan_modes: list | None,
         bands: tuple[tuple[float, str], ...] = FAN_BANDS,
-        hysteresis: float = FAN_HYSTERESIS,
+        hysteresis: tuple[float, float] = (FAN_HYSTERESIS_UP, FAN_HYSTERESIS_DOWN),
     ) -> str | None:
         """Fan step for MODE_SMART: harder the further the room is above target.
 
@@ -1281,11 +1284,11 @@ class ClimaSmartController:
                 # fan, for every gap between a threshold and its margin.
                 while (
                     available.index(wanted) > available.index(reference)
-                    and delta < _band_threshold(wanted, bands) + hysteresis
+                    and delta < _band_threshold(wanted, bands) + hysteresis[0]
                 ):
                     wanted = available[available.index(wanted) - 1]
             else:
-                hold = delta > _band_threshold(reference, bands) - hysteresis
+                hold = delta > _band_threshold(reference, bands) - hysteresis[1]
                 too_soon = (
                     self._last_fan_band_at is not None
                     and (now - self._last_fan_band_at).total_seconds()

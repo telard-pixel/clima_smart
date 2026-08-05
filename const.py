@@ -191,16 +191,23 @@ FAN_ORDER: tuple[str, ...] = ("low", "medium", "high")
 # stessa prima lettura raggiungibile, 1.5, e 1.0-0.3 e 1.0-0.5 entrambi a 0.5.
 # Numero cambiato, comportamento identico.
 #
-# **1.0 e non 1.5**, cioe' pari al guadagno dell'anello e non piu' largo. Con 1.5
-# il margine va superato a ogni gradino, quindi salire a `medium` pretendeva 2.5
-# di scarto e `high` 3.5: misurato, il massimo mai raggiunto in fascia diurna e'
-# **esattamente 2.5**, presente lo 0.6% del tempo. Le bande erano decorative, e il
-# 5 agosto alle 13:23 la camera stava a +2.0 dal target, con la casa a 27 e
-# l'esterna a 34, mentre la ventola restava su `low` non per scelta ma per
-# aritmetica. A 1.0 la salita a `medium` scatta a 2.0 e il rientro a `low` a 0.0:
-# la decisione torna all'algoritmo. E' il minimo che smorza l'oscillazione, quindi
-# va tenuto d'occhio: sotto questo valore il ciclo limite torna.
-FAN_HYSTERESIS = 1.0
+# **Margine asimmetrico**, e non e' un vezzo: salire di un passo costa, scendere
+# fa risparmiare, quindi le due direzioni non meritano la stessa reticenza.
+#
+# Misurato il 5 agosto. Con margine simmetrico 1.0 la ventola entrava in `medium`
+# a scarto 2.0 e per uscirne pretendeva 0.0, cioe' la stanza esattamente sul
+# target: e' entrata alle 13:30 e non e' piu' uscita per otto ore. Il conto di quel
+# pomeriggio, a pari esterna: 5.409 kWh contro 4.648 e 4.713 dei due giorni prima,
+# **+0.70 kWh**, e la casa e' rimasta piu' calda (+0.14 gradi guadagnati contro
+# +0.23 e +0.34). Piu' portata d'aria alza il tetto del compressore, e la potenza
+# media e' passata da ~600 a 691 W: novanta watt, di cui la ventola ne vale otto.
+#
+# Con 1.0 in salita e 0.5 in discesa: si entra sempre a 2.0, ma si esce a **0.5**,
+# cioe' quando la stanza e' tornata a mezzo grado dall'obiettivo. La banda resta
+# larga 1.5, quindi ancora piu' del guadagno dell'anello misurato (1.0): il ciclo
+# limite non torna.
+FAN_HYSTERESIS_UP = 1.0
+FAN_HYSTERESIS_DOWN = 0.5
 # Di notte no, e per un motivo che non e' tecnico: `low` e' il silenzio in camera,
 # ed e' la ragione per cui il muto e' scollegato. Con 1.5 la discesa avrebbe
 # preteso due gradi sotto il setpoint comandato, cioe' non sarebbe mai avvenuta.

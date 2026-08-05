@@ -573,16 +573,16 @@ class ControllerRegressionTests(unittest.TestCase):
         stessa. Su un sensore che la ventola non muove torna a essere tolleranza al
         rumore."""
         ctrl = self._con_sonda(stanza=25.0)
+        r = controller_module.FAN_HYSTERESIS_ROOM
+        self.assertEqual(ctrl._fan_hysteresis("day", True), (r, r))
+        # Sulla ripresa i due versi sono asimmetrici: salire costa, scendere fa
+        # risparmiare, quindi non meritano la stessa reticenza.
         self.assertEqual(
-            ctrl._fan_hysteresis("day", True), controller_module.FAN_HYSTERESIS_ROOM
+            ctrl._fan_hysteresis("day", False),
+            (controller_module.FAN_HYSTERESIS_UP, controller_module.FAN_HYSTERESIS_DOWN),
         )
-        self.assertEqual(
-            ctrl._fan_hysteresis("day", False), controller_module.FAN_HYSTERESIS
-        )
-        self.assertEqual(
-            ctrl._fan_hysteresis("sleep", False),
-            controller_module.FAN_HYSTERESIS_SLEEP,
-        )
+        s = controller_module.FAN_HYSTERESIS_SLEEP
+        self.assertEqual(ctrl._fan_hysteresis("sleep", False), (s, s))
 
     def test_a_silent_room_sensor_falls_back_to_the_return_air(self):
         """Collegato ma muto non deve lasciare il controller cieco."""
@@ -642,6 +642,22 @@ class ControllerRegressionTests(unittest.TestCase):
         # E quando la stanza torna al target, rientra a `low`.
         ctrl.hass.states.values["climate.test"].attributes["current_temperature"] = 25.0
         dopo = GIORNO + timedelta(seconds=controller_module.MIN_FAN_DWELL_SECONDS + 60)
+        self.assertEqual(ctrl._compute(dopo).fan, "low")
+
+    def test_medium_leaves_when_the_room_comes_back_not_only_at_target(self):
+        """Il pomeriggio del 5 agosto: `medium` e' entrata a scarto 2.0 e per uscirne
+        pretendeva 0.0, cioe' la stanza esattamente sul target. E' rimasta otto ore,
+        costando 0.70 kWh in piu' dei due pomeriggi precedenti a pari esterna, e
+        consegnando **meno** raffrescamento. Con il margine asimmetrico si entra
+        ancora a 2.0 ma si esce a 0.5."""
+        ctrl = self._smart_controller(room=27.0, fan="low")
+        self.assertEqual(ctrl._compute(GIORNO).fan, "medium")   # scarto 2.0: entra
+        dopo = GIORNO + timedelta(seconds=controller_module.MIN_FAN_DWELL_SECONDS + 60)
+        # Scarto 1.0, come per tutto il pomeriggio di ieri: prima restava `medium`.
+        ctrl.hass.states.values["climate.test"].attributes["current_temperature"] = 26.0
+        self.assertEqual(ctrl._compute(dopo).fan, "medium")
+        # Scarto 0.5: adesso rientra, invece di aspettare lo zero.
+        ctrl.hass.states.values["climate.test"].attributes["current_temperature"] = 25.5
         self.assertEqual(ctrl._compute(dopo).fan, "low")
 
     def test_smart_fan_holds_inside_the_hysteresis_band(self):
