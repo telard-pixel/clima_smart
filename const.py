@@ -106,6 +106,20 @@ DEFAULT_ADAPTIVE_MAX = 1.5
 # While the unit is already cooling, the season threshold drops by this much, so a
 # cycle in progress is not cut off by a small dip in the outdoor reading.
 SUMMER_HYSTERESIS = 2.0
+# Una lettura fuori da questo intervallo non e' una temperatura, e' un guasto.
+# Serve perche' la difesa "sensore non disponibile" non scattava su un numero
+# assurdo: quello passava come valido e scavalcava la protezione scritta apposta.
+PLAUSIBLE_MIN_C = -30.0
+PLAUSIBLE_MAX_C = 60.0
+# E anche dentro l'intervallo plausibile, uscire dalla stagione calda spegne il
+# condizionatore per il resto della giornata: con la soglia a 21 gradi bastava
+# **una sola** lettura sotto 19 per farlo in pieno agosto. Prima di spegnere si
+# pretende che la condizione duri, cosi' un campione isolato non decide nulla.
+SEASON_EXIT_CONFIRM_SECONDS = 900
+
+# Versione del piccolo archivio che tiene in vita, fra un riavvio e l'altro, i
+# contrassegni "gia' fatto oggi" e la resa manuale.
+STORAGE_VERSION = 1
 
 # Ripiego, quando la macchina non dichiara il proprio passo: normalmente
 # l'adattamento si quantizza su `target_temp_step`, perche' uno scatto piu' fine

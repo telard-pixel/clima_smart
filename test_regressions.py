@@ -32,6 +32,24 @@ def _install_ha_stubs() -> None:
     core.HomeAssistant = object
     core.callback = lambda func: func
     helpers = types.ModuleType("homeassistant.helpers")
+    storage = types.ModuleType("homeassistant.helpers.storage")
+
+    class Store:
+        """Archivio finto: tiene i dati in un dizionario condiviso per chiave, cosi'
+        una prova puo' simulare un riavvio ricreando il controller con la stessa."""
+
+        _dati: dict = {}
+
+        def __init__(self, hass, version, key):
+            self.key = key
+
+        async def async_load(self):
+            return Store._dati.get(self.key)
+
+        async def async_save(self, data):
+            Store._dati[self.key] = data
+
+    storage.Store = Store
     event = types.ModuleType("homeassistant.helpers.event")
     event.async_call_later = lambda *args, **kwargs: lambda: None
     event.async_track_state_change_event = lambda *args, **kwargs: lambda: None
@@ -63,6 +81,7 @@ def _install_ha_stubs() -> None:
             "homeassistant.core": core,
             "homeassistant.helpers": helpers,
             "homeassistant.helpers.event": event,
+            "homeassistant.helpers.storage": storage,
             "homeassistant.util": util,
             "homeassistant.util.dt": dt,
             "homeassistant.util.unit_conversion": unit_conversion,
@@ -425,6 +444,118 @@ class ControllerRegressionTests(unittest.TestCase):
         ctrl.entry.options = {"target_home": 25.0, "target_away": 30.0}
         return ctrl
 
+    def _casa_accesa(self, **kw):
+        """Come `_con_casa`, ma col clima acceso: qui si prova la ventola, non l'avvio."""
+        ctrl = self._con_casa(**kw)
+        ctrl.hass.states.values["climate.test"].state = "cool"
+        return ctrl
+
+    def test_day_fan_reads_the_house_not_the_return_air(self):
+        """Un passo di ventola vale un grado pieno sulla lettura della macchina, a
+        stanza ferma: decidere la ventola su quel numero significa chiudere l'anello
+        sul proprio attuatore. Di giorno decide la media delle altre stanze."""
+        ctrl = self._casa_accesa(room=27.5, altre=(25.2, 25.2, 25.2))
+        # La ripresa direbbe +2.5, cioe' `high`; la casa dice +0.2, cioe' `low`.
+        self.assertEqual(ctrl._compute(GIORNO).fan, "low")
+        # E se la casa si scalda davvero, la ventola sale.
+        for i in range(3):
+            ctrl.hass.states.values[f"sensor.stanza{i}"] = State("26.6", {})
+        self.assertEqual(ctrl._compute(GIORNO).fan, "medium")
+
+    def test_day_fan_ignores_the_adaptive_compensation(self):
+        """Quattro delle sei salite di ventola del 4 agosto sono state causate dal
+        target che si abbassava, a stanza ferma: il quanto adattivo vale un grado e
+        i bordi di banda distano un grado, quindi spostava la ventola per
+        costruzione. La ventola guarda il target base."""
+        casa = (26.6, 26.6, 26.6)
+        senza = self._casa_accesa(room=27.0, altre=casa, outdoor=30.0)
+        con = self._casa_accesa(room=27.0, altre=casa, outdoor=36.0)
+        for c in (senza, con):
+            c.entry.options = dict(
+                c.entry.options,
+                adaptive_outdoor_start=33.0,
+                adaptive_slope=0.25,
+                adaptive_max=1.5,
+            )
+        # L'esterna a 36 alza il target di un grado pieno...
+        self.assertEqual(con._compute(GIORNO).setpoint, 26.0)
+        self.assertEqual(senza._compute(GIORNO).setpoint, 25.0)
+        # ...ma la ventola non se ne accorge, perche' la casa non e' cambiata.
+        self.assertEqual(con._compute(GIORNO).fan, senza._compute(GIORNO).fan)
+
+    def test_day_fan_falls_back_to_the_return_air_without_house_sensors(self):
+        """Senza media di casa non si resta senza decisione: si torna alla ripresa."""
+        ctrl = self._casa_accesa(room=27.5, altre=())
+        self.assertEqual(ctrl._compute(GIORNO).fan, "high")
+
+    def test_night_fan_measures_against_the_commanded_setpoint(self):
+        """Di notte comanda ancora la camera, perche' `low` e' il silenzio. Ma il
+        confronto e' col setpoint che la macchina tiene davvero: col target nominale
+        si scendeva a `low` proprio quando la macchina arrivava."""
+        ctrl = self._casa_accesa(room=21.9, altre=(26.5, 26.5, 26.5))
+        self._orari(ctrl, target_sleep=22.5)
+        ctrl.entry.options = dict(ctrl.entry.options, setpoint_offset=-1.0)
+        notte = NOW.replace(hour=2, minute=0)
+        # Setpoint comandato 21.5: la camera a 21.9 e' sopra, quindi `medium`.
+        # Col vecchio riferimento (il target nominale 22.5) lo scarto sarebbe stato
+        # -0.6 e la ventola sarebbe scesa a `low` proprio mentre la macchina
+        # raggiungeva il proprio setpoint: la patologia da evitare.
+        self.assertEqual(ctrl._compute(notte).fan, "medium")
+        # `low` resta possibile, e serve, perche' di notte e' anche il silenzio: ma
+        # ora pretende una camera davvero fredda, un grado sotto il comandato.
+        ctrl.hass.states.values["climate.test"].attributes["current_temperature"] = 20.4
+        dopo = notte + timedelta(seconds=controller_module.MIN_FAN_DWELL_SECONDS + 60)
+        self.assertEqual(ctrl._compute(dopo).fan, "low")
+
+    # ------------------------------------------ stato che sopravvive al riavvio
+    def _riavvia(self, vecchio):
+        """Un controller nuovo con la stessa chiave d'archivio: e' cio' che accade a
+        Home Assistant quando si riavvia, o quando l'integrazione viene ricaricata
+        perche' e' cambiata un'entita' collegata."""
+        nuovo = make_controller(vecchio.hass.states.values, dict(vecchio.entry.data))
+        nuovo.entry.options = dict(vecchio.entry.options)
+        nuovo.mode = vecchio.mode
+        asyncio.run(nuovo._async_load_memoria())
+        return nuovo
+
+    def test_a_restart_does_not_undo_the_manual_override(self):
+        """Il caso peggiore segnalato: il clima parte da solo, l'utente lo spegne a
+        mano, e un riavvio dentro l'ora di resa glielo riaccendeva."""
+        ctrl = self._smart_controller(room=27.0)
+        ctrl._start_override("prova")
+        self.assertTrue(ctrl.override_active)
+        asyncio.run(ctrl._async_save_memoria())
+        dopo = self._riavvia(ctrl)
+        self.assertTrue(dopo.override_active, "la resa manuale deve sopravvivere")
+
+    def test_a_restart_does_not_repeat_the_daytime_start(self):
+        """L'avvio diurno e' il peggiore dei tre perche' non ha finestra oraria:
+        senza persistenza poteva riscattare ore dopo il riavvio."""
+        ctrl = self._smart_controller(room=27.0)
+        ctrl._day_start_done_on = GIORNO.date()
+        asyncio.run(ctrl._async_save_memoria())
+        dopo = self._riavvia(ctrl)
+        self.assertEqual(dopo._day_start_done_on, GIORNO.date())
+
+    def test_a_restart_keeps_the_adaptive_compensation(self):
+        """Ripartire da zero abbassava il target di un grado finche' l'esterna non
+        risaliva sopra la soglia di salita."""
+        ctrl = self._smart_controller(room=27.0)
+        ctrl.adaptive_extra = 1.0
+        asyncio.run(ctrl._async_save_memoria())
+        self.assertEqual(self._riavvia(ctrl).adaptive_extra, 1.0)
+
+    def test_an_unreadable_store_does_not_stop_the_start(self):
+        """Un archivio illeggibile e' un guaio, non un motivo per non partire."""
+        ctrl = self._smart_controller(room=27.0)
+
+        async def esplode():
+            raise RuntimeError("archivio rotto")
+
+        ctrl._store.async_load = esplode
+        asyncio.run(ctrl._async_load_memoria())
+        self.assertIsNone(ctrl._day_start_done_on)
+
     def test_smart_fan_follows_the_gap(self):
         for room, expected in ((27.5, "high"), (26.5, "medium"), (25.2, "low")):
             ctrl = self._smart_controller(room=room)
@@ -714,12 +845,15 @@ class ControllerRegressionTests(unittest.TestCase):
         self._profilo_notte(ctrl)
         self.assertEqual(ctrl._compute(GIORNO.replace(hour=2)).fan, "medium")
 
-    def test_wind_down_is_dry_with_fan_auto(self):
+    def test_wind_down_stays_in_cool_with_fan_auto(self):
+        """Il `dry` dell'ultima ora non risparmiava niente: misurato su due giornate
+        confrontabili, 301 W in `cool` contro 305 in `dry`, e 347 contro 368. Il
+        segno e' contrario, quindi si resta in `cool` fino allo spegnimento."""
         ctrl = self._smart_controller(room=23.0)
         self._profilo_notte(ctrl)
         desired = ctrl._compute(GIORNO.replace(hour=8, minute=0))
         self.assertEqual(ctrl.current_phase, "wind_down")
-        self.assertEqual(desired.hvac, "dry")
+        self.assertEqual(desired.hvac, "cool")
         self.assertEqual(desired.fan, "auto")
         self.assertEqual(desired.setpoint, 22.0)
 

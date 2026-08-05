@@ -11,12 +11,13 @@ import asyncio
 import logging
 import math
 from dataclasses import dataclass
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.exceptions import ConfigEntryError
 from homeassistant.const import UnitOfTemperature
 from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.event import (
     async_call_later,
     async_track_state_change_event,
@@ -111,7 +112,11 @@ from .const import (
     PHASE_WIND_DOWN,
     RESTORE_TIMEOUT_SECONDS,
     SERVICE_CALL_TIMEOUT_SECONDS,
+    PLAUSIBLE_MAX_C,
+    PLAUSIBLE_MIN_C,
+    SEASON_EXIT_CONFIRM_SECONDS,
     SLEEP_BOOST_MIN_DELTA,
+    STORAGE_VERSION,
     SLEEP_BOOST_MINUTES,
     SLEEP_START_WINDOW_MINUTES,
     START_REASON_DAY,
@@ -152,6 +157,16 @@ def _to_float(value) -> float | None:
         return float(value)
     except (ValueError, TypeError):
         return None
+
+
+def _plausible(celsius: float) -> bool:
+    """Whether a reading can be a real temperature at all.
+
+    A sensor that fails by publishing a number instead of `unavailable` walked
+    straight past the fail-safe path, which only ever looked for the unavailable
+    state. This is the cheap guard that puts it back on that path.
+    """
+    return PLAUSIBLE_MIN_C <= celsius <= PLAUSIBLE_MAX_C
 
 
 def _convert_temperature(
@@ -274,6 +289,15 @@ class ClimaSmartController:
         self._last_fan_band: str | None = None
         self._last_fan_band_at: datetime | None = None
         self._dry_active = False
+        # Da quando la condizione "non e' piu' stagione calda" e' vera senza
+        # interruzioni: None finche' siamo in stagione.
+        self._not_summer_since: datetime | None = None
+        # Cio' che non deve morire con il processo: i contrassegni "gia' fatto
+        # oggi" e la resa manuale. Senza, un riavvio dopo che l'utente ha spento
+        # a mano riaccendeva la macchina, e l'avvio diurno poteva farlo ore dopo
+        # perche' non ha finestra oraria.
+        self._store = Store(hass, STORAGE_VERSION, f"{DOMAIN}.{entry.entry_id}")
+        self._stored: dict | None = None
         # Giorno in cui lo spegnimento del mattino e' gia' stato eseguito, e flag
         # della passata in corso che lo ha deciso.
         self._morning_off_done_on = None
@@ -357,6 +381,7 @@ class ClimaSmartController:
     # ------------------------------------------------------------- lifecycle
     async def async_start(self) -> None:
         self._started = True
+        await self._async_load_memoria()
         watched = {self.climate_entity}
         for conf_key in (CONF_OUTDOOR, CONF_OUTDOOR_FALLBACK):
             if ent := self._cfg(conf_key):
@@ -726,6 +751,137 @@ class ClimaSmartController:
         )
 
     # -------------------------------------------------------------- helpers
+    def _fan_delta(
+        self,
+        phase: str,
+        room: float | None,
+        target: float,
+        compensazione: float,
+    ) -> float | None:
+        """The signal the fan decision reads - deliberately not the one the fan moves.
+
+        Measured on the unit: one fan step is worth a whole degree on the returned
+        `current_temperature`, within two minutes, with the house standing still.
+        The inversion points sat on 25.5 and 26.5 eleven times in one day while the
+        room thermometers moved by two hundredths. With a loop gain of 1.0 against
+        a hysteresis band of 0.5, the oscillation was arithmetic, not bad luck.
+        """
+        if phase == PHASE_SLEEP:
+            # La notte resta sulla camera, perche' `low` non e' solo una portata:
+            # e' il silenzio, ed e' il motivo per cui il muto e' scollegato. Cambia
+            # pero' il riferimento: il setpoint che la macchina tiene davvero, non
+            # il target nominale. Col target nominale si scendeva a `low` esattamente
+            # quando la macchina arrivava - la patologia che queste bande esistono
+            # per impedire, vista sul campo il 5 agosto alle 05:53.
+            if room is None:
+                return None
+            return room - (target + self.setpoint_offset)
+        casa = self._house_average()
+        if casa is None:
+            # Nessuna media: si torna alla ripresa, che e' imperfetta ma c'e'.
+            return None if room is None else room - target
+        # Di giorno decide il carico vero, letto da termometri che la ventola non
+        # muove, e sul target base: alzare l'obiettivo perche' fuori fa caldo e' una
+        # decisione di comfort, non un motivo per cambiare la portata d'aria. Cosi'
+        # un tremolio della stazione a quattro chilometri smette di comandare la
+        # ventola della camera, come faceva in quattro delle sei salite del 4 agosto.
+        return casa - (target - compensazione)
+
+    def _memoria(self) -> dict:
+        """Snapshot of everything that must outlive the process."""
+
+        def giorno(value):
+            return value.isoformat() if value is not None else None
+
+        return {
+            "morning_off_done_on": giorno(self._morning_off_done_on),
+            "sleep_start_done_on": giorno(self._sleep_start_done_on),
+            "day_start_done_on": giorno(self._day_start_done_on),
+            "vane_restored_on": giorno(self._vane_restored_on),
+            "override_until": giorno(self._override_until),
+            "adaptive_extra": self.adaptive_extra,
+            "adaptive_changed_at": giorno(self._adaptive_changed_at),
+        }
+
+    async def _async_load_memoria(self) -> None:
+        """Bring back the one-shot marks and the manual override after a restart.
+
+        Without this, a restart in the wrong minute undid a decision the user had
+        just taken by hand: the daytime start is the worst of the three, because
+        unlike the other two it has no time window and could fire again hours
+        later, on any hot afternoon.
+        """
+        try:
+            dati = await self._store.async_load()
+        except Exception:  # noqa: BLE001 - un archivio illeggibile non deve fermare l'avvio
+            _LOGGER.exception("Clima Smart: archivio di stato illeggibile, riparto pulito")
+            return
+        if not dati:
+            return
+
+        def data_di(chiave):
+            grezzo = dati.get(chiave)
+            try:
+                return date.fromisoformat(grezzo) if grezzo else None
+            except (TypeError, ValueError):
+                return None
+
+        def istante_di(chiave):
+            # `fromisoformat` e non l'aiutante di Home Assistant: il valore l'abbiamo
+            # scritto noi con `isoformat`, quindi il giro si chiude nella libreria
+            # standard e la logica resta provabile senza HA installato.
+            grezzo = dati.get(chiave)
+            try:
+                return datetime.fromisoformat(grezzo) if grezzo else None
+            except (TypeError, ValueError):
+                return None
+
+        self._morning_off_done_on = data_di("morning_off_done_on")
+        self._sleep_start_done_on = data_di("sleep_start_done_on")
+        self._day_start_done_on = data_di("day_start_done_on")
+        self._vane_restored_on = data_di("vane_restored_on")
+        self._override_until = istante_di("override_until")
+        self._adaptive_changed_at = istante_di("adaptive_changed_at")
+        valore = dati.get("adaptive_extra")
+        if isinstance(valore, (int, float)):
+            self.adaptive_extra = float(valore)
+        self._stored = self._memoria()
+        if self.override_active:
+            _LOGGER.debug(
+                "Clima Smart: ripristinata la resa manuale fino a %s",
+                self._override_until,
+            )
+
+    async def _async_save_memoria(self) -> None:
+        """Persist the snapshot, but only when something actually moved."""
+        adesso = self._memoria()
+        if adesso == self._stored:
+            return
+        self._stored = adesso
+        try:
+            await self._store.async_save(adesso)
+        except Exception:  # noqa: BLE001 - un salvataggio fallito non deve fermare il ciclo
+            _LOGGER.exception("Clima Smart: non sono riuscito a salvare lo stato")
+
+    def _season_confirmed(self, summer: bool, now: datetime) -> bool:
+        """Hold the warm season until "it is not summer" has lasted a while.
+
+        Entering the season stays immediate: if it really is hot, we want to cool
+        at once. It is the exit that has to be earned, because it switches the
+        unit off for the rest of the day and a single bad sample used to be
+        enough.
+        """
+        if summer:
+            self._not_summer_since = None
+            return True
+        if self._not_summer_since is None:
+            self._not_summer_since = now
+        elapsed = (now - self._not_summer_since).total_seconds()
+        if elapsed >= SEASON_EXIT_CONFIRM_SECONDS:
+            return False
+        # Not confirmed yet: carry on as if it were still summer.
+        return True
+
     def _read_outdoor(self) -> tuple[float | None, bool]:
         for key in (CONF_OUTDOOR, CONF_OUTDOOR_FALLBACK):
             ent = self._cfg(key)
@@ -741,8 +897,14 @@ class ClimaSmartController:
                     st.attributes.get("unit_of_measurement"),
                     UnitOfTemperature.CELSIUS,
                 )
-                if val is not None:
+                if val is not None and _plausible(val):
                     return val, True
+                if val is not None:
+                    _LOGGER.warning(
+                        "Clima Smart: lettura implausibile da %s (%s °C), la ignoro",
+                        ent,
+                        val,
+                    )
         return None, False
 
     @property
@@ -1139,6 +1301,7 @@ class ClimaSmartController:
                     and outdoor > self.summer_threshold - SUMMER_HYSTERESIS
                 )
             )
+            summer = self._season_confirmed(summer, now)
         else:
             # Outdoor sensors unavailable: fail closed. We may maintain a cooling
             # cycle already in progress, but never start one from an indoor-only
@@ -1254,25 +1417,31 @@ class ClimaSmartController:
         humidity = self._read_humidity()
         hvac_modes = climate.attributes.get("hvac_modes")
         spinta = False
+        scarto_ventola = None
         if phase == PHASE_WIND_DOWN:
-            # The hour before the switch-off: dehumidify with the fan on auto,
-            # which takes the edge off the room without cooling it further.
-            program = (
-                HVAC_DRY if not hvac_modes or HVAC_DRY in hvac_modes else HVAC_COOL
-            )
+            # L'ora prima dello spegnimento. Qui c'era `dry`, sull'idea che togliesse
+            # l'afa senza raffreddare oltre. Misurato su due giornate confrontabili a
+            # frequenza simile, non risparmia niente: 301 W in `cool` contro 305 in
+            # `dry` il 3 agosto, 347 contro 368 il 4. Il segno e' contrario, quindi si
+            # resta in `cool` fino allo spegnimento. La ventola resta su `auto`: nella
+            # sua ultima ora la macchina se la sceglie da sola, e sono comandi in meno.
+            program = HVAC_COOL
             fan = "auto"
         else:
             program = self._program_for(delta, humidity, hvac_modes)
+            scarto_ventola = self._fan_delta(phase, room, target, compensazione)
             spinta = phase == PHASE_SLEEP and self._sleep_boost_active(now)
             fan = (
-                self._boost_fan(delta, climate.attributes.get("fan_modes"), now)
+                self._boost_fan(
+                    scarto_ventola, climate.attributes.get("fan_modes"), now
+                )
                 if spinta
                 else None
             )
             if fan is None:
                 spinta = False
                 fan = self._fan_for(
-                    delta,
+                    scarto_ventola,
                     climate.attributes.get("fan_mode"),
                     now,
                     climate.attributes.get("fan_modes"),
@@ -1296,6 +1465,10 @@ class ClimaSmartController:
             detail += f", alette {alette}"
         if delta is not None:
             detail += f", scarto {delta:+.1f}"
+        # Quale numero ha deciso la ventola: senza questo, in plancia non si
+        # distingue una ventola che segue la casa da una che segue la ripresa.
+        if scarto_ventola is not None and delta is not None and abs(scarto_ventola - delta) >= 0.05:
+            detail += f", ventola su {scarto_ventola:+.1f}"
         if humidity is not None:
             detail += f", umidità {humidity:.0f}%"
         return Desired(
@@ -1387,6 +1560,8 @@ class ClimaSmartController:
             self.last_trigger = trigger
             self.last_evaluated = now
             self._notify_entities()
+        # Fuori dal lock: salva solo se qualcosa si e' davvero mosso.
+        await self._async_save_memoria()
 
     async def _apply(self, desired: Desired) -> None:
         climate = self.hass.states.get(self.climate_entity)
