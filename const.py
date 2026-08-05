@@ -16,6 +16,10 @@ CONF_NIGHT_SWITCH = "night_switch"
 # Optional indoor humidity source, only used by MODE_SMART to pick the `dry`
 # program. Left empty the mode still works, it just never dehumidifies.
 CONF_HUMIDITY = "humidity_sensor"
+# Un termometro vero della stanza, fuori dal getto d'aria. Quando c'e', prende il
+# posto della temperatura di ripresa della macchina - che non e' la stanza ma
+# l'aria che rientra nell'unita', e che la ventola stessa sposta di un grado.
+CONF_ROOM_SENSOR = "room_sensor"
 # The two air-direction selects, if the unit exposes them. Only MODE_SMART uses
 # them, and only inside the sleep window: outside it they are left to whoever set
 # them last.
@@ -204,6 +208,11 @@ FAN_HYSTERESIS = 1.0
 # **due soli cambi di ventola in sette ore**, perche' la tabella notturna ha un
 # bordo solo e la permanenza minima di mezz'ora basta gia'.
 FAN_HYSTERESIS_SLEEP = 0.5
+# E con un termometro vero della stanza il margine torna a essere quello che
+# dovrebbe: la tolleranza al rumore del sensore, non una difesa contro l'anello
+# che l'attuatore chiude su se stesso. La ventola non muove un sensore appeso al
+# muro come muove l'aria di ripresa.
+FAN_HYSTERESIS_ROOM = 0.3
 # Mezz'ora invece di dieci minuti. Ha senso perche' fra i due passi non c'e'
 # nulla da guadagnare: misurati a 45 Hz costanti, `low` 637 W e `medium` 645 W,
 # otto watt. Non vale un comando ogni dieci minuti.

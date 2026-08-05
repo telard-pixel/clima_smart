@@ -1,7 +1,7 @@
 {
   "domain": "clima_smart",
   "name": "Clima Smart",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "documentation": "https://github.com/telard-pixel/clima_smart",
   "issue_tracker": "https://github.com/telard-pixel/clima_smart/issues",
   "dependencies": [],

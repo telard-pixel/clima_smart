@@ -534,6 +534,65 @@ class ControllerRegressionTests(unittest.TestCase):
         asyncio.run(ctrl._async_load_memoria())
         self.assertIsNone(ctrl._day_start_done_on)
 
+    # ------------------------------------ termometro vero della stanza
+    def _con_sonda(self, stanza, ripresa=27.0, target=25.0):
+        """Controller con un termometro vero in camera, fuori dal getto d'aria."""
+        ctrl = self._smart_controller(room=ripresa, fan="low")
+        ctrl.hass.states.values["sensor.stanza_vera"] = State(
+            str(stanza), {"unit_of_measurement": "°C"}
+        )
+        ctrl.entry.data = dict(ctrl.entry.data, room_sensor="sensor.stanza_vera")
+        ctrl.entry.options = dict(ctrl.entry.options, target_home=target)
+        return ctrl
+
+    def test_a_real_room_sensor_replaces_the_return_air(self):
+        """La ripresa direbbe +2.0 e chiederebbe `medium`; la stanza vera dice +0.5."""
+        ctrl = self._con_sonda(stanza=25.5, ripresa=27.0)
+        desired = ctrl._compute(GIORNO)
+        self.assertEqual(desired.fan, "low")
+
+    def test_the_room_sensor_drops_the_offset_arithmetic_at_night(self):
+        """Il riferimento notturno calcolato su `target + correzione` era una pezza
+        sopra una pezza: serviva perche' il numero letto non era la stanza. Con un
+        termometro vero lo scarto e' quello fra la stanza e l'obiettivo, e basta."""
+        ctrl = self._con_sonda(stanza=22.0, ripresa=24.0)
+        self._orari(ctrl, target_sleep=22.5)
+        ctrl.entry.options = dict(ctrl.entry.options, setpoint_offset=-1.0)
+        # Stanza 22.0 contro obiettivo 22.5: mezzo grado sotto, quindi `medium`
+        # (il bordo delle bande notturne). La correzione non entra nel conto.
+        self.assertEqual(
+            ctrl._fan_delta("sleep", 22.0, 22.5, 0.0, misurata=True), -0.5
+        )
+        # Senza sonda, invece, il riferimento resta il setpoint comandato.
+        self.assertEqual(
+            ctrl._fan_delta("sleep", 22.0, 22.5, 0.0, misurata=False), 0.5
+        )
+
+    def test_the_margin_shrinks_when_the_fan_no_longer_moves_the_sensor(self):
+        """Il margine largo esisteva per impedire alla ventola di rincorrere se
+        stessa. Su un sensore che la ventola non muove torna a essere tolleranza al
+        rumore."""
+        ctrl = self._con_sonda(stanza=25.0)
+        self.assertEqual(
+            ctrl._fan_hysteresis("day", True), controller_module.FAN_HYSTERESIS_ROOM
+        )
+        self.assertEqual(
+            ctrl._fan_hysteresis("day", False), controller_module.FAN_HYSTERESIS
+        )
+        self.assertEqual(
+            ctrl._fan_hysteresis("sleep", False),
+            controller_module.FAN_HYSTERESIS_SLEEP,
+        )
+
+    def test_a_silent_room_sensor_falls_back_to_the_return_air(self):
+        """Collegato ma muto non deve lasciare il controller cieco."""
+        ctrl = self._con_sonda(stanza=25.5, ripresa=27.0)
+        ctrl.hass.states.values["sensor.stanza_vera"] = State("unavailable", {})
+        self.assertEqual(ctrl._read_room(27.0), (27.0, False))
+        # E una lettura assurda vale quanto un sensore assente.
+        ctrl.hass.states.values["sensor.stanza_vera"] = State("-999", {})
+        self.assertEqual(ctrl._read_room(27.0), (27.0, False))
+
     def test_smart_fan_follows_the_gap(self):
         for room, expected in ((27.5, "high"), (26.5, "medium"), (25.2, "low")):
             ctrl = self._smart_controller(room=room)
@@ -844,21 +903,20 @@ class ControllerRegressionTests(unittest.TestCase):
         self._profilo_notte(ctrl)
         self.assertEqual(ctrl._compute(GIORNO.replace(hour=2)).fan, "medium")
 
-    def test_wind_down_is_dry_with_fan_auto(self):
-        """L'ultima ora prima dello spegnimento deumidifica invece di raffreddare.
+    def test_wind_down_stays_in_cool_with_fan_auto(self):
+        """L'ultima ora prima dello spegnimento resta in `cool`.
 
-        Il `cool` era stato provato il 5 agosto sulla misura che a frequenza
-        comparabile il `dry` non risparmia (301 W contro 305, 347 contro 368). Ma
-        quel confronto guarda la potenza istantanea, non l'energia dell'ora: in
-        `dry` la camera si lascia salire e quel calore alle 08:30 viene comunque
-        buttato via allo spegnimento, mentre in `cool` la macchina insegue il target
-        fino all'ultimo minuto. Stima: +0.1/0.2 kWh sull'ora.
+        Qui c'era `dry`. Misurato il 5 agosto sull'energia dell'ora intera, che e'
+        il numero che conta, e non sulla potenza istantanea: il 2 agosto in `dry` la
+        camera e' andata da 23.5 a 24.5 con l'esterna a 26.0 spendendo 0.396 kWh; il
+        5 in `cool`, stessa partenza e stessa deriva, con due gradi in piu' fuori,
+        0.364 kWh. Una sola mattina, ma il confronto e' pulito.
         """
         ctrl = self._smart_controller(room=23.0)
         self._profilo_notte(ctrl)
         desired = ctrl._compute(GIORNO.replace(hour=8, minute=0))
         self.assertEqual(ctrl.current_phase, "wind_down")
-        self.assertEqual(desired.hvac, "dry")
+        self.assertEqual(desired.hvac, "cool")
         self.assertEqual(desired.fan, "auto")
         self.assertEqual(desired.setpoint, 22.0)
 

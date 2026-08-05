@@ -37,6 +37,7 @@ from .const import (
     CONF_NIGHT_SWITCH,
     CONF_OUTDOOR,
     CONF_OUTDOOR_FALLBACK,
+    CONF_ROOM_SENSOR,
     CONF_OVERRIDE_MINUTES,
     CONF_SETPOINT_OFFSET,
     CONF_SLEEP_END,
@@ -105,6 +106,9 @@ def _setup_schema(defaults: dict[str, Any]) -> vol.Schema:
                 "sensor", device_class="temperature"
             ),
             _optional(CONF_OUTDOOR_FALLBACK, defaults): _entity(
+                "sensor", device_class="temperature"
+            ),
+            _optional(CONF_ROOM_SENSOR, defaults): _entity(
                 "sensor", device_class="temperature"
             ),
             _optional(CONF_HUMIDITY, defaults): _entity(
