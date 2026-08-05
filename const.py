@@ -186,7 +186,17 @@ FAN_ORDER: tuple[str, ...] = ("low", "medium", "high")
 # a passi di mezzo grado, quindi 1.0+0.3 e 1.0+0.5 arrotondano entrambi alla
 # stessa prima lettura raggiungibile, 1.5, e 1.0-0.3 e 1.0-0.5 entrambi a 0.5.
 # Numero cambiato, comportamento identico.
-FAN_HYSTERESIS = 1.5
+#
+# **1.0 e non 1.5**, cioe' pari al guadagno dell'anello e non piu' largo. Con 1.5
+# il margine va superato a ogni gradino, quindi salire a `medium` pretendeva 2.5
+# di scarto e `high` 3.5: misurato, il massimo mai raggiunto in fascia diurna e'
+# **esattamente 2.5**, presente lo 0.6% del tempo. Le bande erano decorative, e il
+# 5 agosto alle 13:23 la camera stava a +2.0 dal target, con la casa a 27 e
+# l'esterna a 34, mentre la ventola restava su `low` non per scelta ma per
+# aritmetica. A 1.0 la salita a `medium` scatta a 2.0 e il rientro a `low` a 0.0:
+# la decisione torna all'algoritmo. E' il minimo che smorza l'oscillazione, quindi
+# va tenuto d'occhio: sotto questo valore il ciclo limite torna.
+FAN_HYSTERESIS = 1.0
 # Di notte no, e per un motivo che non e' tecnico: `low` e' il silenzio in camera,
 # ed e' la ragione per cui il muto e' scollegato. Con 1.5 la discesa avrebbe
 # preteso due gradi sotto il setpoint comandato, cioe' non sarebbe mai avvenuta.

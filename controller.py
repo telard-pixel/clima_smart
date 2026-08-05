@@ -1446,13 +1446,20 @@ class ClimaSmartController:
         spinta = False
         scarto_ventola = None
         if phase == PHASE_WIND_DOWN:
-            # L'ora prima dello spegnimento. Qui c'era `dry`, sull'idea che togliesse
-            # l'afa senza raffreddare oltre. Misurato su due giornate confrontabili a
-            # frequenza simile, non risparmia niente: 301 W in `cool` contro 305 in
-            # `dry` il 3 agosto, 347 contro 368 il 4. Il segno e' contrario, quindi si
-            # resta in `cool` fino allo spegnimento. La ventola resta su `auto`: nella
-            # sua ultima ora la macchina se la sceglie da sola, e sono comandi in meno.
-            program = HVAC_COOL
+            # L'ora prima dello spegnimento: `dry` con la ventola su `auto`, che toglie
+            # l'afa senza raffreddare oltre.
+            #
+            # Era stato provato `cool` il 5 agosto, sulla misura che a frequenza
+            # comparabile il `dry` non risparmia (301 W contro 305, e 347 contro 368).
+            # Ma quel confronto guarda la **potenza istantanea**, non l'energia
+            # dell'ora: in `dry` la camera si lascia salire da 23.5 a 25.4 e quel
+            # calore alle 08:30 viene comunque buttato via allo spegnimento, mentre in
+            # `cool` la macchina insegue il target fino all'ultimo minuto. Stima del
+            # revisore energetico: +0.1/0.2 kWh sull'ora, cioe' `cool` costa di piu'.
+            # Decisione dell'utente: si torna al `dry`.
+            program = (
+                HVAC_DRY if not hvac_modes or HVAC_DRY in hvac_modes else HVAC_COOL
+            )
             fan = "auto"
         else:
             program = self._program_for(delta, humidity, hvac_modes)

@@ -570,6 +570,21 @@ class ControllerRegressionTests(unittest.TestCase):
         ctrl.hass.states.values["climate.test"].attributes["current_temperature"] = 27.5
         self.assertEqual(ctrl._compute(GIORNO).fan, "medium")  # +2.5: deriva vera
 
+    def test_a_room_two_degrees_over_target_gets_more_fan(self):
+        """Il caso vero del 5 agosto alle 13:23: camera a 27.0 con target 25.0, casa
+        a 27.0, esterna 34 - e la ventola restava su `low`. Non era una decisione:
+        con isteresi 1.5 il margine andava superato a ogni gradino, quindi `medium`
+        pretendeva 2.5 e il massimo mai raggiunto in fascia diurna e' esattamente
+        2.5. A 1.0 la decisione torna all'algoritmo."""
+        # `fan="low"` come sull'unita' vera: senza un riferimento non c'e' margine da
+        # superare e la prova non direbbe nulla sul difetto.
+        ctrl = self._smart_controller(room=27.0, fan="low")
+        self.assertEqual(ctrl._compute(GIORNO).fan, "medium")
+        # E quando la stanza torna al target, rientra a `low`.
+        ctrl.hass.states.values["climate.test"].attributes["current_temperature"] = 25.0
+        dopo = GIORNO + timedelta(seconds=controller_module.MIN_FAN_DWELL_SECONDS + 60)
+        self.assertEqual(ctrl._compute(dopo).fan, "low")
+
     def test_smart_fan_holds_inside_the_hysteresis_band(self):
         ctrl = self._smart_controller(room=27.5)
         self.assertEqual(ctrl._compute(GIORNO).fan, "high")
@@ -829,15 +844,21 @@ class ControllerRegressionTests(unittest.TestCase):
         self._profilo_notte(ctrl)
         self.assertEqual(ctrl._compute(GIORNO.replace(hour=2)).fan, "medium")
 
-    def test_wind_down_stays_in_cool_with_fan_auto(self):
-        """Il `dry` dell'ultima ora non risparmiava niente: misurato su due giornate
-        confrontabili, 301 W in `cool` contro 305 in `dry`, e 347 contro 368. Il
-        segno e' contrario, quindi si resta in `cool` fino allo spegnimento."""
+    def test_wind_down_is_dry_with_fan_auto(self):
+        """L'ultima ora prima dello spegnimento deumidifica invece di raffreddare.
+
+        Il `cool` era stato provato il 5 agosto sulla misura che a frequenza
+        comparabile il `dry` non risparmia (301 W contro 305, 347 contro 368). Ma
+        quel confronto guarda la potenza istantanea, non l'energia dell'ora: in
+        `dry` la camera si lascia salire e quel calore alle 08:30 viene comunque
+        buttato via allo spegnimento, mentre in `cool` la macchina insegue il target
+        fino all'ultimo minuto. Stima: +0.1/0.2 kWh sull'ora.
+        """
         ctrl = self._smart_controller(room=23.0)
         self._profilo_notte(ctrl)
         desired = ctrl._compute(GIORNO.replace(hour=8, minute=0))
         self.assertEqual(ctrl.current_phase, "wind_down")
-        self.assertEqual(desired.hvac, "cool")
+        self.assertEqual(desired.hvac, "dry")
         self.assertEqual(desired.fan, "auto")
         self.assertEqual(desired.setpoint, 22.0)
 
