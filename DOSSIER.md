@@ -27,14 +27,42 @@ Assistant Core** (il reload della entry non reimporta i moduli già caricati).
 
 ### Curva potenza–frequenza, misurata
 
+**Attenzione: la retta vale solo sopra i 28 Hz.** Sotto, la macchina ha uno
+zoccolo fisso — ventole interna ed esterna, elettronica, minimo del compressore —
+che la formula lineare non descrive affatto.
+
+| Hz | W misurati | W/Hz | la retta direbbe |
+|---|---|---|---|
+| 12 | **233** | 19.4 | 18 ✗ |
+| 18 | **320** | 17.8 | 125 ✗ |
+| 28 | 369 | 13.2 | 302 |
+| 32 | 385 | 12.0 | 372 |
+| 40 | 509 | 12.7 | 514 ✓ |
+| 45 | 623 | 13.8 | 602 ✓ |
+| 56 | 772 | 13.8 | 797 ✓ |
+| 71 | 1071 | 15.1 | 1063 ✓ |
+
 ```
-W ≈ 17.7 × Hz − 194
-punti reali: 32 Hz→366 W · 46→634 · 56→781 · 66→882 · 71→1090
+sopra i 28 Hz:   W ≈ 17.7 × Hz − 194
+sotto i 28 Hz:   la retta sbaglia fino a dieci volte
 macchina spenta: 1.6 W
+campo di modulazione osservato: 12 → 81 Hz
 ```
 
-La vecchia formula da datasheet (22 W/Hz) sovrastimava del **55-69%** ed è stata
-sostituita dalla misura dello Shelly.
+**Conseguenze da non dimenticare:**
+
+1. Il rendimento migliore sta fra **28 e 45 Hz** (12-13 W/Hz). Sotto peggiora
+   perché lo zoccolo domina, sopra i 56 peggiora perché sale a 15 W/Hz. La
+   macchina passa già li' quasi tutto il suo tempo: 27.7% a 40 Hz, 18.8% a 45,
+   13.5% a 32.
+2. **Un secondo split non farebbe risparmiare.** Ogni macchina si porta dietro
+   il proprio zoccolo da ~230 W, quindi due unita' a 20 Hz consumerebbero circa
+   660 W contro i 509 di una sola a 40 Hz: stesso freddo, **il 30% in piu'**.
+   Un secondo split si compra per il comfort — cucina e salotto in temperatura,
+   porta della camera chiusa di notte — non per la bolletta, che salirebbe di un
+   20-25%.
+3. La vecchia formula da datasheet (22 W/Hz) sovrastimava del **55-69%** ed e'
+   stata sostituita dalla misura dello Shelly.
 
 ---
 
