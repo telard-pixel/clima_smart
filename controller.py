@@ -45,6 +45,7 @@ from .const import (
     CONF_ECO_OUTDOOR_ON,
     CONF_ECO_SWITCH,
     CONF_HOUSE_SENSORS,
+    CONF_HOT_OUTDOOR,
     CONF_HOUSE_TARGET,
     CONF_HUMIDITY,
     CONF_MORNING_OFF_START,
@@ -57,6 +58,7 @@ from .const import (
     CONF_ROOM_FLOOR,
     CONF_TRIM_MAX,
     CONF_TRIM_MIN,
+    CONF_TRIM_MIN_HOT,
     CONF_OVERRIDE_MINUTES,
     CONF_SETPOINT_OFFSET,
     CONF_SLEEP_END,
@@ -70,10 +72,12 @@ from .const import (
     CONF_VANE_SLEEP,
     CONF_VANE_V,
     DEFAULT_ADAPTIVE_MAX,
+    DEFAULT_HOT_OUTDOOR,
     DEFAULT_HOUSE_TARGET,
     DEFAULT_ROOM_FLOOR,
     DEFAULT_TRIM_MAX,
     DEFAULT_TRIM_MIN,
+    DEFAULT_TRIM_MIN_HOT,
     DEFAULT_ADAPTIVE_SLOPE,
     DEFAULT_ADAPTIVE_START,
     DEFAULT_AUTO_START_HOUSE,
@@ -108,6 +112,7 @@ from .const import (
     FAN_HYSTERESIS_SLEEP,
     FAN_HYSTERESIS_UP,
     FAN_ORDER,
+    HOT_OUTDOOR_HYSTERESIS,
     HOUSE_TRIM_DEADBAND,
     HOUSE_TRIM_DWELL_SECONDS,
     HVAC_COOL,
@@ -312,6 +317,9 @@ class ClimaSmartController:
         # ogni volta significherebbe non assestarsi mai.
         self.house_trim: float | None = None
         self._trim_changed_at: datetime | None = None
+        # Il vincolo legato all'esterna e' acceso o spento: ha isteresi, perche'
+        # la stazione riporta gradi interi e balla sulla soglia.
+        self._hot_outdoor = False
         # Cio' che non deve morire con il processo: i contrassegni "gia' fatto
         # oggi" e la resa manuale. Senza, un riavvio dopo che l'utente ha spento
         # a mano riaccendeva la macchina, e l'avvio diurno poteva farlo ore dopo
@@ -1121,12 +1129,36 @@ class ClimaSmartController:
         self.adaptive_extra = nuovo
         return nuovo
 
+    def _hot_outdoor_floor(self, outdoor: float | None) -> float | None:
+        """Il minimo che l'esterna impone al target della camera, se lo impone.
+
+        Non e' un secondo regolatore: non sposta l'obiettivo, dice solo fin dove ha
+        senso spingere. Sopra la soglia la macchina e' al limite, e chiedere di piu'
+        alla camera non porta gradi in casa - porta frequenza. Misurato: il
+        rendimento migliore sta fra 28 e 45 Hz (12-13 W/Hz) e peggiora sopra i 56
+        (15 W/Hz a 71).
+
+        Con isteresi, perche' l'esterna riporta gradi interi e balla sulla soglia.
+        """
+        soglia = float(self._cfg(CONF_HOT_OUTDOOR, DEFAULT_HOT_OUTDOOR) or 0.0)
+        if soglia <= 0 or outdoor is None:
+            self._hot_outdoor = False
+            return None
+        if self._hot_outdoor:
+            self._hot_outdoor = outdoor >= soglia - HOT_OUTDOOR_HYSTERESIS
+        else:
+            self._hot_outdoor = outdoor >= soglia
+        if not self._hot_outdoor:
+            return None
+        return float(self._cfg(CONF_TRIM_MIN_HOT, DEFAULT_TRIM_MIN_HOT) or 0.0) or None
+
     def _house_trim(
         self,
         now: datetime,
         casa: float | None,
         passo: float,
         comodino: float | None,
+        outdoor: float | None = None,
     ) -> float | None:
         """Il target della camera che serve per tenere le altre stanze sulla linea.
 
@@ -1145,6 +1177,9 @@ class ClimaSmartController:
             return None                      # anello disattivato: target fisso di prima
         minimo = float(self._cfg(CONF_TRIM_MIN, DEFAULT_TRIM_MIN) or DEFAULT_TRIM_MIN)
         massimo = float(self._cfg(CONF_TRIM_MAX, DEFAULT_TRIM_MAX) or DEFAULT_TRIM_MAX)
+        caldo = self._hot_outdoor_floor(outdoor)
+        if caldo is not None:
+            minimo = max(minimo, caldo)
 
         if self.house_trim is None:
             # Si parte dal target di casa configurato, che e' l'ultima volonta'
@@ -1152,6 +1187,11 @@ class ClimaSmartController:
             # aspetta comunque la sua attesa piena: senza, la prima valutazione dopo
             # un riavvio salterebbe di un grado all'istante.
             self.house_trim = min(max(self.target_home, minimo), massimo)
+            self._trim_changed_at = now
+        if self.house_trim < minimo:
+            # Il vincolo si e' appena acceso e siamo gia' sotto: si risale subito.
+            # Chiedere meno e' la direzione sicura, non ha senso aspettare.
+            self.house_trim = minimo
             self._trim_changed_at = now
         if casa is None:
             return self.house_trim           # nessuna media: si tiene quello che c'e'
@@ -1530,7 +1570,9 @@ class ClimaSmartController:
         else:
             # Di giorno comanda la linea di comfort delle altre stanze, e la camera
             # e' lo strumento per ottenerla.
-            trim = self._house_trim(now, casa, passo, room if room_measured else None)
+            trim = self._house_trim(
+                now, casa, passo, room if room_measured else None, outdoor
+            )
             if trim is not None:
                 target = trim
                 # L'adattivo qui non si applica, e non e' una dimenticanza: alza il

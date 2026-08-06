@@ -17,10 +17,12 @@ from homeassistant.helpers import selector
 from .validation import aux_switches_are_distinct, validate_options
 from .const import (
     CONF_ADAPTIVE_MAX,
+    CONF_HOT_OUTDOOR,
     CONF_HOUSE_TARGET,
     CONF_ROOM_FLOOR,
     CONF_TRIM_MAX,
     CONF_TRIM_MIN,
+    CONF_TRIM_MIN_HOT,
     CONF_ADAPTIVE_SLOPE,
     CONF_ADAPTIVE_START,
     CONF_AUTO_START_HOUSE,
@@ -55,10 +57,12 @@ from .const import (
     CONF_VANE_SLEEP,
     CONF_VANE_V,
     DEFAULT_ADAPTIVE_MAX,
+    DEFAULT_HOT_OUTDOOR,
     DEFAULT_HOUSE_TARGET,
     DEFAULT_ROOM_FLOOR,
     DEFAULT_TRIM_MAX,
     DEFAULT_TRIM_MIN,
+    DEFAULT_TRIM_MIN_HOT,
     DEFAULT_ADAPTIVE_SLOPE,
     DEFAULT_ADAPTIVE_START,
     DEFAULT_AUTO_START_HOUSE,
@@ -313,6 +317,14 @@ class ClimaSmartOptionsFlow(OptionsFlow):
                     CONF_ROOM_FLOOR,
                     default=_num(CONF_ROOM_FLOOR, DEFAULT_ROOM_FLOOR),
                 ): vol.All(vol.Coerce(float), vol.Range(min=0, max=30)),
+                vol.Required(
+                    CONF_HOT_OUTDOOR,
+                    default=_num(CONF_HOT_OUTDOOR, DEFAULT_HOT_OUTDOOR),
+                ): vol.All(vol.Coerce(float), vol.Range(min=0, max=50)),
+                vol.Required(
+                    CONF_TRIM_MIN_HOT,
+                    default=_num(CONF_TRIM_MIN_HOT, DEFAULT_TRIM_MIN_HOT),
+                ): vol.All(vol.Coerce(float), vol.Range(min=16, max=32)),
                 vol.Required(
                     CONF_ADAPTIVE_START,
                     default=_num(CONF_ADAPTIVE_START, DEFAULT_ADAPTIVE_START),

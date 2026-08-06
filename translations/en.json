@@ -82,7 +82,9 @@
           "house_target": "Comfort line for the other rooms (0 = disabled)",
           "trim_min": "Lowest target the controller may ask of the bedroom",
           "trim_max": "Highest target the controller may ask of the bedroom",
-          "room_floor": "Temperature the bedroom must not go below (0 = no limit)"
+          "room_floor": "Temperature the bedroom must not go below (0 = no limit)",
+          "hot_outdoor": "Outdoor temperature above which pushing further is pointless (0 = disabled)",
+          "trim_min_hot": "Lowest bedroom target when it is scorching outside"
         },
         "data_description": {
           "auto_start_sleep": "If the unit is off at that time, it is switched on once. Outside that moment the controller never starts it by itself.",
@@ -98,7 +100,9 @@
           "house_target": "Comfort line for the other rooms (0 = disabled)",
           "trim_min": "Lowest target the controller may ask of the bedroom",
           "trim_max": "Highest target the controller may ask of the bedroom",
-          "room_floor": "Temperature the bedroom must not go below (0 = no limit)"
+          "room_floor": "Temperature the bedroom must not go below (0 = no limit)",
+          "hot_outdoor": "Outdoor temperature above which pushing further is pointless (0 = disabled)",
+          "trim_min_hot": "Lowest bedroom target when it is scorching outside"
         }
       }
     },

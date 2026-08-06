@@ -88,6 +88,12 @@ CONF_TRIM_MAX = "trim_max"
 # scende oltre: la camera serve la casa, ma resta una stanza in cui si dorme.
 # Zero disattiva il limite.
 CONF_ROOM_FLOOR = "room_floor"
+# Vincolo di realta', non un secondo regolatore: sopra questa temperatura esterna
+# la macchina e' al limite e chiedere alla camera meno di `trim_min_hot` non porta
+# gradi in casa, porta solo frequenza. Misurato: il rendimento e' migliore fra 28
+# e 45 Hz (12-13 W/Hz) e peggiora sopra i 56 (15 W/Hz a 71). Zero disattiva.
+CONF_HOT_OUTDOOR = "hot_outdoor"
+CONF_TRIM_MIN_HOT = "trim_min_hot"
 
 # --- Target adattivo sull'esterna ---
 # Chiedere 25 gradi con 28 fuori e con 36 fuori non e' la stessa richiesta: nella
@@ -126,6 +132,8 @@ DEFAULT_HOUSE_TARGET = 0.0       # zero: anello esterno disattivato
 DEFAULT_TRIM_MIN = 21.0
 DEFAULT_TRIM_MAX = 27.0
 DEFAULT_ROOM_FLOOR = 0.0         # zero: nessun limite inferiore in camera
+DEFAULT_HOT_OUTDOOR = 0.0        # zero: nessun vincolo legato all'esterna
+DEFAULT_TRIM_MIN_HOT = 23.0
 
 # While the unit is already cooling, the season threshold drops by this much, so a
 # cycle in progress is not cut off by a small dip in the outdoor reading.
@@ -168,6 +176,10 @@ ADAPTIVE_MIN_DWELL_SECONDS = 3600
 HOUSE_TRIM_DWELL_SECONDS = 2700          # tre quarti d'ora fra una correzione e l'altra
 # Banda morta attorno alla linea di comfort: dentro questa, non si tocca niente.
 HOUSE_TRIM_DEADBAND = 0.25
+# L'esterna riporta gradi interi e balla sulla soglia: senza questo margine il
+# vincolo si accenderebbe e spegnerebbe a ogni lettura. E' lo stesso difetto che
+# il 4 agosto ha fatto rincorrere il setpoint dieci volte in un pomeriggio.
+HOT_OUTDOOR_HYSTERESIS = 1.0
 
 # How long async_start waits for the master switch and the mode select to restore
 # before opening the barrier in degraded mode.

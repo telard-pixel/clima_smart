@@ -82,7 +82,9 @@
           "house_target": "Linea di comfort delle altre stanze (0 = disattivato)",
           "trim_min": "Target minimo che il controller può chiedere alla camera",
           "trim_max": "Target massimo che il controller può chiedere alla camera",
-          "room_floor": "Temperatura sotto cui la camera non deve scendere (0 = nessun limite)"
+          "room_floor": "Temperatura sotto cui la camera non deve scendere (0 = nessun limite)",
+          "hot_outdoor": "Esterna sopra cui non ha senso spingere oltre (0 = disattivato)",
+          "trim_min_hot": "Target minimo della camera quando fuori è torrido"
         },
         "data_description": {
           "auto_start_sleep": "Se il clima è spento all'orario di inizio, lo accende una volta sola. Fuori da quel momento il controller non accende mai da sé.",
@@ -98,7 +100,9 @@
           "house_target": "Linea di comfort delle altre stanze (0 = disattivato)",
           "trim_min": "Target minimo che il controller può chiedere alla camera",
           "trim_max": "Target massimo che il controller può chiedere alla camera",
-          "room_floor": "Temperatura sotto cui la camera non deve scendere (0 = nessun limite)"
+          "room_floor": "Temperatura sotto cui la camera non deve scendere (0 = nessun limite)",
+          "hot_outdoor": "Esterna sopra cui non ha senso spingere oltre (0 = disattivato)",
+          "trim_min_hot": "Target minimo della camera quando fuori è torrido"
         }
       }
     },

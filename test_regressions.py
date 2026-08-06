@@ -685,6 +685,47 @@ class ControllerRegressionTests(unittest.TestCase):
         )
         self.assertEqual(ctrl._compute(dopo).setpoint, 25.0)
 
+    def test_a_very_hot_day_puts_a_floor_under_the_loop(self):
+        """Sopra la soglia la macchina e' al limite: chiedere di piu' alla camera non
+        porta gradi in casa, porta frequenza. Misurato, il rendimento migliore sta
+        fra 28 e 45 Hz e peggiora sopra i 56."""
+        ctrl = self._con_anello()
+        ctrl.entry.options = dict(
+            ctrl.entry.options, trim_min=22.0, hot_outdoor=36.0, trim_min_hot=23.0
+        )
+        ctrl.hass.states.values["sensor.outdoor"] = State("37", {"unit_of_measurement": "°C"})
+        t = GIORNO
+        for _ in range(6):     # la casa resta sopra la linea: l'anello spinge
+            t += timedelta(seconds=controller_module.HOUSE_TRIM_DWELL_SECONDS + 60)
+            ctrl._compute(t)
+        self.assertEqual(ctrl.house_trim, 23.0)   # si ferma al vincolo, non a 22.0
+
+    def test_the_hot_floor_lifts_the_target_at_once(self):
+        """Se il vincolo si accende mentre siamo gia' sotto, si risale subito:
+        chiedere meno e' la direzione sicura e non ha senso aspettare."""
+        ctrl = self._con_anello()
+        ctrl.entry.options = dict(ctrl.entry.options, trim_min=22.0)
+        t = GIORNO
+        for _ in range(6):
+            t += timedelta(seconds=controller_module.HOUSE_TRIM_DWELL_SECONDS + 60)
+            ctrl._compute(t)
+        self.assertEqual(ctrl.house_trim, 22.0)
+        # Adesso fuori diventa torrido e il vincolo entra in gioco.
+        ctrl.entry.options = dict(ctrl.entry.options, hot_outdoor=36.0, trim_min_hot=23.0)
+        ctrl.hass.states.values["sensor.outdoor"] = State("37", {"unit_of_measurement": "°C"})
+        self.assertEqual(ctrl._compute(t + timedelta(minutes=1)).setpoint, 23.0)
+
+    def test_the_hot_floor_does_not_flicker_on_the_threshold(self):
+        """L'esterna riporta gradi interi e balla sulla soglia: senza isteresi il
+        vincolo si accenderebbe e spegnerebbe a ogni lettura, che e' lo stesso
+        difetto che il 4 agosto ha fatto rincorrere il setpoint dieci volte."""
+        ctrl = self._con_anello()
+        ctrl.entry.options = dict(ctrl.entry.options, hot_outdoor=36.0, trim_min_hot=23.0)
+        self.assertIsNone(ctrl._hot_outdoor_floor(35.0))    # sotto: spento
+        self.assertEqual(ctrl._hot_outdoor_floor(36.0), 23.0)   # sopra: acceso
+        self.assertEqual(ctrl._hot_outdoor_floor(35.0), 23.0)   # ricade: tiene
+        self.assertIsNone(ctrl._hot_outdoor_floor(34.0))    # scende davvero: molla
+
     def test_smart_fan_follows_the_gap(self):
         for room, expected in ((27.5, "high"), (26.5, "medium"), (25.2, "low")):
             ctrl = self._smart_controller(room=room)
