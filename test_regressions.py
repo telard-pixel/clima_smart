@@ -545,53 +545,44 @@ class ControllerRegressionTests(unittest.TestCase):
         ctrl.entry.options = dict(ctrl.entry.options, target_home=target)
         return ctrl
 
-    def test_a_real_room_sensor_replaces_the_return_air(self):
-        """La ripresa direbbe +2.0 e chiederebbe `medium`; la stanza vera dice +0.5."""
-        ctrl = self._con_sonda(stanza=25.5, ripresa=27.0)
+    def test_the_bedside_sensor_does_not_take_over_the_control(self):
+        """Errore del 6 agosto, corretto lo stesso giorno.
+
+        Il termometro del comodino era stato messo al posto della ripresa in tutto
+        il calcolo. Ma legge 3.1-3.5 gradi meno - sta in basso al comodino, la
+        ripresa e' in alto - quindi lo scarto risultava sempre piccolo, la ventola
+        non saliva mai, e con la ventola bassa il compressore resta inchiodato: il
+        setpoint e' stato abbassato di due gradi e per due ore la macchina non si e'
+        mossa da 46 Hz, la ripresa da 27.0 e la casa da 26.9. Un anello che chiede e
+        una macchina che non esegue. Il controllo resta sulla ripresa, che e' cio'
+        che la macchina stessa insegue.
+        """
+        ctrl = self._con_sonda(stanza=23.5, ripresa=27.0)
         desired = ctrl._compute(GIORNO)
-        self.assertEqual(desired.fan, "low")
+        # Il comodino direbbe scarto -1.5 e ventola ferma; la ripresa dice +2.0.
+        self.assertEqual(desired.fan, "medium")
 
-    def test_the_room_sensor_drops_the_offset_arithmetic_at_night(self):
-        """Il riferimento notturno calcolato su `target + correzione` era una pezza
-        sopra una pezza: serviva perche' il numero letto non era la stanza. Con un
-        termometro vero lo scarto e' quello fra la stanza e l'obiettivo, e basta."""
-        ctrl = self._con_sonda(stanza=22.0, ripresa=24.0)
-        self._orari(ctrl, target_sleep=22.5)
-        ctrl.entry.options = dict(ctrl.entry.options, setpoint_offset=-1.0)
-        # Stanza 22.0 contro obiettivo 22.5: mezzo grado sotto, quindi `medium`
-        # (il bordo delle bande notturne). La correzione non entra nel conto.
-        self.assertEqual(
-            ctrl._fan_delta("sleep", 22.0, 22.5, 0.0, misurata=True), -0.5
-        )
-        # Senza sonda, invece, il riferimento resta il setpoint comandato.
-        self.assertEqual(
-            ctrl._fan_delta("sleep", 22.0, 22.5, 0.0, misurata=False), 0.5
-        )
+    def test_the_bedside_sensor_is_read_only_for_the_floor(self):
+        """Serve a una cosa sola: dire quando la camera ha dato abbastanza."""
+        ctrl = self._con_sonda(stanza=21.4, ripresa=27.0)
+        self.assertEqual(ctrl._read_bedside(), 21.4)
+        # Muto, o con una lettura assurda, e' come se non ci fosse - e il controllo
+        # non se ne accorge nemmeno, perche' non lo stava usando per decidere.
+        ctrl.hass.states.values["sensor.stanza_vera"] = State("unavailable", {})
+        self.assertIsNone(ctrl._read_bedside())
+        ctrl.hass.states.values["sensor.stanza_vera"] = State("-999", {})
+        self.assertIsNone(ctrl._read_bedside())
 
-    def test_the_margin_shrinks_when_the_fan_no_longer_moves_the_sensor(self):
-        """Il margine largo esisteva per impedire alla ventola di rincorrere se
-        stessa. Su un sensore che la ventola non muove torna a essere tolleranza al
-        rumore."""
-        ctrl = self._con_sonda(stanza=25.0)
-        r = controller_module.FAN_HYSTERESIS_ROOM
-        self.assertEqual(ctrl._fan_hysteresis("day", True), (r, r))
-        # Sulla ripresa i due versi sono asimmetrici: salire costa, scendere fa
-        # risparmiare, quindi non meritano la stessa reticenza.
+    def test_the_fan_margins_are_asymmetric(self):
+        """Salire costa, scendere fa risparmiare: i due versi non meritano la stessa
+        reticenza. Di notte restano simmetrici, dove non c'e' niente da bilanciare."""
+        ctrl = self._smart_controller(room=27.0)
         self.assertEqual(
-            ctrl._fan_hysteresis("day", False),
+            ctrl._fan_hysteresis("day"),
             (controller_module.FAN_HYSTERESIS_UP, controller_module.FAN_HYSTERESIS_DOWN),
         )
         s = controller_module.FAN_HYSTERESIS_SLEEP
-        self.assertEqual(ctrl._fan_hysteresis("sleep", False), (s, s))
-
-    def test_a_silent_room_sensor_falls_back_to_the_return_air(self):
-        """Collegato ma muto non deve lasciare il controller cieco."""
-        ctrl = self._con_sonda(stanza=25.5, ripresa=27.0)
-        ctrl.hass.states.values["sensor.stanza_vera"] = State("unavailable", {})
-        self.assertEqual(ctrl._read_room(27.0), (27.0, False))
-        # E una lettura assurda vale quanto un sensore assente.
-        ctrl.hass.states.values["sensor.stanza_vera"] = State("-999", {})
-        self.assertEqual(ctrl._read_room(27.0), (27.0, False))
+        self.assertEqual(ctrl._fan_hysteresis("sleep"), (s, s))
 
     # -------------------------- anello esterno: comanda la casa, non la camera
     def _con_anello(self, ripresa=27.0, altre=(27.3, 27.1, 26.3), linea=26.5):

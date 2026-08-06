@@ -108,7 +108,6 @@ from .const import (
     FAN_BANDS,
     FAN_BANDS_SLEEP,
     FAN_HYSTERESIS_DOWN,
-    FAN_HYSTERESIS_ROOM,
     FAN_HYSTERESIS_SLEEP,
     FAN_HYSTERESIS_UP,
     FAN_ORDER,
@@ -785,7 +784,6 @@ class ClimaSmartController:
         room: float | None,
         target: float,
         compensazione: float,
-        misurata: bool = False,
     ) -> float | None:
         """The signal the fan decision reads.
 
@@ -809,10 +807,6 @@ class ClimaSmartController:
         """
         if room is None:
             return None
-        if misurata:
-            # Con un termometro vero non serve nessuna aritmetica: lo scarto e'
-            # quello fra la stanza e l'obiettivo, di giorno come di notte.
-            return room - target
         if phase == PHASE_SLEEP:
             # La notte resta sulla camera, perche' `low` non e' solo una portata:
             # e' il silenzio, ed e' il motivo per cui il muto e' scollegato. Cambia
@@ -924,7 +918,7 @@ class ClimaSmartController:
         # Not confirmed yet: carry on as if it were still summer.
         return True
 
-    def _fan_hysteresis(self, phase: str, misurata: bool) -> tuple[float, float]:
+    def _fan_hysteresis(self, phase: str) -> tuple[float, float]:
         """How much margin the fan decision needs before it moves.
 
         Sized to what the number can actually do. On the return air the margin has
@@ -933,40 +927,43 @@ class ClimaSmartController:
         fan does not move, the margin goes back to being what a margin should be:
         tolerance for sensor noise, and nothing more.
         """
-        if misurata:
-            return FAN_HYSTERESIS_ROOM, FAN_HYSTERESIS_ROOM
         if phase == PHASE_SLEEP:
             return FAN_HYSTERESIS_SLEEP, FAN_HYSTERESIS_SLEEP
         return FAN_HYSTERESIS_UP, FAN_HYSTERESIS_DOWN
 
-    def _read_room(self, ripresa: float | None) -> tuple[float | None, bool]:
-        """The room temperature, and whether it was really measured in the room.
+    def _read_bedside(self) -> float | None:
+        """Il termometro della camera, se collegato. **Serve da limite, non da
+        riferimento del controllo.**
 
-        Without a dedicated sensor the only number available is the unit's own
-        `current_temperature`, which is the **return air**: measured here, a single
-        fan step moves it by a whole degree within two minutes while the room
-        thermometers stand still. Everything downstream then needs a correction
-        whose size depends on the fan speed - which is the patch this exists to
-        retire. With a real sensor in the room, the target means what it says.
+        Errore commesso il 6 agosto e corretto lo stesso giorno: era stato messo al
+        posto della temperatura di ripresa in tutto il calcolo, e siccome legge
+        3.1-3.5 gradi meno - sta al comodino, in basso, mentre la ripresa e' in alto
+        e in un getto d'aria - lo scarto diventava sempre piccolo. Con uno scarto
+        piccolo la ventola non saliva mai, e con la ventola bassa il compressore
+        resta inchiodato: il setpoint e' stato abbassato di due gradi e per due ore
+        la macchina non si e' mossa da 46 Hz, la ripresa da 27.0 e la casa da 26.9.
+
+        Un anello che chiede e una macchina che non esegue. Quindi il controllo
+        resta sulla ripresa, che e' cio' che la macchina stessa insegue, e questo
+        numero fa una cosa sola: dire quando la camera ha dato abbastanza.
         """
         ent = self._cfg(CONF_ROOM_SENSOR)
-        if ent:
-            st = self.hass.states.get(ent)
-            if st is not None:
-                valore = _to_float(st.state)
-                if valore is not None:
-                    valore = _convert_temperature(
-                        valore,
-                        st.attributes.get("unit_of_measurement"),
-                        UnitOfTemperature.CELSIUS,
-                    )
-                    if valore is not None and _plausible(valore):
-                        return valore, True
-            # Collegato ma muto: si torna alla ripresa invece di restare ciechi.
-            _LOGGER.debug(
-                "Clima Smart: sensore stanza %s non utilizzabile, uso la ripresa", ent
-            )
-        return ripresa, False
+        if not ent:
+            return None
+        st = self.hass.states.get(ent)
+        if st is None:
+            return None
+        valore = _to_float(st.state)
+        if valore is None:
+            return None
+        valore = _convert_temperature(
+            valore,
+            st.attributes.get("unit_of_measurement"),
+            UnitOfTemperature.CELSIUS,
+        )
+        if valore is None or not _plausible(valore):
+            return None
+        return valore
 
     def _read_outdoor(self) -> tuple[float | None, bool]:
         for key in (CONF_OUTDOOR, CONF_OUTDOOR_FALLBACK):
@@ -1489,7 +1486,8 @@ class ClimaSmartController:
             climate_unit,
             UnitOfTemperature.CELSIUS,
         )
-        room, room_measured = self._read_room(ripresa)
+        room = ripresa
+        comodino = self._read_bedside()
         outdoor, outdoor_valid = self._read_outdoor()
 
         if outdoor_valid:
@@ -1571,7 +1569,7 @@ class ClimaSmartController:
             # Di giorno comanda la linea di comfort delle altre stanze, e la camera
             # e' lo strumento per ottenerla.
             trim = self._house_trim(
-                now, casa, passo, room if room_measured else None, outdoor
+                now, casa, passo, comodino, outdoor
             )
             if trim is not None:
                 target = trim
@@ -1653,9 +1651,7 @@ class ClimaSmartController:
             fan = "auto"
         else:
             program = self._program_for(delta, humidity, hvac_modes)
-            scarto_ventola = self._fan_delta(
-                phase, room, target, compensazione, room_measured
-            )
+            scarto_ventola = self._fan_delta(phase, room, target, compensazione)
             spinta = phase == PHASE_SLEEP and self._sleep_boost_active(now)
             fan = (
                 self._boost_fan(
@@ -1672,7 +1668,7 @@ class ClimaSmartController:
                     now,
                     climate.attributes.get("fan_modes"),
                     FAN_BANDS_SLEEP if phase == PHASE_SLEEP else FAN_BANDS,
-                    self._fan_hysteresis(phase, room_measured),
+                    self._fan_hysteresis(phase),
                 )
         if phase == PHASE_SLEEP:
             alette_h = alette_v = self._cfg(CONF_VANE_SLEEP, DEFAULT_VANE_SLEEP)
