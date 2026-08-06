@@ -78,7 +78,11 @@
           "vane_day_vertical": "Vertical vane during the day",
           "adaptive_outdoor_start": "Adapt the target above this outdoor temperature (°C)",
           "adaptive_slope": "How much to raise it per outdoor degree",
-          "adaptive_max": "Maximum target increase (°C)"
+          "adaptive_max": "Maximum target increase (°C)",
+          "house_target": "Comfort line for the other rooms (0 = disabled)",
+          "trim_min": "Lowest target the controller may ask of the bedroom",
+          "trim_max": "Highest target the controller may ask of the bedroom",
+          "room_floor": "Temperature the bedroom must not go below (0 = no limit)"
         },
         "data_description": {
           "auto_start_sleep": "If the unit is off at that time, it is switched on once. Outside that moment the controller never starts it by itself.",
@@ -90,7 +94,11 @@
           "vane_day_vertical": "Position restored when the deep night ends, once. Empty: the vanes are left where they are.",
           "adaptive_outdoor_start": "0 disables it. Below this the target stays as configured.",
           "adaptive_slope": "For example 0.25 means half a degree of target every two outdoor degrees.",
-          "adaptive_max": "Cap beyond which the target stops rising, however hot it gets."
+          "adaptive_max": "Cap beyond which the target stops rising, however hot it gets.",
+          "house_target": "Comfort line for the other rooms (0 = disabled)",
+          "trim_min": "Lowest target the controller may ask of the bedroom",
+          "trim_max": "Highest target the controller may ask of the bedroom",
+          "room_floor": "Temperature the bedroom must not go below (0 = no limit)"
         }
       }
     },
@@ -98,7 +106,8 @@
       "invalid_time_order": "Times must be in order: morning off < day < night.",
       "invalid_eco_range": "\"Eco ON when outdoor below\" must be lower than \"Eco OFF when outdoor above\".",
       "invalid_sleep_window": "Deep night cannot start and end at the same time",
-      "invalid_wind_down": "The deep-night window must end before the morning switch-off"
+      "invalid_wind_down": "The deep-night window must end before the morning switch-off",
+      "invalid_trim_range": "The bedroom's lowest target must be below the highest."
     }
   },
   "entity": {

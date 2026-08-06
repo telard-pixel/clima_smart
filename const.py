@@ -73,6 +73,22 @@ CONF_AUTO_START_HOUSE = "auto_start_house"
 # Guard: no daytime start at all unless it is really a hot day outside.
 CONF_AUTO_START_OUTDOOR = "auto_start_outdoor"
 
+# --- La linea di comfort delle altre stanze (anello esterno) ---
+# Di giorno l'obiettivo non e' la camera: sono salotto, cucina e ingresso. La
+# camera e' lo strumento - sta piu' fredda perche' e' la sorgente di freddo di
+# tutto il trilocale, e l'aria passa dalla porta aperta. Quindi il target della
+# camera non lo sceglie l'utente: lo sceglie il controller, tanto basso quanto
+# serve perche' le altre stanze stiano sulla linea. Zero disattiva tutto e si
+# torna al target fisso di prima.
+CONF_HOUSE_TARGET = "house_target"
+# Estremi entro cui il controller puo' muovere il target della camera.
+CONF_TRIM_MIN = "trim_min"
+CONF_TRIM_MAX = "trim_max"
+# Con un termometro in camera (`room_sensor`), sotto questa temperatura non si
+# scende oltre: la camera serve la casa, ma resta una stanza in cui si dorme.
+# Zero disattiva il limite.
+CONF_ROOM_FLOOR = "room_floor"
+
 # --- Target adattivo sull'esterna ---
 # Chiedere 25 gradi con 28 fuori e con 36 fuori non e' la stessa richiesta: nella
 # seconda la macchina insegue un divario che non le compete, e il grado in piu'
@@ -106,6 +122,10 @@ DEFAULT_AUTO_START_OUTDOOR = 0.0
 DEFAULT_ADAPTIVE_START = 0.0      # zero disattiva del tutto l'adattamento
 DEFAULT_ADAPTIVE_SLOPE = 0.25     # un quarto di grado di target per grado esterno
 DEFAULT_ADAPTIVE_MAX = 1.5
+DEFAULT_HOUSE_TARGET = 0.0       # zero: anello esterno disattivato
+DEFAULT_TRIM_MIN = 21.0
+DEFAULT_TRIM_MAX = 27.0
+DEFAULT_ROOM_FLOOR = 0.0         # zero: nessun limite inferiore in camera
 
 # While the unit is already cooling, the season threshold drops by this much, so a
 # cycle in progress is not cut off by a small dip in the outdoor reading.
@@ -140,6 +160,14 @@ ADAPTIVE_QUANTUM = 0.5
 # di venti-venticinque minuti esatti. L'esterna si muove piano, ridecidere spesso
 # non aggiunge informazione.
 ADAPTIVE_MIN_DWELL_SECONDS = 3600
+
+# --- Anello esterno: quanto piano correggere ---
+# Una casa risponde in ore, non in minuti: misurato, il pomeriggio piu' efficace
+# ha tolto 0.72 gradi alla media in otto ore. Correggere in fretta significa solo
+# rincorrere il rumore dei termometri.
+HOUSE_TRIM_DWELL_SECONDS = 2700          # tre quarti d'ora fra una correzione e l'altra
+# Banda morta attorno alla linea di comfort: dentro questa, non si tocca niente.
+HOUSE_TRIM_DEADBAND = 0.25
 
 # How long async_start waits for the master switch and the mode select to restore
 # before opening the barrier in degraded mode.

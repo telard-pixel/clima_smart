@@ -593,6 +593,98 @@ class ControllerRegressionTests(unittest.TestCase):
         ctrl.hass.states.values["sensor.stanza_vera"] = State("-999", {})
         self.assertEqual(ctrl._read_room(27.0), (27.0, False))
 
+    # -------------------------- anello esterno: comanda la casa, non la camera
+    def _con_anello(self, ripresa=27.0, altre=(27.3, 27.1, 26.3), linea=26.5):
+        """Di giorno l'obiettivo sono salotto, cucina e ingresso: la camera e' lo
+        strumento, e sta piu' fredda perche' e' la sorgente di freddo della casa."""
+        ctrl = self._smart_controller(room=ripresa, fan="low")
+        for i, v in enumerate(altre):
+            ctrl.hass.states.values[f"sensor.stanza{i}"] = State(
+                str(v), {"unit_of_measurement": "°C"}
+            )
+        ctrl.entry.data = dict(
+            ctrl.entry.data,
+            house_sensors=[f"sensor.stanza{i}" for i in range(len(altre))],
+        )
+        ctrl.entry.options = dict(
+            ctrl.entry.options, target_home=25.0, house_target=linea,
+            trim_min=21.0, trim_max=27.0,
+        )
+        return ctrl
+
+    def test_the_house_commands_the_bedroom_target(self):
+        """Casa sopra la linea: si chiede di piu' alla camera, un passo alla volta."""
+        ctrl = self._con_anello()          # media 26.9 contro linea 26.5
+        primo = ctrl._compute(GIORNO)
+        self.assertEqual(primo.setpoint, 25.0)   # si parte dal target configurato
+        # Subito dopo non si muove: la casa risponde in ore, non in minuti.
+        self.assertEqual(ctrl._compute(GIORNO + timedelta(minutes=5)).setpoint, 25.0)
+        dopo = GIORNO + timedelta(
+            seconds=controller_module.HOUSE_TRIM_DWELL_SECONDS + 60
+        )
+        self.assertEqual(ctrl._compute(dopo).setpoint, 24.0)   # un passo piu' freddo
+
+    def test_the_loop_lets_go_when_the_house_is_cold_enough(self):
+        """Casa sotto la linea: il controller molla la presa e alza il target,
+        invece di continuare a raffreddare una casa che sta gia' bene."""
+        ctrl = self._con_anello(altre=(25.6, 25.5, 25.4))   # media 25.5, linea 26.5
+        ctrl._compute(GIORNO)
+        dopo = GIORNO + timedelta(
+            seconds=controller_module.HOUSE_TRIM_DWELL_SECONDS + 60
+        )
+        self.assertEqual(ctrl._compute(dopo).setpoint, 26.0)
+
+    def test_the_loop_does_nothing_inside_the_deadband(self):
+        """Dentro la banda morta non si tocca niente: un quarto di grado di media
+        non vale un comando alla macchina."""
+        ctrl = self._con_anello(altre=(26.6, 26.5, 26.4))   # media 26.5 = la linea
+        ctrl._compute(GIORNO)
+        dopo = GIORNO + timedelta(
+            seconds=controller_module.HOUSE_TRIM_DWELL_SECONDS + 60
+        )
+        self.assertEqual(ctrl._compute(dopo).setpoint, 25.0)
+
+    def test_the_loop_stops_at_the_bedroom_floor(self):
+        """La camera serve la casa, ma resta una stanza in cui si dorme: sotto il
+        limite non si scende, anche se la casa e' ancora sopra la linea."""
+        ctrl = self._con_anello()
+        ctrl.entry.options = dict(ctrl.entry.options, room_floor=22.0)
+        ctrl.hass.states.values["sensor.comodino"] = State("21.5", {})
+        ctrl.entry.data = dict(ctrl.entry.data, room_sensor="sensor.comodino")
+        ctrl._compute(GIORNO)
+        dopo = GIORNO + timedelta(
+            seconds=controller_module.HOUSE_TRIM_DWELL_SECONDS + 60
+        )
+        self.assertEqual(ctrl._compute(dopo).setpoint, 25.0)   # non e' sceso
+
+    def test_the_loop_stays_out_of_the_night(self):
+        """Di notte la porta e' chiusa: la casa esce dal quadro e comanda la camera."""
+        ctrl = self._con_anello()
+        self._orari(ctrl, target_sleep=22.0)
+        notte = NOW.replace(hour=2, minute=0)
+        self.assertEqual(ctrl._compute(notte).setpoint, 22.0)
+
+    def test_the_loop_replaces_the_adaptive_instead_of_fighting_it(self):
+        """L'adattivo alza il target quando fuori fa caldo, cioe' fa il contrario
+        dell'obiettivo proprio nelle ore in cui la casa fatica di piu'."""
+        ctrl = self._con_anello(altre=(27.3, 27.1, 26.3))
+        ctrl.entry.options = dict(
+            ctrl.entry.options,
+            adaptive_outdoor_start=33.0, adaptive_slope=0.25, adaptive_max=1.5,
+        )
+        ctrl.hass.states.values["sensor.outdoor"] = State("36", {"unit_of_measurement": "°C"})
+        desired = ctrl._compute(GIORNO)
+        self.assertEqual(desired.setpoint, 25.0)     # non 26.0: l'adattivo non entra
+        self.assertNotIn("per esterna", desired.reason)
+
+    def test_without_a_comfort_line_nothing_changes(self):
+        """A zero l'anello e' spento e si torna esattamente al comportamento di prima."""
+        ctrl = self._con_anello(linea=0.0)
+        dopo = GIORNO + timedelta(
+            seconds=controller_module.HOUSE_TRIM_DWELL_SECONDS + 60
+        )
+        self.assertEqual(ctrl._compute(dopo).setpoint, 25.0)
+
     def test_smart_fan_follows_the_gap(self):
         for room, expected in ((27.5, "high"), (26.5, "medium"), (25.2, "low")):
             ctrl = self._smart_controller(room=room)

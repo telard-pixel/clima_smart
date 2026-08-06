@@ -16,6 +16,8 @@ from .const import (
     CONF_ECO_SWITCH,
     CONF_MORNING_OFF_START,
     CONF_MUTE_SWITCH,
+    CONF_TRIM_MAX,
+    CONF_TRIM_MIN,
     CONF_NIGHT_START,
     CONF_NIGHT_SWITCH,
     CONF_SLEEP_END,
@@ -62,6 +64,13 @@ def validate_options(values: dict[str, Any]) -> str | None:
         # inside the sleep window where it is never even looked for, so the unit
         # would keep cooling all day.
         return "invalid_wind_down"
+
+    minimo = values.get(CONF_TRIM_MIN)
+    massimo = values.get(CONF_TRIM_MAX)
+    if minimo is not None and massimo is not None and minimo >= massimo:
+        # Con gli estremi incrociati l'anello esterno non avrebbe spazio per
+        # muoversi, e il target della camera resterebbe inchiodato al primo valore.
+        return "invalid_trim_range"
 
     if values[CONF_ECO_OUTDOOR_ON] >= values[CONF_ECO_OUTDOOR_OFF]:
         # _eco_decision checks the "on" condition first: a swapped or equal pair

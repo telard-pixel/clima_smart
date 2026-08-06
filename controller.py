@@ -45,6 +45,7 @@ from .const import (
     CONF_ECO_OUTDOOR_ON,
     CONF_ECO_SWITCH,
     CONF_HOUSE_SENSORS,
+    CONF_HOUSE_TARGET,
     CONF_HUMIDITY,
     CONF_MORNING_OFF_START,
     CONF_MUTE_SWITCH,
@@ -53,6 +54,9 @@ from .const import (
     CONF_OUTDOOR,
     CONF_OUTDOOR_FALLBACK,
     CONF_ROOM_SENSOR,
+    CONF_ROOM_FLOOR,
+    CONF_TRIM_MAX,
+    CONF_TRIM_MIN,
     CONF_OVERRIDE_MINUTES,
     CONF_SETPOINT_OFFSET,
     CONF_SLEEP_END,
@@ -66,6 +70,10 @@ from .const import (
     CONF_VANE_SLEEP,
     CONF_VANE_V,
     DEFAULT_ADAPTIVE_MAX,
+    DEFAULT_HOUSE_TARGET,
+    DEFAULT_ROOM_FLOOR,
+    DEFAULT_TRIM_MAX,
+    DEFAULT_TRIM_MIN,
     DEFAULT_ADAPTIVE_SLOPE,
     DEFAULT_ADAPTIVE_START,
     DEFAULT_AUTO_START_HOUSE,
@@ -100,6 +108,8 @@ from .const import (
     FAN_HYSTERESIS_SLEEP,
     FAN_HYSTERESIS_UP,
     FAN_ORDER,
+    HOUSE_TRIM_DEADBAND,
+    HOUSE_TRIM_DWELL_SECONDS,
     HVAC_COOL,
     HVAC_DRY,
     HVAC_HEAT,
@@ -296,6 +306,12 @@ class ClimaSmartController:
         # Da quando la condizione "non e' piu' stagione calda" e' vera senza
         # interruzioni: None finche' siamo in stagione.
         self._not_summer_since: datetime | None = None
+        # Anello esterno: il target della camera scelto per tenere le altre stanze
+        # sulla linea di comfort. Vive fra un riavvio e l'altro come gli altri
+        # contrassegni, perche' ci mette ore ad assestarsi e ripartire da capo
+        # ogni volta significherebbe non assestarsi mai.
+        self.house_trim: float | None = None
+        self._trim_changed_at: datetime | None = None
         # Cio' che non deve morire con il processo: i contrassegni "gia' fatto
         # oggi" e la resa manuale. Senza, un riavvio dopo che l'utente ha spento
         # a mano riaccendeva la macchina, e l'avvio diurno poteva farlo ore dopo
@@ -812,6 +828,8 @@ class ClimaSmartController:
             "vane_restored_on": giorno(self._vane_restored_on),
             "override_until": giorno(self._override_until),
             "adaptive_extra": self.adaptive_extra,
+            "house_trim": self.house_trim,
+            "trim_changed_at": giorno(self._trim_changed_at),
             "adaptive_changed_at": giorno(self._adaptive_changed_at),
         }
 
@@ -854,6 +872,10 @@ class ClimaSmartController:
         self._vane_restored_on = data_di("vane_restored_on")
         self._override_until = istante_di("override_until")
         self._adaptive_changed_at = istante_di("adaptive_changed_at")
+        self._trim_changed_at = istante_di("trim_changed_at")
+        tr = dati.get("house_trim")
+        if isinstance(tr, (int, float)):
+            self.house_trim = float(tr)
         valore = dati.get("adaptive_extra")
         if isinstance(valore, (int, float)):
             self.adaptive_extra = float(valore)
@@ -1098,6 +1120,68 @@ class ClimaSmartController:
         self._adaptive_changed_at = now
         self.adaptive_extra = nuovo
         return nuovo
+
+    def _house_trim(
+        self,
+        now: datetime,
+        casa: float | None,
+        passo: float,
+        comodino: float | None,
+    ) -> float | None:
+        """Il target della camera che serve per tenere le altre stanze sulla linea.
+
+        Di giorno l'obiettivo non e' la camera ma salotto, cucina e ingresso: la
+        camera e' lo strumento, e sta piu' fredda perche' e' la sorgente di freddo
+        di tutto il trilocale. Quindi questo anello guarda la media delle altre
+        stanze e da quella ricava il setpoint da chiedere alla camera.
+
+        Si muove **piano e di un passo macchina alla volta**: misurato, il
+        pomeriggio piu' efficace ha tolto 0.72 gradi alla media in otto ore. Una
+        correzione ogni tre quarti d'ora e' gia' piu' rapida di quanto la casa
+        sappia rispondere; piu' in fretta si rincorrerebbe solo il rumore.
+        """
+        linea = float(self._cfg(CONF_HOUSE_TARGET, DEFAULT_HOUSE_TARGET) or 0.0)
+        if linea <= 0:
+            return None                      # anello disattivato: target fisso di prima
+        minimo = float(self._cfg(CONF_TRIM_MIN, DEFAULT_TRIM_MIN) or DEFAULT_TRIM_MIN)
+        massimo = float(self._cfg(CONF_TRIM_MAX, DEFAULT_TRIM_MAX) or DEFAULT_TRIM_MAX)
+
+        if self.house_trim is None:
+            # Si parte dal target di casa configurato, che e' l'ultima volonta'
+            # esplicita dell'utente, e da li' l'anello corregge. La prima correzione
+            # aspetta comunque la sua attesa piena: senza, la prima valutazione dopo
+            # un riavvio salterebbe di un grado all'istante.
+            self.house_trim = min(max(self.target_home, minimo), massimo)
+            self._trim_changed_at = now
+        if casa is None:
+            return self.house_trim           # nessuna media: si tiene quello che c'e'
+
+        errore = casa - linea
+        if abs(errore) <= HOUSE_TRIM_DEADBAND:
+            return self.house_trim
+        if (
+            self._trim_changed_at is not None
+            and (now - self._trim_changed_at).total_seconds() < HOUSE_TRIM_DWELL_SECONDS
+        ):
+            return self.house_trim
+
+        passo = passo if passo and passo > 0 else 1.0
+        if errore > 0:
+            # Casa sopra la linea: si chiede di piu' alla camera.
+            if comodino is not None:
+                pavimento = float(self._cfg(CONF_ROOM_FLOOR, DEFAULT_ROOM_FLOOR) or 0.0)
+                if pavimento > 0 and comodino <= pavimento:
+                    # La camera ha gia' dato quello che poteva: serve la casa, ma
+                    # resta una stanza in cui si dorme.
+                    return self.house_trim
+            nuovo = max(self.house_trim - passo, minimo)
+        else:
+            nuovo = min(self.house_trim + passo, massimo)
+
+        if nuovo != self.house_trim:
+            self.house_trim = nuovo
+            self._trim_changed_at = now
+        return self.house_trim
 
     def _house_average(self) -> float | None:
         """Average of the other rooms' thermometers, in Celsius.
@@ -1434,15 +1518,28 @@ class ClimaSmartController:
                 reason="clima in heat: non tocco hvac/setpoint, aggiorno muto/notte",
             )
 
-        # Un solo target, sempre quello di casa: "imposto 25 e al resto pensa tu".
         night_window = phase in (PHASE_SLEEP, PHASE_WIND_DOWN)
-        target = self.target_sleep if night_window else self.target_home
-        # Adattamento all'esterna: vale solo qui, nel percorso automatico. I modi
-        # forzati a mano restano quello che l'utente ha chiesto, senza sorprese.
-        compensazione = self._adaptive_extra(
-            outdoor, now, _to_float(climate.attributes.get("target_temp_step"))
-        )
-        target += compensazione
+        passo = _to_float(climate.attributes.get("target_temp_step"))
+        casa = self._house_average()
+        trim = None
+        compensazione = 0.0
+        if night_window:
+            # Di notte la porta e' chiusa: la casa esce dal quadro e comanda la
+            # camera, con il suo target.
+            target = self.target_sleep
+        else:
+            # Di giorno comanda la linea di comfort delle altre stanze, e la camera
+            # e' lo strumento per ottenerla.
+            trim = self._house_trim(now, casa, passo, room if room_measured else None)
+            if trim is not None:
+                target = trim
+                # L'adattivo qui non si applica, e non e' una dimenticanza: alza il
+                # target quando fuori fa caldo, cioe' fa il contrario dell'obiettivo
+                # proprio nelle ore in cui la casa fatica di piu'.
+            else:
+                target = self.target_home
+                compensazione = self._adaptive_extra(outdoor, now, passo)
+                target += compensazione
         self.active_target = self._reachable_target(target, climate)
 
         # MODE_SMART never starts the unit: the user decides when it runs, we
@@ -1547,6 +1644,9 @@ class ClimaSmartController:
         detail = f"{program}, ventola {fan or 'invariata'}"
         if spinta:
             detail += " (spinta iniziale)"
+        if trim is not None and casa is not None:
+            linea = float(self._cfg(CONF_HOUSE_TARGET, DEFAULT_HOUSE_TARGET) or 0.0)
+            detail += f", casa {casa:.1f} su linea {linea:.1f}"
         if compensazione:
             detail += f", +{compensazione:.1f} per esterna {outdoor:.0f}"
         if alette:
