@@ -179,7 +179,14 @@ HOUSE_TRIM_DEADBAND = 0.25
 # L'esterna riporta gradi interi e balla sulla soglia: senza questo margine il
 # vincolo si accenderebbe e spegnerebbe a ogni lettura. E' lo stesso difetto che
 # il 4 agosto ha fatto rincorrere il setpoint dieci volte in un pomeriggio.
-HOT_OUTDOOR_HYSTERESIS = 1.0
+#
+# **Due gradi, non uno.** Con un solo grado il vincolo si e' acceso e spento la
+# sera del 6 agosto, perche' la stazione ha ballato fra 34 e 36 attraversando
+# tutta la banda: 19:21 lettura 34, vincolo spento, target sceso a 22.0; 19:41
+# lettura 36, vincolo riacceso, target risalito a 23.0. Due comandi in venti
+# minuti che si annullavano. Due gradi e' l'ampiezza vera del ballo di quella
+# stazione, misurata quella sera e gia' misurata il 4 agosto.
+HOT_OUTDOOR_HYSTERESIS = 2.0
 
 # How long async_start waits for the master switch and the mode select to restore
 # before opening the barrier in degraded mode.

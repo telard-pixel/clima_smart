@@ -715,7 +715,20 @@ class ControllerRegressionTests(unittest.TestCase):
         self.assertIsNone(ctrl._hot_outdoor_floor(35.0))    # sotto: spento
         self.assertEqual(ctrl._hot_outdoor_floor(36.0), 23.0)   # sopra: acceso
         self.assertEqual(ctrl._hot_outdoor_floor(35.0), 23.0)   # ricade: tiene
-        self.assertIsNone(ctrl._hot_outdoor_floor(34.0))    # scende davvero: molla
+        self.assertEqual(ctrl._hot_outdoor_floor(34.0), 23.0)   # e tiene ancora
+        self.assertIsNone(ctrl._hot_outdoor_floor(33.0))    # scende davvero: molla
+
+    def test_the_hot_floor_survives_the_evening_wobble(self):
+        """La sera del 6 agosto la stazione ha ballato fra 34 e 36 attraversando
+        tutta la banda da un grado: il vincolo si e' acceso e spento e il target e'
+        sceso a 22.0 alle 19:23 per risalire a 23.0 alle 19:43. Due comandi in venti
+        minuti che si annullavano. Con due gradi di banda quella sequenza non muove
+        piu' niente."""
+        ctrl = self._con_anello()
+        ctrl.entry.options = dict(ctrl.entry.options, hot_outdoor=36.0, trim_min_hot=23.0)
+        traccia = [36, 35, 34, 35, 36, 35, 34, 36, 35]   # la sera vera
+        esiti = [ctrl._hot_outdoor_floor(float(x)) for x in traccia]
+        self.assertEqual(esiti, [23.0] * len(traccia), "il vincolo non deve lampeggiare")
 
     def test_smart_fan_follows_the_gap(self):
         for room, expected in ((27.5, "high"), (26.5, "medium"), (25.2, "low")):
