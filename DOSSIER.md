@@ -1,7 +1,7 @@
 # Clima Smart — dossier tecnico dell'impianto
 
-**Ultimo aggiornamento: 5 agosto 2026, ore 13:00 (Europe/Rome).**
-**Versione in funzione: 1.4.0.**
+**Ultimo aggiornamento: 6 agosto 2026, ore 08:30 (Europe/Rome).**
+**Versione in funzione: 1.7.0.**
 
 Questo documento è scritto perché possa essere letto da un'altra intelligenza
 artificiale, o da un tecnico, senza avere accesso alla conversazione che l'ha
@@ -82,16 +82,16 @@ principale della strumentazione, e la ragione della domanda aperta n. 2.
 
 ---
 
-## 3. Assetto in funzione (1.4.0)
+## 3. Assetto in funzione (1.7.0)
 
 ### Ciclo giornaliero
 
 | ora | comportamento |
 |---|---|
 | 23:00 → 07:30 | notte fonda, target **22.5** (comandati 22.0), ventola per bande notturne, alette in `swing`. Primi 15 minuti a ventola `high` («spinta iniziale») se lo scarto supera 0.3 |
-| 07:30 → 08:30 | `cool` con ventola `auto` (**era `dry`**, cambiato il 5 agosto) |
+| 07:30 → 08:30 | `cool` con ventola `auto`. Provato `dry`, misurato peggiore a pari deriva della camera: 0.396 kWh in `dry` contro 0.364 in `cool`, e 0.333 contro 0.293 il giorno dopo |
 | 08:30 | spegnimento, **una volta sola** |
-| dalle 09:00 | riaccensione automatica se **esterna ≥ 29** *e* (**camera ≥ 27** *oppure* **media di casa ≥ 26.5**). Nessuna attesa a orologio |
+| dalle 09:00 | riaccensione automatica se **esterna ≥ 29** *e* (**camera ≥ 27** *oppure* **media di casa ≥ 26.5**). Nessuna attesa a orologio: l'attesa fissa fino alle 10:00 era un valore predefinito mai scelto |
 | giorno | target **25.0** più compensazione adattiva |
 
 ### Parametri, con la loro origine
@@ -100,13 +100,13 @@ principale della strumentazione, e la ragione della domanda aperta n. 2.
 |---|---|---|
 | `target_home` | 25.0 | scelta utente (predefinito 26.0) |
 | `target_sleep` | 22.5 | scelta utente (predefinito 23.0) |
-| `setpoint_offset` | −1.0 | misurato, **ma non è documentato a quale velocità di ventola** |
+| `setpoint_offset` | −1.0 | misurato, **ma non è documentato a quale velocità di ventola** - ed e' la pezza che il sensore di stanza (opzione `room_sensor`, aggiunta nella 1.6.0) esiste per togliere |
 | soglie avvio | 27.0 / 26.5 / 29.0 | attivate dall'utente (predefinite: disattivate) |
 | bande ventola giorno | 2.0 `high` / 1.0 `medium` / 0.0 `low` | misurate |
-| isteresi ventola giorno | **1.5** | misurata: più larga del guadagno dell'anello, che vale 1.0 |
+| isteresi ventola giorno | **1.0 in salita, 0.5 in discesa** | misurata. Simmetrica a 1.5 la ventola non saliva mai (serviva scarto 2.5, il massimo osservato e' 2.5); simmetrica a 1.0 entrava in `medium` a 2.0 e non ne usciva piu' perche' pretendeva 0.0, costando 0.70 kWh in un pomeriggio senza consegnare freddo. Asimmetrica: entra a 2.0, esce a 0.5 |
 | isteresi ventola notte | **0.5** | scelta: con 1.5 `low` sarebbe irraggiungibile, e `low` è il silenzio |
 | permanenza minima ventola | 1800 s | misurata: fra i passi ci sono 8 W, non valgono un comando ogni 10 minuti |
-| adattivo | partenza 33, pendenza 0.25, tetto 1.5, attesa 3600 s | misto |
+| adattivo | partenza 33, pendenza 0.25, tetto 1.5, attesa 3600 s | misto. **Il tetto dichiarato 1.5 vale in realta' 1.0**: viene portato a un multiplo del passo macchina prima di arrotondare |
 | spinta iniziale notte | 15 min, soglia 0.3 | misurata sull'episodio del 4-5 agosto |
 
 ---
