@@ -715,19 +715,21 @@ class ControllerRegressionTests(unittest.TestCase):
         self.assertIsNone(ctrl._hot_outdoor_floor(35.0))    # sotto: spento
         self.assertEqual(ctrl._hot_outdoor_floor(36.0), 23.0)   # sopra: acceso
         self.assertEqual(ctrl._hot_outdoor_floor(35.0), 23.0)   # ricade: tiene
-        self.assertEqual(ctrl._hot_outdoor_floor(34.0), 23.0)   # e tiene ancora
-        self.assertIsNone(ctrl._hot_outdoor_floor(33.0))    # scende davvero: molla
+        self.assertIsNone(ctrl._hot_outdoor_floor(34.9))    # scende davvero: molla
 
-    def test_the_hot_floor_survives_the_evening_wobble(self):
-        """La sera del 6 agosto la stazione ha ballato fra 34 e 36 attraversando
-        tutta la banda da un grado: il vincolo si e' acceso e spento e il target e'
-        sceso a 22.0 alle 19:23 per risalire a 23.0 alle 19:43. Due comandi in venti
-        minuti che si annullavano. Con due gradi di banda quella sequenza non muove
-        piu' niente."""
+    def test_the_hot_floor_survives_the_wobble_of_a_smoothed_reading(self):
+        """La banda deve restare piu' larga del passo del segnale che sorveglia.
+
+        Con l'esterna a gradi interi il passo era 1.00 e serviva una banda di 2.0.
+        Dal 7 agosto l'esterna arriva dalla media mobile su venti minuti dei valori
+        convertiti dal Fahrenheit: passo mediano **0.55** e mezza inversione
+        all'ora, invece di 1.00 e 2.3. Un grado di banda la copre con margine.
+        """
         ctrl = self._con_anello()
         ctrl.entry.options = dict(ctrl.entry.options, hot_outdoor=36.0, trim_min_hot=23.0)
-        traccia = [36, 35, 34, 35, 36, 35, 34, 36, 35]   # la sera vera
-        esiti = [ctrl._hot_outdoor_floor(float(x)) for x in traccia]
+        # Una salita e discesa realistica del segnale liscio attorno alla soglia.
+        traccia = [36.1, 35.6, 36.2, 35.7, 36.3, 35.8, 35.5, 36.0, 35.6]
+        esiti = [ctrl._hot_outdoor_floor(x) for x in traccia]
         self.assertEqual(esiti, [23.0] * len(traccia), "il vincolo non deve lampeggiare")
 
     def test_smart_fan_follows_the_gap(self):

@@ -180,13 +180,23 @@ HOUSE_TRIM_DEADBAND = 0.25
 # vincolo si accenderebbe e spegnerebbe a ogni lettura. E' lo stesso difetto che
 # il 4 agosto ha fatto rincorrere il setpoint dieci volte in un pomeriggio.
 #
-# **Due gradi, non uno.** Con un solo grado il vincolo si e' acceso e spento la
-# sera del 6 agosto, perche' la stazione ha ballato fra 34 e 36 attraversando
-# tutta la banda: 19:21 lettura 34, vincolo spento, target sceso a 22.0; 19:41
-# lettura 36, vincolo riacceso, target risalito a 23.0. Due comandi in venti
-# minuti che si annullavano. Due gradi e' l'ampiezza vera del ballo di quella
-# stazione, misurata quella sera e gia' misurata il 4 agosto.
-HOT_OUTDOOR_HYSTERESIS = 2.0
+# Storia di questo numero, perche' spiega a cosa serve. Nato a 1.0, e la sera del
+# 6 agosto il vincolo si e' acceso e spento due volte in venti minuti: la
+# stazione ballava fra 34 e 36 e attraversava tutta la banda. Portato a 2.0 per
+# assorbire quel ballo.
+#
+# Poi si e' scoperto che il ballo non era la temperatura: Weather Underground
+# consegna i gradi Celsius **interi**, perche' la stazione carica in Fahrenheit e
+# la conversione arrotonda. Chiedendo i dati in Fahrenheit e mediandoli su venti
+# minuti, l'esterna e' diventata liscia: passo mediano 0.55 invece di 1.00, mezza
+# inversione all'ora invece di 2.3.
+#
+# Quindi **1.0**, non 2.0 e nemmeno 0.5. La regola imparata due volte su questo
+# impianto e' che **la banda deve restare piu' larga del passo del segnale**: la
+# media mobile ha passo mediano 0.55, quindi mezzo grado di banda si farebbe
+# attraversare da un singolo campione e il lampeggio tornerebbe. Un grado la
+# copre con margine e dimezza comunque l'attesa rispetto a prima.
+HOT_OUTDOOR_HYSTERESIS = 1.0
 
 # How long async_start waits for the master switch and the mode select to restore
 # before opening the barrier in degraded mode.
