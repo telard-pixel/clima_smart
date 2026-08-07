@@ -129,6 +129,8 @@ from .const import (
     PHASE_SLEEP,
     PHASE_WIND_DOWN,
     RESTORE_TIMEOUT_SECONDS,
+    SATURATION_GAP,
+    SATURATION_HYSTERESIS,
     SERVICE_CALL_TIMEOUT_SECONDS,
     PLAUSIBLE_MAX_C,
     PLAUSIBLE_MIN_C,
@@ -319,6 +321,9 @@ class ClimaSmartController:
         # Il vincolo legato all'esterna e' acceso o spento: ha isteresi, perche'
         # la stazione riporta gradi interi e balla sulla soglia.
         self._hot_outdoor = False
+        # Il freno della saturazione e' inserito o no: anche questo con isteresi,
+        # perche' guarda l'aria di ripresa, che si muove a mezzo grado per volta.
+        self._saturated = False
         # Cio' che non deve morire con il processo: i contrassegni "gia' fatto
         # oggi" e la resa manuale. Senza, un riavvio dopo che l'utente ha spento
         # a mano riaccendeva la macchina, e l'avvio diurno poteva farlo ore dopo
@@ -831,6 +836,10 @@ class ClimaSmartController:
             "override_until": giorno(self._override_until),
             "adaptive_extra": self.adaptive_extra,
             "house_trim": self.house_trim,
+            # Il freno viaggia insieme al target che ha prodotto: senza, un riavvio
+            # riparte staccato e l'anello ricomincia a spingere da dove era
+            # arrivato. E' successo il 7 agosto 2026 alle 19:30.
+            "saturated": self._saturated,
             "trim_changed_at": giorno(self._trim_changed_at),
             "adaptive_changed_at": giorno(self._adaptive_changed_at),
         }
@@ -878,6 +887,7 @@ class ClimaSmartController:
         tr = dati.get("house_trim")
         if isinstance(tr, (int, float)):
             self.house_trim = float(tr)
+        self._saturated = bool(dati.get("saturated", False))
         valore = dati.get("adaptive_extra")
         if isinstance(valore, (int, float)):
             self.adaptive_extra = float(valore)
@@ -1149,6 +1159,44 @@ class ClimaSmartController:
             return None
         return float(self._cfg(CONF_TRIM_MIN_HOT, DEFAULT_TRIM_MIN_HOT) or 0.0) or None
 
+    def _saturation_brake(self, casa: float | None, room: float | None) -> bool:
+        """Se la camera e' gia' cosi' sotto la casa che chiedere di piu' non rende.
+
+        Non e' un limite di comfort ne' un limite di macchina: e' il punto in cui
+        il collo di bottiglia smette di essere il freddo prodotto e diventa l'aria
+        che deve passare da una stanza all'altra. Da li' in poi abbassare ancora
+        il setpoint raffredda solo la camera.
+
+        Misurato su 36 finestre di un'ora, pomeriggi 2-7 agosto 2026, tenendo
+        conto dell'esterna: un grado in piu' di divario costa **40 W** e porta
+        **+0.006 C/h** di calo alla casa, con errore tipico 0.136 - cioe' il
+        beneficio sta sotto la soglia di rilevabilita' mentre il costo si vede
+        benissimo. Vedi SATURATION_GAP per la giornata che lo ha reso evidente.
+
+        Con isteresi, come il vincolo dell'esterna: la banda deve restare piu'
+        larga del passo del segnale, e l'aria di ripresa si muove a mezzo grado.
+        """
+        if SATURATION_GAP <= 0:
+            self._saturated = False
+            return False
+        if casa is None or room is None:
+            # **Non si azzera**: una lettura che manca non e' la prova che il freno
+            # vada tolto, e il vincolo dell'esterna qui non fa testo, perche' li'
+            # perdere il limite significa solo tornare liberi. Qui significa
+            # ricominciare a spingere.
+            #
+            # Misurato il 7 agosto 2026: alle 19:30 Home Assistant si e' riavviato,
+            # il freno e' ripartito staccato, il divario era 1.38 - sotto la soglia
+            # d'innesco ma dentro l'isteresi - e l'anello ha rimesso il target a
+            # 22.0 con la ventola alta. Cinquanta minuti a 695 W invece di 585.
+            return self._saturated
+        divario = casa - room
+        if self._saturated:
+            self._saturated = divario >= SATURATION_GAP - SATURATION_HYSTERESIS
+        else:
+            self._saturated = divario >= SATURATION_GAP
+        return self._saturated
+
     def _house_trim(
         self,
         now: datetime,
@@ -1156,6 +1204,7 @@ class ClimaSmartController:
         passo: float,
         comodino: float | None,
         outdoor: float | None = None,
+        room: float | None = None,
     ) -> float | None:
         """Il target della camera che serve per tenere le altre stanze sulla linea.
 
@@ -1203,7 +1252,35 @@ class ClimaSmartController:
             return self.house_trim
 
         passo = passo if passo and passo > 0 else 1.0
-        if errore > 0:
+        if errore > 0 and self._saturation_brake(casa, room):
+            # Casa sopra la linea, ma la camera e' gia' molto piu' fredda: da qui
+            # in poi il setpoint compra frequenza, non gradi in casa. Si
+            # **restituisce** un passo invece di limitarsi a fermare la discesa,
+            # perche' fermarsi soltanto lascerebbe inchiodato un target che ci e'
+            # gia' arrivato - com'e' successo il 7 agosto, target a 22.0 dalle
+            # dieci del mattino alle sei di sera.
+            #
+            # Restituendo un passo alla volta, con la stessa attesa di tutto
+            # l'anello, il target si assesta da solo attorno al divario utile:
+            # scende finche' rende, risale appena smette. E l'isteresi tiene
+            # l'assestamento lento invece di farlo oscillare.
+            #
+            # Il freno restituisce **fino al target di giorno e non oltre**. Serve
+            # un'ancora: rigiocando il 7 agosto senza, il target risaliva di un
+            # passo ogni tre quarti d'ora fino al tetto del trim e ci restava,
+            # perche' il divario si chiude solo quando la camera si scalda e in un
+            # replay quella retroazione non c'e'. Ma un freno che puo' svuotare
+            # tutto l'anello e' sbagliato comunque: questo dice "non piu' freddo di
+            # quanto renda", non "smetti di raffreddare". Salire **sopra** il
+            # target di giorno resta mestiere dell'altro ramo, quello che molla la
+            # presa quando la casa sta gia' bene.
+            tetto = min(massimo, max(self.target_home, minimo))
+            nuovo = (
+                min(self.house_trim + passo, tetto)
+                if self.house_trim < tetto
+                else self.house_trim
+            )
+        elif errore > 0:
             # Casa sopra la linea: si chiede di piu' alla camera.
             if comodino is not None:
                 pavimento = float(self._cfg(CONF_ROOM_FLOOR, DEFAULT_ROOM_FLOOR) or 0.0)
@@ -1569,7 +1646,7 @@ class ClimaSmartController:
             # Di giorno comanda la linea di comfort delle altre stanze, e la camera
             # e' lo strumento per ottenerla.
             trim = self._house_trim(
-                now, casa, passo, comodino, outdoor
+                now, casa, passo, comodino, outdoor, room
             )
             if trim is not None:
                 target = trim

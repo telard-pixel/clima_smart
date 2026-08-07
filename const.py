@@ -198,6 +198,36 @@ HOUSE_TRIM_DEADBAND = 0.25
 # copre con margine e dimezza comunque l'attesa rispetto a prima.
 HOT_OUTDOOR_HYSTERESIS = 1.0
 
+# --- Anello esterno: il freno della saturazione ---
+# La camera e' lo strumento, non l'obiettivo: si accetta che stia piu' fredda del
+# resto della casa, perche' e' da li' che parte il freddo. Ma quel divario ha un
+# punto oltre il quale non compra piu' niente, e il 7 agosto 2026 lo abbiamo
+# misurato su 36 finestre di un'ora, pomeriggi dal 2 al 7 agosto, tenendo conto
+# dell'esterna:
+#
+#   un grado in piu' di divario casa-camera
+#     sul calo della casa   +0.006 C/h   con errore tipico 0.136 e R2 = 0.01
+#     sulla potenza           +40 W
+#
+# Cioe': **il costo si misura, il beneficio no**. Sotto quella soglia di
+# rilevabilita' non c'e' un guadagno piccolo, c'e' un guadagno che non si vede.
+# Il collo di bottiglia non e' la potenza della macchina, e' l'aria che deve
+# passare da una stanza all'altra: raffreddare ancora di piu' la camera non la
+# fa passare piu' in fretta.
+#
+# La giornata che ha fatto scattare la misura: il 7 agosto, il giorno **piu'
+# fresco** della settimana (30.6 di media contro 33.9), ha speso 6.756 kWh contro
+# 5.641 del 3 agosto (+20%) per portare la casa allo stesso identico punto
+# (26.50 contro 26.38). L'anello aveva inchiodato il target al suo minimo, 22.0,
+# e il divario era sopra 1.5 per quasi tutto il giorno.
+#
+# 1.5 perche' quasi tutto il raffreddamento osservato e' avvenuto sotto 1.2, e
+# lascia margine. L'isteresi segue la regola imparata due volte su questo
+# impianto - **la banda deve restare piu' larga del passo del segnale**: qui il
+# segnale e' l'aria di ripresa, che si muove a mezzo grado, quindi 0.75.
+SATURATION_GAP = 1.5
+SATURATION_HYSTERESIS = 0.75
+
 # How long async_start waits for the master switch and the mode select to restore
 # before opening the barrier in degraded mode.
 RESTORE_TIMEOUT_SECONDS = 10

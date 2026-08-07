@@ -625,6 +625,149 @@ class ControllerRegressionTests(unittest.TestCase):
         )
         self.assertEqual(ctrl._compute(dopo).setpoint, 26.0)
 
+    def test_the_loop_gives_back_when_the_bedroom_is_already_far_below(self):
+        """Casa sopra la linea, ma la camera e' gia' molto piu' fredda: da li' in
+        poi il setpoint compra frequenza, non gradi in casa, e l'anello deve
+        **restituire** un passo invece di continuare a chiedere.
+
+        Il 7 agosto 2026 senza questo freno il target e' rimasto a 22.0 dalle dieci
+        alle diciotto: il giorno piu' fresco della settimana e' costato il 20% in
+        piu' del 3 agosto per portare la casa allo stesso punto."""
+        ctrl = self._con_anello(ripresa=25.0)      # media 26.9, divario 1.9
+        self.assertEqual(ctrl._compute(GIORNO).setpoint, 25.0)
+        dopo = GIORNO + timedelta(
+            seconds=controller_module.HOUSE_TRIM_DWELL_SECONDS + 60
+        )
+        # Senza freno qui scenderebbe a 24.0: la casa e' sopra la linea. Col freno
+        # tiene, perche' scendere non porterebbe gradi in casa.
+        self.assertEqual(ctrl._compute(dopo).setpoint, 25.0)
+
+    def test_the_brake_climbs_back_to_the_day_target_and_stops_there(self):
+        """Da un target gia' sceso, il freno lo riporta al target di giorno un passo
+        alla volta - e li' si ferma. Non e' un ripiegamento: salire **sopra** il
+        target di giorno resta mestiere dell'altro ramo, quello che molla la presa
+        quando la casa sta gia' bene.
+
+        Rigiocando il 7 agosto 2026 con i dati veri, il target sale da 22.0 a 25.0
+        in quattro passi e li' resta, invece di restare inchiodato a 22.0 per otto
+        ore come e' successo davvero."""
+        ctrl = self._con_anello(ripresa=25.0)      # divario 1.9: freno inserito
+        ctrl._compute(GIORNO)
+        ctrl.house_trim = 22.0                     # come stamattina alle dieci
+        t = GIORNO
+        visti = []
+        for _ in range(6):
+            t += timedelta(
+                seconds=controller_module.HOUSE_TRIM_DWELL_SECONDS + 60
+            )
+            visti.append(ctrl._compute(t).setpoint)
+        self.assertEqual(visti, [23.0, 24.0, 25.0, 25.0, 25.0, 25.0])
+
+    def test_the_brake_leaves_a_normal_afternoon_alone(self):
+        """Col divario stretto il freno non si inserisce e l'anello lavora come
+        prima: e' un limite di saturazione, non un tetto al raffrescamento."""
+        ctrl = self._con_anello(ripresa=26.5)      # media 26.9, divario 0.4
+        ctrl._compute(GIORNO)
+        dopo = GIORNO + timedelta(
+            seconds=controller_module.HOUSE_TRIM_DWELL_SECONDS + 60
+        )
+        self.assertEqual(ctrl._compute(dopo).setpoint, 24.0)   # continua a scendere
+
+    def test_the_saturation_brake_has_hysteresis(self):
+        """Stessa regola imparata due volte su questo impianto: la banda deve
+        restare piu' larga del passo del segnale. Qui il segnale e' l'aria di
+        ripresa, che si muove a mezzo grado per volta."""
+        ctrl = self._con_anello()
+        casa = 26.9
+        self.assertFalse(ctrl._saturation_brake(casa, casa - 0.9))   # sotto: staccato
+        self.assertTrue(ctrl._saturation_brake(casa, casa - 1.5))    # sulla soglia
+        # Inserito, ci resta anche piu' in qua: non si stacca al primo mezzo grado.
+        self.assertTrue(ctrl._saturation_brake(casa, casa - 0.9))
+        self.assertTrue(ctrl._saturation_brake(casa, casa - 0.76))
+        # Sotto la banda si stacca davvero.
+        self.assertFalse(ctrl._saturation_brake(casa, casa - 0.74))
+
+    def test_the_brake_does_not_forget_on_a_missing_reading(self):
+        """Una lettura che manca non e' la prova che il freno vada tolto.
+
+        Qui la differenza col vincolo dell'esterna e' sostanziale: li' perdere il
+        limite significa tornare liberi, qui significa **ricominciare a spingere**.
+        Il 7 agosto 2026 alle 19:30 un riavvio ha fatto ripartire il freno
+        staccato: divario 1.38, sotto la soglia d'innesco ma dentro l'isteresi,
+        e l'anello ha rimesso il target a 22.0 con la ventola alta - cinquanta
+        minuti a 695 W invece di 585."""
+        ctrl = self._con_anello()
+        self.assertFalse(ctrl._saturation_brake(26.9, 26.5))   # parte staccato
+        self.assertFalse(ctrl._saturation_brake(None, 26.5))   # e staccato resta
+        self.assertTrue(ctrl._saturation_brake(26.9, 25.0))    # ora si inserisce
+        self.assertTrue(ctrl._saturation_brake(None, 25.0))    # e non lo dimentica
+        self.assertTrue(ctrl._saturation_brake(26.9, None))
+
+    def test_the_brake_does_not_block_letting_go(self):
+        """Freno inserito ma casa gia' fredda: comanda l'altro ramo, e il target
+        deve poter salire **sopra** il target di giorno. Il freno dice "non piu'
+        freddo di quanto renda", non "resta a 25"."""
+        ctrl = self._con_anello(ripresa=23.0, altre=(25.6, 25.5, 25.4))
+        ctrl._compute(GIORNO)                      # media 25.5, sotto la linea 26.5
+        self.assertTrue(ctrl._saturation_brake(25.5, 23.0))   # divario 2.5
+        t = GIORNO
+        for atteso in (26.0, 27.0):
+            t += timedelta(
+                seconds=controller_module.HOUSE_TRIM_DWELL_SECONDS + 60
+            )
+            self.assertEqual(ctrl._compute(t).setpoint, atteso)
+
+    def test_the_brake_respects_the_hot_outdoor_floor(self):
+        """Col vincolo dell'esterna acceso il pavimento sale, e il freno non deve
+        scavalcarlo ne' in su ne' in giu': i due limiti convivono."""
+        ctrl = self._con_anello(ripresa=25.0)      # divario 1.9: freno inserito
+        ctrl.entry.options = dict(
+            ctrl.entry.options, hot_outdoor=30.0, trim_min_hot=23.0,
+            target_home=24.0,
+        )
+        ctrl.house_trim = 22.0
+        t = GIORNO + timedelta(
+            seconds=controller_module.HOUSE_TRIM_DWELL_SECONDS + 60
+        )
+        # Il pavimento caldo lo tira subito a 23.0, poi il freno lo porta al
+        # target di giorno e li' si ferma.
+        visti = []
+        for _ in range(4):
+            visti.append(ctrl._compute(t).setpoint)
+            t += timedelta(
+                seconds=controller_module.HOUSE_TRIM_DWELL_SECONDS + 60
+            )
+        self.assertEqual(visti[-1], 24.0)
+        self.assertTrue(all(v >= 23.0 for v in visti), visti)
+
+    def test_the_brake_never_fires_at_night(self):
+        """Di notte la porta e' chiusa, la casa esce dal quadro e comanda la camera
+        col suo target: il freno non c'entra e non deve toccare niente."""
+        ctrl = self._con_anello(ripresa=25.0)      # divario che lo inserirebbe
+        notte = GIORNO.replace(hour=2, minute=0)
+        self.assertEqual(ctrl._compute(notte).setpoint, ctrl.target_sleep)
+
+    def test_the_brake_survives_a_restart(self):
+        """Il freno viaggia insieme al target che ha prodotto: se il target si
+        ricorda, deve ricordarsi anche il motivo per cui e' li'."""
+        ctrl = self._con_anello()
+        ctrl._saturation_brake(26.9, 25.0)
+        self.assertTrue(ctrl._memoria()["saturated"])
+        ctrl._saturation_brake(26.9, 26.5)
+        self.assertFalse(ctrl._memoria()["saturated"])
+
+    def test_the_give_back_stops_at_the_ceiling(self):
+        """Restituire un passo non vuol dire spegnere: il tetto del trim resta il
+        tetto, anche col freno inserito."""
+        ctrl = self._con_anello(ripresa=23.0)      # divario 3.9, freno inserito
+        ctrl.entry.options = dict(ctrl.entry.options, trim_max=25.0)
+        ctrl._compute(GIORNO)
+        t = GIORNO
+        for _ in range(4):
+            t += timedelta(seconds=controller_module.HOUSE_TRIM_DWELL_SECONDS + 60)
+            ctrl._compute(t)
+        self.assertEqual(ctrl.house_trim, 25.0)
+
     def test_the_loop_does_nothing_inside_the_deadband(self):
         """Dentro la banda morta non si tocca niente: un quarto di grado di media
         non vale un comando alla macchina."""
