@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import importlib
 from pathlib import Path
 import sys
@@ -162,6 +162,10 @@ def make_controller(states=None, data=None):
 
 
 class ControllerRegressionTests(unittest.TestCase):
+    def setUp(self):
+        """Ogni prova parte da uno Store vuoto; i restart nello stesso test restano."""
+        sys.modules["homeassistant.helpers.storage"].Store._dati.clear()
+
     def test_direct_user_change_wins_during_settle(self):
         ctrl = make_controller()
         ctrl._settle_setpoint_until = NOW + timedelta(seconds=60)
@@ -506,6 +510,22 @@ class ControllerRegressionTests(unittest.TestCase):
         dopo = self._riavvia(ctrl)
         self.assertTrue(dopo.override_active, "la resa manuale deve sopravvivere")
 
+    def test_a_real_manual_event_persists_override_before_early_return(self):
+        """Evento e valutazione reali devono salvare senza aiuto dal test."""
+        ctrl = self._smart_controller(room=27.0)
+        ctrl._store._dati.pop(ctrl._store.key, None)
+        ctrl._restore_event.set()
+        ctrl._maybe_flag_manual(
+            Event(
+                State("cool", {"temperature": 25.0}),
+                State("off", {"temperature": 25.0}, user_id="user"),
+            )
+        )
+        self.assertTrue(ctrl.override_active)
+        asyncio.run(ctrl.async_evaluate("evento manuale"))
+        after = self._riavvia(ctrl)
+        self.assertTrue(after.override_active)
+
     def test_a_restart_does_not_repeat_the_daytime_start(self):
         """L'avvio diurno e' il peggiore dei tre perche' non ha finestra oraria:
         senza persistenza poteva riscattare ore dopo il riavvio."""
@@ -533,6 +553,31 @@ class ControllerRegressionTests(unittest.TestCase):
         ctrl._store.async_load = esplode
         asyncio.run(ctrl._async_load_memoria())
         self.assertIsNone(ctrl._day_start_done_on)
+
+    def test_non_mapping_store_payload_is_ignored(self):
+        """JSON valido non significa snapshot valido: l'avvio deve restare vivo."""
+        for payload in (["corrupt"], "corrupt", 7):
+            with self.subTest(payload=payload):
+                ctrl = self._smart_controller(room=27.0)
+                ctrl._store._dati[ctrl._store.key] = payload
+                asyncio.run(ctrl._async_load_memoria())
+                self.assertIsNone(ctrl.house_trim)
+                self.assertFalse(ctrl._saturated)
+
+    def test_corrupt_persisted_scalars_are_ignored(self):
+        """NaN, inf, bool e stringhe truthy non diventano stato del controller."""
+        payloads = (
+            {"house_trim": float("nan"), "adaptive_extra": float("inf"), "saturated": "false"},
+            {"house_trim": True, "adaptive_extra": False, "saturated": 1},
+        )
+        for payload in payloads:
+            with self.subTest(payload=payload):
+                ctrl = self._smart_controller(room=27.0)
+                ctrl._store._dati[ctrl._store.key] = payload
+                asyncio.run(ctrl._async_load_memoria())
+                self.assertIsNone(ctrl.house_trim)
+                self.assertEqual(ctrl.adaptive_extra, 0.0)
+                self.assertFalse(ctrl._saturated)
 
     def test_a_failed_store_save_is_retried(self):
         """Un errore transitorio non deve far sembrare salvato cio' che non lo e'."""
@@ -576,6 +621,18 @@ class ControllerRegressionTests(unittest.TestCase):
         asyncio.run(ctrl._async_load_memoria())
         self.assertIsNone(ctrl._trim_probe_casa)
         self.assertIsNone(ctrl._trim_probe_level)
+        self.assertIsNone(ctrl._trim_probe_started_at)
+
+    def test_a_naive_stored_probe_timestamp_is_discarded(self):
+        """Un ISO senza offset non puo' essere sottratto all'orologio aware di HA."""
+        ctrl = self._con_anello()
+        ctrl._store._dati[ctrl._store.key] = {
+            "trim_probe_casa": 28.0,
+            "trim_probe_level": 24.0,
+            "trim_probe_started_at": GIORNO.replace(tzinfo=None).isoformat(),
+        }
+        asyncio.run(ctrl._async_load_memoria())
+        self.assertIsNone(ctrl._trim_probe_casa)
         self.assertIsNone(ctrl._trim_probe_started_at)
 
     # ------------------------------------ termometro vero della stanza
@@ -868,6 +925,18 @@ class ControllerRegressionTests(unittest.TestCase):
         self.assertIsNone(ctrl._trim_probe_started_at)
         self.assertIsNone(ctrl._trim_floor_today)
 
+    def test_sleep_cancels_probe_even_while_heating(self):
+        """Il return protettivo dell'heat non deve precedere la pulizia notturna."""
+        ctrl = self._con_anello()
+        self._orari(ctrl, target_sleep=22.0)
+        ctrl.hass.states.values["climate.test"].state = "heat"
+        ctrl._trim_probe_casa = 28.0
+        ctrl._trim_probe_level = 24.0
+        ctrl._trim_probe_started_at = GIORNO
+        ctrl._compute(GIORNO.replace(hour=2, minute=0))
+        self.assertIsNone(ctrl._trim_probe_casa)
+        self.assertIsNone(ctrl._trim_floor_today)
+
     def test_the_loop_replaces_the_adaptive_instead_of_fighting_it(self):
         """L'adattivo alza il target quando fuori fa caldo, cioe' fa il contrario
         dell'obiettivo proprio nelle ore in cui la casa fatica di piu'."""
@@ -955,6 +1024,47 @@ class ControllerRegressionTests(unittest.TestCase):
         self.assertIsNone(result)
         self.assertIsNone(ctrl._trim_floor_today)
         self.assertIsNone(ctrl._trim_probe_casa)
+
+    def test_an_overdue_probe_expires_even_without_house_reading(self):
+        """La mancanza della media non sospende per sempre l'orologio della prova."""
+        ctrl = self._con_anello()
+        ctrl.house_trim = 24.0
+        ctrl._trim_changed_at = GIORNO
+        ctrl._trim_probe_casa = 28.0
+        ctrl._trim_probe_level = 24.0
+        ctrl._trim_probe_started_at = GIORNO
+        ctrl._house_trim(
+            GIORNO
+            + timedelta(seconds=2 * controller_module.HOUSE_TRIM_DWELL_SECONDS + 1),
+            None,
+            1.0,
+            None,
+        )
+        self.assertIsNone(ctrl._trim_probe_casa)
+        self.assertIsNone(ctrl._trim_floor_today)
+
+    def test_a_future_probe_expires_without_learning(self):
+        """Un orologio futuro e' stato corrotto: non deve congelare il probe."""
+        ctrl = self._con_anello()
+        ctrl._trim_probe_casa = 28.0
+        ctrl._trim_probe_level = 24.0
+        ctrl._trim_probe_started_at = GIORNO + timedelta(minutes=5)
+        self.assertIsNone(ctrl._last_step_paid(28.0, 1.0, GIORNO))
+        self.assertIsNone(ctrl._trim_probe_casa)
+        self.assertIsNone(ctrl._trim_floor_today)
+
+    def test_probe_age_uses_elapsed_utc_across_offsets(self):
+        """Offset diversi rappresentano istanti, non durate locali da sottrarre."""
+        ctrl = self._con_anello()
+        started = datetime(2026, 8, 8, 12, 0, tzinfo=timezone(timedelta(hours=2)))
+        due = started.astimezone(timezone.utc) + timedelta(
+            seconds=controller_module.HOUSE_TRIM_DWELL_SECONDS + 60
+        )
+        ctrl._trim_probe_casa = 28.0
+        ctrl._trim_probe_level = 24.0
+        ctrl._trim_probe_started_at = started
+        self.assertFalse(ctrl._last_step_paid(28.0, 1.0, due))
+        self.assertEqual(ctrl._trim_floor_today, 25.0)
 
     def test_a_failed_level_is_not_retried_for_the_rest_of_the_day(self):
         """Senza il pavimento della giornata l'anello ritenterebbe lo stesso passo

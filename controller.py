@@ -11,7 +11,7 @@ import asyncio
 import logging
 import math
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.exceptions import ConfigEntryError
@@ -877,6 +877,12 @@ class ClimaSmartController:
             return
         if not dati:
             return
+        if not isinstance(dati, dict):
+            _LOGGER.error(
+                "Clima Smart: archivio di stato non valido (%s), riparto pulito",
+                type(dati).__name__,
+            )
+            return
 
         def data_di(chiave):
             grezzo = dati.get(chiave)
@@ -891,9 +897,12 @@ class ClimaSmartController:
             # standard e la logica resta provabile senza HA installato.
             grezzo = dati.get(chiave)
             try:
-                return datetime.fromisoformat(grezzo) if grezzo else None
+                valore = datetime.fromisoformat(grezzo) if grezzo else None
             except (TypeError, ValueError):
                 return None
+            if valore is None or valore.tzinfo is None or valore.utcoffset() is None:
+                return None
+            return valore
 
         self._morning_off_done_on = data_di("morning_off_done_on")
         self._sleep_start_done_on = data_di("sleep_start_done_on")
@@ -902,16 +911,20 @@ class ClimaSmartController:
         self._override_until = istante_di("override_until")
         self._adaptive_changed_at = istante_di("adaptive_changed_at")
         self._trim_changed_at = istante_di("trim_changed_at")
-        tr = dati.get("house_trim")
-        if isinstance(tr, (int, float)):
-            self.house_trim = float(tr)
-        self._saturated = bool(dati.get("saturated", False))
-        def temperatura_di(chiave):
+        def numero_finito(chiave):
             valore = dati.get(chiave)
             if isinstance(valore, bool) or not isinstance(valore, (int, float)):
                 return None
             valore = float(valore)
-            return valore if math.isfinite(valore) and _plausible(valore) else None
+            return valore if math.isfinite(valore) else None
+
+        def temperatura_di(chiave):
+            valore = numero_finito(chiave)
+            return valore if valore is not None and _plausible(valore) else None
+
+        self.house_trim = temperatura_di("house_trim")
+        saturato = dati.get("saturated", False)
+        self._saturated = saturato if isinstance(saturato, bool) else False
 
         self._trim_probe_casa = temperatura_di("trim_probe_casa")
         self._trim_probe_level = temperatura_di("trim_probe_level")
@@ -924,9 +937,9 @@ class ClimaSmartController:
         ):
             self._clear_trim_probe()
         self._trim_floor_day = data_di("trim_floor_day")
-        valore = dati.get("adaptive_extra")
-        if isinstance(valore, (int, float)):
-            self.adaptive_extra = float(valore)
+        valore = numero_finito("adaptive_extra")
+        if valore is not None:
+            self.adaptive_extra = valore
         self._stored = self._memoria()
         if self.override_active:
             _LOGGER.debug(
@@ -1250,6 +1263,31 @@ class ClimaSmartController:
         self._trim_probe_level = None
         self._trim_probe_started_at = None
 
+    def _trim_probe_age(self, now: datetime) -> float | None:
+        """Return elapsed probe seconds, clearing state that can no longer speak."""
+        if self._trim_probe_casa is None:
+            return None
+        started = self._trim_probe_started_at
+        if (
+            started is None
+            or started.tzinfo is None
+            or started.utcoffset() is None
+            or now.tzinfo is None
+            or now.utcoffset() is None
+        ):
+            self._clear_trim_probe()
+            return None
+        if started.astimezone(now.tzinfo).date() != now.date():
+            self._clear_trim_probe()
+            return None
+        age = (
+            now.astimezone(timezone.utc) - started.astimezone(timezone.utc)
+        ).total_seconds()
+        if age < 0 or age > 2 * HOUSE_TRIM_DWELL_SECONDS:
+            self._clear_trim_probe()
+            return None
+        return age
+
     def _last_step_paid(
         self, casa: float, passo: float, now: datetime
     ) -> bool | None:
@@ -1269,17 +1307,10 @@ class ClimaSmartController:
         Sui passi registrati fra il 5 e l'8 agosto uno solo su cinque aveva reso.
         """
         self._reset_trim_floor(now)
-        if self._trim_probe_casa is None:
-            return None                     # nessun passo da giudicare
-        started = self._trim_probe_started_at
-        if started is None or started.date() != now.date():
-            self._clear_trim_probe()
-            return None
-        age = (now - started).total_seconds()
+        age = self._trim_probe_age(now)
+        if age is None:
+            return None                     # nessun passo valido da giudicare
         if age < HOUSE_TRIM_DWELL_SECONDS:
-            return None
-        if age > 2 * HOUSE_TRIM_DWELL_SECONDS:
-            self._clear_trim_probe()
             return None
         reso = casa <= self._trim_probe_casa - TRIM_PROBE_GAIN
         livello = self._trim_probe_level
@@ -1314,6 +1345,7 @@ class ClimaSmartController:
         correzione ogni tre quarti d'ora e' gia' piu' rapida di quanto la casa
         sappia rispondere; piu' in fretta si rincorrerebbe solo il rumore.
         """
+        self._trim_probe_age(now)
         linea = float(self._cfg(CONF_HOUSE_TARGET, DEFAULT_HOUSE_TARGET) or 0.0)
         if linea <= 0:
             return None                      # anello disattivato: target fisso di prima
@@ -1668,6 +1700,10 @@ class ClimaSmartController:
 
     # ------------------------------------------------------------- decision
     def _compute(self, now: datetime) -> Desired:
+        self._trim_probe_age(now)
+        phase = self._phase(now)
+        if phase in (PHASE_SLEEP, PHASE_WIND_DOWN):
+            self._clear_trim_probe()
         climate = self.hass.states.get(self.climate_entity)
         if climate is None or climate.state in _UNAVAILABLE:
             # Clear the diagnostics too: leaving them frozen on the last pass made
@@ -1709,7 +1745,6 @@ class ClimaSmartController:
 
         # Da qui in poi c'e' un solo percorso: fasce orarie, guardie di stagione, e
         # le decisioni prese dai sensori.
-        phase = self._phase(now)
         self.current_phase = phase
         # The sleep window is a stretch of the night: same quiet behaviour, colder
         # target. Everything that keyed off "is it night" must include it.
@@ -1941,6 +1976,11 @@ class ClimaSmartController:
                 )
                 self.last_trigger = trigger
                 self._notify_entities()
+                # L'evento manuale arriva prima di questa passata. Se si torna
+                # senza salvare, un riavvio dentro l'override rimette subito il
+                # controller al comando. Un fallimento resta ritentabile perche'
+                # `_stored` avanza soltanto dopo un salvataggio riuscito.
+                await self._async_save_memoria()
                 return
 
             now = dt_util.now()
