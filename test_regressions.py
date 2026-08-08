@@ -819,6 +819,104 @@ class ControllerRegressionTests(unittest.TestCase):
         )
         self.assertEqual(ctrl._compute(dopo).setpoint, 25.0)
 
+    def _casa(self, ctrl, valore):
+        for i in range(3):
+            ctrl.hass.states.values[f"sensor.stanza{i}"] = State(
+                str(valore), {"unit_of_measurement": "°C"}
+            )
+
+    def test_a_step_that_does_not_move_the_house_is_given_back(self):
+        """Il criterio che il divario non sa dare: il passo si giudica dal
+        risultato. Misurato fra il 5 e l'8 agosto 2026, su cinque passi in giu' uno
+        solo aveva mosso la casa; gli altri quattro hanno solo comprato frequenza."""
+        ctrl = self._con_anello()
+        ctrl.entry.options = dict(ctrl.entry.options, trim_min=22.0)
+        self._casa(ctrl, 28.0)
+        ctrl._compute(GIORNO)
+        t = GIORNO + timedelta(
+            seconds=controller_module.HOUSE_TRIM_DWELL_SECONDS + 60
+        )
+        self.assertEqual(ctrl._compute(t).setpoint, 24.0)   # primo passo in giu'
+        # La casa non si muove: quel passo non ha reso.
+        t += timedelta(seconds=controller_module.HOUSE_TRIM_DWELL_SECONDS + 60)
+        self.assertEqual(ctrl._compute(t).setpoint, 25.0)   # restituito
+
+    def test_a_failed_level_is_not_retried_for_the_rest_of_the_day(self):
+        """Senza il pavimento della giornata l'anello ritenterebbe lo stesso passo
+        fra tre quarti d'ora, e si metterebbe a oscillare fra due valori."""
+        ctrl = self._con_anello()
+        ctrl.entry.options = dict(ctrl.entry.options, trim_min=22.0)
+        self._casa(ctrl, 28.0)
+        ctrl._compute(GIORNO)
+        t = GIORNO
+        visti = []
+        for _ in range(5):
+            t += timedelta(
+                seconds=controller_module.HOUSE_TRIM_DWELL_SECONDS + 60
+            )
+            visti.append(ctrl._compute(t).setpoint)
+        self.assertEqual(visti, [24.0, 25.0, 25.0, 25.0, 25.0])
+
+    def test_a_step_that_pays_earns_the_next_one(self):
+        """Se la casa risponde, l'anello ha diritto di continuare: il freno non e'
+        un tetto al raffrescamento, e' un divieto di spingere a vuoto."""
+        ctrl = self._con_anello()
+        ctrl.entry.options = dict(ctrl.entry.options, trim_min=22.0)
+        casa = 28.0
+        self._casa(ctrl, casa)
+        ctrl._compute(GIORNO)
+        t = GIORNO
+        visti = []
+        for _ in range(3):
+            t += timedelta(
+                seconds=controller_module.HOUSE_TRIM_DWELL_SECONDS + 60
+            )
+            casa -= 0.15                     # la casa risponde davvero
+            self._casa(ctrl, casa)
+            visti.append(ctrl._compute(t).setpoint)
+        self.assertEqual(visti, [24.0, 23.0, 22.0])
+
+    def test_the_learned_floor_expires_with_the_day(self):
+        """Una casa che oggi non risponde puo' rispondere domani: cambia il sole,
+        cambiano le finestre aperte. La lezione vale per la giornata."""
+        ctrl = self._con_anello()
+        ctrl.entry.options = dict(ctrl.entry.options, trim_min=22.0)
+        self._casa(ctrl, 28.0)
+        ctrl._compute(GIORNO)
+        t = GIORNO
+        for _ in range(3):
+            t += timedelta(
+                seconds=controller_module.HOUSE_TRIM_DWELL_SECONDS + 60
+            )
+            ctrl._compute(t)
+        self.assertIsNotNone(ctrl._trim_floor_today)
+        ctrl._reset_trim_floor(t + timedelta(days=1))
+        self.assertIsNone(ctrl._trim_floor_today)
+
+    def test_the_learned_floor_survives_a_restart(self):
+        """La lezione va salvata, non solo imparata.
+
+        Misurato l'8 agosto 2026: alle 16:13 l'anello aveva bocciato il passo a
+        24.0 e messo il pavimento a 25.0. Alle 18:48 Home Assistant si e' riavviato
+        e alle 18:49 ha rifatto lo stesso passo bocciato, perche' il pavimento
+        viveva solo in memoria. E' lo stesso difetto del freno del divario, ripetuto
+        su un campo nuovo: se una decisione dipende da qualcosa, quel qualcosa deve
+        stare nell'archivio."""
+        ctrl = self._con_anello()
+        ctrl.entry.options = dict(ctrl.entry.options, trim_min=22.0)
+        self._casa(ctrl, 28.0)
+        ctrl._compute(GIORNO)
+        t = GIORNO
+        for _ in range(3):
+            t += timedelta(
+                seconds=controller_module.HOUSE_TRIM_DWELL_SECONDS + 60
+            )
+            ctrl._compute(t)
+        self.assertIsNotNone(ctrl._trim_floor_today)
+        m = ctrl._memoria()
+        self.assertEqual(m["trim_floor_today"], ctrl._trim_floor_today)
+        self.assertEqual(m["trim_floor_day"], ctrl._trim_floor_day.isoformat())
+
     def test_a_very_hot_day_puts_a_floor_under_the_loop(self):
         """Sopra la soglia la macchina e' al limite: chiedere di piu' alla camera non
         porta gradi in casa, porta frequenza. Misurato, il rendimento migliore sta
@@ -829,8 +927,14 @@ class ControllerRegressionTests(unittest.TestCase):
         )
         ctrl.hass.states.values["sensor.outdoor"] = State("37", {"unit_of_measurement": "°C"})
         t = GIORNO
-        for _ in range(6):     # la casa resta sopra la linea: l'anello spinge
+        casa = 28.0
+        for _ in range(6):     # la casa resta sopra la linea **e risponde**, quindi
             t += timedelta(seconds=controller_module.HOUSE_TRIM_DWELL_SECONDS + 60)
+            casa -= 0.15       # ogni passo rende e l'anello ha diritto al successivo
+            for i in range(3):
+                ctrl.hass.states.values[f"sensor.stanza{i}"] = State(
+                    str(casa), {"unit_of_measurement": "°C"}
+                )
             ctrl._compute(t)
         self.assertEqual(ctrl.house_trim, 23.0)   # si ferma al vincolo, non a 22.0
 
@@ -840,8 +944,14 @@ class ControllerRegressionTests(unittest.TestCase):
         ctrl = self._con_anello()
         ctrl.entry.options = dict(ctrl.entry.options, trim_min=22.0)
         t = GIORNO
+        casa = 28.0
         for _ in range(6):
             t += timedelta(seconds=controller_module.HOUSE_TRIM_DWELL_SECONDS + 60)
+            casa -= 0.15       # la casa risponde: i passi in giu' sono meritati
+            for i in range(3):
+                ctrl.hass.states.values[f"sensor.stanza{i}"] = State(
+                    str(casa), {"unit_of_measurement": "°C"}
+                )
             ctrl._compute(t)
         self.assertEqual(ctrl.house_trim, 22.0)
         # Adesso fuori diventa torrido e il vincolo entra in gioco.

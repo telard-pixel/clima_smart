@@ -137,6 +137,7 @@ from .const import (
     SEASON_EXIT_CONFIRM_SECONDS,
     SLEEP_BOOST_MIN_DELTA,
     STORAGE_VERSION,
+    TRIM_PROBE_GAIN,
     SLEEP_BOOST_MINUTES,
     SLEEP_START_WINDOW_MINUTES,
     START_REASON_DAY,
@@ -324,6 +325,13 @@ class ClimaSmartController:
         # Il freno della saturazione e' inserito o no: anche questo con isteresi,
         # perche' guarda l'aria di ripresa, che si muove a mezzo grado per volta.
         self._saturated = False
+        # Il giudizio del passo in giu': la media di casa al momento in cui e'
+        # stato fatto, il livello a cui ha portato, e il pavimento che i passi
+        # bocciati hanno lasciato per la giornata in corso.
+        self._trim_probe_casa: float | None = None
+        self._trim_probe_level: float | None = None
+        self._trim_floor_today: float | None = None
+        self._trim_floor_day: date | None = None
         # Cio' che non deve morire con il processo: i contrassegni "gia' fatto
         # oggi" e la resa manuale. Senza, un riavvio dopo che l'utente ha spento
         # a mano riaccendeva la macchina, e l'avvio diurno poteva farlo ore dopo
@@ -840,6 +848,14 @@ class ClimaSmartController:
             # riparte staccato e l'anello ricomincia a spingere da dove era
             # arrivato. E' successo il 7 agosto 2026 alle 19:30.
             "saturated": self._saturated,
+            # Anche il giudizio sul passo deve sopravvivere a un riavvio: senza,
+            # l'anello dimentica la lezione e ricomincia a spingere. Misurato l'8
+            # agosto 2026: riavvio alle 18:48, e alle 18:49 ha rifatto il passo che
+            # aveva gia' bocciato alle 16:13.
+            "trim_probe_casa": self._trim_probe_casa,
+            "trim_probe_level": self._trim_probe_level,
+            "trim_floor_today": self._trim_floor_today,
+            "trim_floor_day": giorno(self._trim_floor_day),
             "trim_changed_at": giorno(self._trim_changed_at),
             "adaptive_changed_at": giorno(self._adaptive_changed_at),
         }
@@ -888,6 +904,17 @@ class ClimaSmartController:
         if isinstance(tr, (int, float)):
             self.house_trim = float(tr)
         self._saturated = bool(dati.get("saturated", False))
+        for chiave, campo in (
+            ("trim_probe_casa", "_trim_probe_casa"),
+            ("trim_probe_level", "_trim_probe_level"),
+            ("trim_floor_today", "_trim_floor_today"),
+        ):
+            valore_trim = dati.get(chiave)
+            setattr(
+                self, campo,
+                float(valore_trim) if isinstance(valore_trim, (int, float)) else None,
+            )
+        self._trim_floor_day = data_di("trim_floor_day")
         valore = dati.get("adaptive_extra")
         if isinstance(valore, (int, float)):
             self.adaptive_extra = float(valore)
@@ -1197,6 +1224,48 @@ class ClimaSmartController:
             self._saturated = divario >= SATURATION_GAP
         return self._saturated
 
+    def _reset_trim_floor(self, now: datetime) -> None:
+        """Il pavimento imparato vale per la giornata, non per sempre.
+
+        Una casa che oggi non risponde puo' rispondere domani: cambia il sole,
+        cambia il vento, cambiano le finestre aperte. Quindi la lezione si azzera
+        a mezzanotte, come gli altri contrassegni "gia' fatto oggi"."""
+        if self._trim_floor_day != now.date():
+            self._trim_floor_day = now.date()
+            self._trim_floor_today = None
+
+    def _last_step_paid(self, casa: float, passo: float, now: datetime) -> bool:
+        """Se l'ultimo passo in giu' ha davvero mosso la casa.
+
+        E' il criterio che il divario non sa dare. Il divario si stringe **proprio
+        quando la macchina lavora bene**: usarlo come freno significa mollare la
+        presa nel momento sbagliato, ed e' quello che e' successo l'8 agosto 2026,
+        target da 25 a 22 in due ore e mezza e macchina a 55 Hz.
+
+        Qui invece si guarda il risultato: dopo un'attesa piena, la media di casa
+        e' scesa di almeno TRIM_PROBE_GAIN? Se si', il passo ha reso e si puo'
+        continuare. Se no, il passo va restituito e **quel livello non si riprova
+        per il resto della giornata**: senza il pavimento, l'anello lo
+        ritenterebbe fra tre quarti d'ora e si metterebbe a oscillare.
+
+        Sui passi registrati fra il 5 e l'8 agosto uno solo su cinque aveva reso.
+        """
+        self._reset_trim_floor(now)
+        if self._trim_probe_casa is None:
+            return True                      # nessun passo da giudicare
+        reso = casa <= self._trim_probe_casa - TRIM_PROBE_GAIN
+        livello = self._trim_probe_level
+        self._trim_probe_casa = None
+        self._trim_probe_level = None
+        if not reso and livello is not None:
+            passo = passo if passo and passo > 0 else 1.0
+            candidato = livello + passo
+            self._trim_floor_today = (
+                candidato if self._trim_floor_today is None
+                else max(self._trim_floor_today, candidato)
+            )
+        return reso
+
     def _house_trim(
         self,
         now: datetime,
@@ -1280,6 +1349,15 @@ class ClimaSmartController:
                 if self.house_trim < tetto
                 else self.house_trim
             )
+        elif errore > 0 and not self._last_step_paid(casa, passo, now):
+            # L'ultimo passo in giu' non ha mosso la casa: si restituisce. Il
+            # divario e' un indizio, questo e' il verdetto - e il verdetto vince.
+            tetto = min(massimo, max(self.target_home, minimo))
+            nuovo = (
+                min(self.house_trim + passo, tetto)
+                if self.house_trim < tetto
+                else self.house_trim
+            )
         elif errore > 0:
             # Casa sopra la linea: si chiede di piu' alla camera.
             if comodino is not None:
@@ -1288,7 +1366,14 @@ class ClimaSmartController:
                     # La camera ha gia' dato quello che poteva: serve la casa, ma
                     # resta una stanza in cui si dorme.
                     return self.house_trim
+            self._reset_trim_floor(now)
+            if self._trim_floor_today is not None:
+                minimo = max(minimo, self._trim_floor_today)
             nuovo = max(self.house_trim - passo, minimo)
+            if nuovo < self.house_trim:
+                # Si segna da dove si parte, per poter giudicare fra un'attesa.
+                self._trim_probe_casa = casa
+                self._trim_probe_level = nuovo
         else:
             nuovo = min(self.house_trim + passo, massimo)
 

@@ -228,6 +228,29 @@ HOT_OUTDOOR_HYSTERESIS = 1.0
 SATURATION_GAP = 1.5
 SATURATION_HYSTERESIS = 0.75
 
+# --- Anello esterno: il passo si giudica dal risultato ---
+# Il freno del divario ha un difetto di fondo, visto sul campo l'8 agosto 2026: il
+# divario si stringe **proprio quando la macchina lavora bene**, cosi' il freno
+# molla, il target riscende e la macchina ricomincia a tirare. Un cane che si
+# morde la coda. Il divario e' un indizio; il risultato e' la prova.
+#
+# Quindi ogni passo in giu' viene giudicato da quello che ottiene: dopo una
+# attesa piena, se la media di casa non e' scesa di almeno questo, il passo non ha
+# reso e va restituito. Misurato su tutti i passi in giu' registrati (5, 6 e 8
+# agosto), la separazione e' netta:
+#
+#   8 ago 10:18  25->24   casa -0.12   ha reso
+#   8 ago 11:03  24->23   casa -0.02
+#   8 ago 11:49  23->22   casa +0.20
+#   6 ago 14:40  25->24   casa +0.01
+#   6 ago 15:25  24->23   casa +0.01
+#
+# Uno su cinque. 0.10 sta in mezzo fra il passo che ha reso e il migliore di
+# quelli che non hanno reso, e vale come "almeno un decimo in tre quarti d'ora",
+# cioe' circa 0.13 gradi orari: il ritmo dei pomeriggi in cui la casa scendeva
+# davvero.
+TRIM_PROBE_GAIN = 0.10
+
 # How long async_start waits for the master switch and the mode select to restore
 # before opening the barrier in degraded mode.
 RESTORE_TIMEOUT_SECONDS = 10
