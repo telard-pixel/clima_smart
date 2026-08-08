@@ -1760,7 +1760,10 @@ class ClimaSmartController:
         compensazione = 0.0
         if night_window:
             # Di notte la porta e' chiusa: la casa esce dal quadro e comanda la
-            # camera, con il suo target.
+            # camera, con il suo target. Anche la prova diurna esce dal quadro:
+            # conservarla fino al giorno dopo la trasformerebbe in una misura di
+            # ore invece che dei tre quarti d'ora per cui e' stata aperta.
+            self._clear_trim_probe()
             target = self.target_sleep
         else:
             # Di giorno comanda la linea di comfort delle altre stanze, e la camera

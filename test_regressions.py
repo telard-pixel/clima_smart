@@ -842,6 +842,32 @@ class ControllerRegressionTests(unittest.TestCase):
         notte = NOW.replace(hour=2, minute=0)
         self.assertEqual(ctrl._compute(notte).setpoint, 22.0)
 
+    def test_sleep_cancels_a_daytime_probe_without_learning(self):
+        """La notte rende la misura diurna non confrontabile: si annulla soltanto."""
+        ctrl = self._con_anello()
+        self._orari(ctrl, target_sleep=22.0)
+        ctrl._trim_probe_casa = 28.0
+        ctrl._trim_probe_level = 24.0
+        ctrl._trim_probe_started_at = GIORNO
+        ctrl._compute(GIORNO.replace(hour=2, minute=0))
+        self.assertIsNone(ctrl._trim_probe_casa)
+        self.assertIsNone(ctrl._trim_probe_level)
+        self.assertIsNone(ctrl._trim_probe_started_at)
+        self.assertIsNone(ctrl._trim_floor_today)
+
+    def test_wind_down_cancels_a_daytime_probe_without_learning(self):
+        """Anche lo scarico mattutino usa la camera, non la baseline della casa."""
+        ctrl = self._con_anello()
+        self._orari(ctrl, target_sleep=22.0)
+        ctrl._trim_probe_casa = 28.0
+        ctrl._trim_probe_level = 24.0
+        ctrl._trim_probe_started_at = GIORNO
+        ctrl._compute(GIORNO.replace(hour=7, minute=45))
+        self.assertIsNone(ctrl._trim_probe_casa)
+        self.assertIsNone(ctrl._trim_probe_level)
+        self.assertIsNone(ctrl._trim_probe_started_at)
+        self.assertIsNone(ctrl._trim_floor_today)
+
     def test_the_loop_replaces_the_adaptive_instead_of_fighting_it(self):
         """L'adattivo alza il target quando fuori fa caldo, cioe' fa il contrario
         dell'obiettivo proprio nelle ore in cui la casa fatica di piu'."""
