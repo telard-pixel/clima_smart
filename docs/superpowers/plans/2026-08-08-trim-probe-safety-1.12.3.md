@@ -637,6 +637,33 @@ and `git diff --check`, then commit controller, tests, specification and plan as
 git commit -m "Harden persisted controller state"
 ```
 
+- [ ] **Step 10: Add failing future/domain validation tests**
+
+Create `test_future_and_out_of_domain_store_values_are_ignored`. Store a
+years-future override/trim/adaptive timestamp, `adaptive_extra=1e300`, and trim,
+probe-level and floor values outside configured min/max. After load, assert all
+are clean defaults while existing valid round-trip tests remain green.
+
+- [ ] **Step 11: Implement role-specific Store bounds**
+
+Compare loaded timestamps with `dt_util.now()`: reject future dwell timestamps
+and overrides beyond `override_minutes`. Accept `adaptive_extra` only in
+`0..CONF_ADAPTIVE_MAX`; accept trim target, probe level and floor only in
+`CONF_TRIM_MIN..CONF_TRIM_MAX`. Do not clamp corrupt persisted values.
+
+- [ ] **Step 12: Add a failing deterministic overlapping-save test**
+
+Create `test_overlapping_saves_cannot_overwrite_newer_state`. Block the first
+store write, mutate runtime state, complete the second write first, then release
+the first. Before the fix the stored snapshot ends at the old value.
+
+- [ ] **Step 13: Serialize the complete save transaction**
+
+Initialize `_save_lock = asyncio.Lock()`. In `_async_save_memoria()`, acquire it
+before calling `_memoria()` and hold it through comparison, `async_save()` and
+the successful `_stored` update. Verify the overlap test, all persistence tests
+and the full suite, then commit as `Serialize and bound persisted state`.
+
 ---
 
 ### Task 6: Verify, independently review, integrate and deploy

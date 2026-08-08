@@ -33,6 +33,10 @@ Two independent read-only reviews of `755e655..048fcb3` reproduced these cases:
 8. The real manual-override event queues an evaluation which returns while the
    override is active, before the only state-save call; the existing restart test
    hid this by invoking the private save method directly.
+9. Future timestamps and finite but out-of-domain scalars can restore years-long
+   overrides/dwells or extreme adaptive compensation.
+10. Normal saves run outside the evaluation lock, so two overlapping saves can
+    finish out of order and overwrite the newer snapshot with the older one.
 
 The existing 134-test suite passes but does not cover the 1.12.2 delta or these
 failure modes.
@@ -106,6 +110,12 @@ as an empty Store so startup continues. `house_trim` must be a finite plausible
 temperature, `adaptive_extra` must be finite and non-boolean, and `saturated`
 must be an actual boolean; invalid values fall back to clean defaults.
 
+At load time, override expiry is bounded by the configured override duration;
+trim/adaptive change timestamps cannot be in the future. `adaptive_extra` must be
+between zero and the configured adaptive maximum. Stored trim targets and floors
+must fall within the configured trim minimum and maximum. Values outside those
+domains are discarded rather than clamped silently.
+
 ## Persistence retry
 
 `_async_save_memoria()` compares the current snapshot with the last successfully
@@ -119,6 +129,11 @@ guard. A failed save remains retryable on the next evaluation. Override expiry
 continues through a normal evaluation and persists the cleared timestamp. The
 restart regression must exercise event, evaluation, Store and a new controller;
 it may not call `_async_save_memoria()` directly.
+
+A dedicated asynchronous save lock serializes snapshot creation, comparison,
+write and `_stored` update. The snapshot is taken only after acquiring that lock,
+so a second save waiting behind an older write observes the newest runtime state
+and is necessarily persisted last.
 
 ## Test-driven implementation
 
@@ -140,6 +155,9 @@ failing for the expected reason. Tests cover:
 10. naive, future and alternate-offset timestamps cannot break evaluation;
 11. list/string/scalar Store payloads and corrupt persisted scalars fail cleanly;
 12. a real manual event persists its override across a controller restart.
+13. future/out-of-domain Store values are rejected while valid override/trim
+    values still round-trip;
+14. two deliberately overlapped saves finish with the newest runtime snapshot.
 
 Final verification runs the complete standalone suite, Python compilation,
 manifest/translation JSON parsing and `git diff --check`. Two fresh independent

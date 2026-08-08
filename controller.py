@@ -271,6 +271,7 @@ class ClimaSmartController:
         self._config_data_snapshot = dict(entry.data)
         self._unsubs: list = []
         self._lock = asyncio.Lock()
+        self._save_lock = asyncio.Lock()
         self._stopped = False
         self._started = False
         self._restore_ready: set[str] = set()
@@ -911,6 +912,27 @@ class ClimaSmartController:
         self._override_until = istante_di("override_until")
         self._adaptive_changed_at = istante_di("adaptive_changed_at")
         self._trim_changed_at = istante_di("trim_changed_at")
+        adesso = dt_util.now()
+
+        def dopo(a: datetime, b: datetime) -> bool:
+            return a.astimezone(timezone.utc) > b.astimezone(timezone.utc)
+
+        limite_override = adesso + timedelta(minutes=max(0, self.override_minutes))
+        if (
+            self._override_until is not None
+            and (
+                not dopo(self._override_until, adesso)
+                or dopo(self._override_until, limite_override)
+            )
+        ):
+            self._override_until = None
+        if self._adaptive_changed_at is not None and dopo(
+            self._adaptive_changed_at, adesso
+        ):
+            self._adaptive_changed_at = None
+        if self._trim_changed_at is not None and dopo(self._trim_changed_at, adesso):
+            self._trim_changed_at = None
+
         def numero_finito(chiave):
             valore = dati.get(chiave)
             if isinstance(valore, bool) or not isinstance(valore, (int, float)):
@@ -922,14 +944,27 @@ class ClimaSmartController:
             valore = numero_finito(chiave)
             return valore if valore is not None and _plausible(valore) else None
 
-        self.house_trim = temperatura_di("house_trim")
+        minimo_trim = float(
+            self._cfg(CONF_TRIM_MIN, DEFAULT_TRIM_MIN) or DEFAULT_TRIM_MIN
+        )
+        massimo_trim = float(
+            self._cfg(CONF_TRIM_MAX, DEFAULT_TRIM_MAX) or DEFAULT_TRIM_MAX
+        )
+
+        def livello_trim_di(chiave):
+            valore = temperatura_di(chiave)
+            if valore is None or not minimo_trim <= valore <= massimo_trim:
+                return None
+            return valore
+
+        self.house_trim = livello_trim_di("house_trim")
         saturato = dati.get("saturated", False)
         self._saturated = saturato if isinstance(saturato, bool) else False
 
         self._trim_probe_casa = temperatura_di("trim_probe_casa")
-        self._trim_probe_level = temperatura_di("trim_probe_level")
+        self._trim_probe_level = livello_trim_di("trim_probe_level")
         self._trim_probe_started_at = istante_di("trim_probe_started_at")
-        self._trim_floor_today = temperatura_di("trim_floor_today")
+        self._trim_floor_today = livello_trim_di("trim_floor_today")
         if (
             self._trim_probe_casa is None
             or self._trim_probe_level is None
@@ -938,7 +973,10 @@ class ClimaSmartController:
             self._clear_trim_probe()
         self._trim_floor_day = data_di("trim_floor_day")
         valore = numero_finito("adaptive_extra")
-        if valore is not None:
+        massimo_adattivo = float(
+            self._cfg(CONF_ADAPTIVE_MAX, DEFAULT_ADAPTIVE_MAX) or 0.0
+        )
+        if valore is not None and 0.0 <= valore <= max(0.0, massimo_adattivo):
             self.adaptive_extra = valore
         self._stored = self._memoria()
         if self.override_active:
@@ -949,15 +987,16 @@ class ClimaSmartController:
 
     async def _async_save_memoria(self) -> None:
         """Persist the snapshot, but only when something actually moved."""
-        adesso = self._memoria()
-        if adesso == self._stored:
-            return
-        try:
-            await self._store.async_save(adesso)
-        except Exception:  # noqa: BLE001 - un salvataggio fallito non deve fermare il ciclo
-            _LOGGER.exception("Clima Smart: non sono riuscito a salvare lo stato")
-        else:
-            self._stored = adesso
+        async with self._save_lock:
+            adesso = self._memoria()
+            if adesso == self._stored:
+                return
+            try:
+                await self._store.async_save(adesso)
+            except Exception:  # noqa: BLE001 - un salvataggio fallito non deve fermare il ciclo
+                _LOGGER.exception("Clima Smart: non sono riuscito a salvare lo stato")
+            else:
+                self._stored = adesso
 
     def _season_confirmed(self, summer: bool, now: datetime) -> bool:
         """Hold the warm season until "it is not summer" has lasted a while.

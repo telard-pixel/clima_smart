@@ -579,6 +579,64 @@ class ControllerRegressionTests(unittest.TestCase):
                 self.assertEqual(ctrl.adaptive_extra, 0.0)
                 self.assertFalse(ctrl._saturated)
 
+    def test_future_and_out_of_domain_store_values_are_ignored(self):
+        """Valori formalmente validi ma impossibili non devono governare per anni."""
+        ctrl = self._smart_controller(room=27.0)
+        future = NOW + timedelta(days=3650)
+        ctrl._store._dati[ctrl._store.key] = {
+            "override_until": future.isoformat(),
+            "trim_changed_at": future.isoformat(),
+            "adaptive_changed_at": future.isoformat(),
+            "house_trim": 50.0,
+            "adaptive_extra": 1e300,
+            "saturated": False,
+            "trim_probe_casa": 28.0,
+            "trim_probe_level": 50.0,
+            "trim_probe_started_at": NOW.isoformat(),
+            "trim_floor_today": 50.0,
+            "trim_floor_day": NOW.date().isoformat(),
+        }
+        asyncio.run(ctrl._async_load_memoria())
+        self.assertIsNone(ctrl._override_until)
+        self.assertIsNone(ctrl._trim_changed_at)
+        self.assertIsNone(ctrl._adaptive_changed_at)
+        self.assertIsNone(ctrl.house_trim)
+        self.assertEqual(ctrl.adaptive_extra, 0.0)
+        self.assertIsNone(ctrl._trim_probe_casa)
+        self.assertIsNone(ctrl._trim_probe_level)
+        self.assertIsNone(ctrl._trim_floor_today)
+
+    def test_overlapping_saves_cannot_overwrite_newer_state(self):
+        """Una scrittura lenta non deve finire dopo e cancellare lo snapshot nuovo."""
+        ctrl = self._smart_controller(room=27.0)
+        persisted = {}
+
+        async def scenario():
+            first_started = asyncio.Event()
+            release_first = asyncio.Event()
+
+            async def controlled_save(data):
+                snapshot = dict(data)
+                if snapshot["adaptive_extra"] == 1.0:
+                    first_started.set()
+                    await release_first.wait()
+                persisted.clear()
+                persisted.update(snapshot)
+
+            ctrl._store.async_save = controlled_save
+            ctrl.adaptive_extra = 1.0
+            first = asyncio.create_task(ctrl._async_save_memoria())
+            await first_started.wait()
+            ctrl.adaptive_extra = 2.0
+            second = asyncio.create_task(ctrl._async_save_memoria())
+            await asyncio.sleep(0)
+            release_first.set()
+            await asyncio.gather(first, second)
+
+        asyncio.run(scenario())
+        self.assertEqual(persisted["adaptive_extra"], 2.0)
+        self.assertEqual(ctrl._stored["adaptive_extra"], 2.0)
+
     def test_a_failed_store_save_is_retried(self):
         """Un errore transitorio non deve far sembrare salvato cio' che non lo e'."""
         ctrl = self._smart_controller(room=27.0)
