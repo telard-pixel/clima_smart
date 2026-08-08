@@ -930,11 +930,12 @@ class ClimaSmartController:
         adesso = self._memoria()
         if adesso == self._stored:
             return
-        self._stored = adesso
         try:
             await self._store.async_save(adesso)
         except Exception:  # noqa: BLE001 - un salvataggio fallito non deve fermare il ciclo
             _LOGGER.exception("Clima Smart: non sono riuscito a salvare lo stato")
+        else:
+            self._stored = adesso
 
     def _season_confirmed(self, summer: bool, now: datetime) -> bool:
         """Hold the warm season until "it is not summer" has lasted a while.
@@ -1408,7 +1409,7 @@ class ClimaSmartController:
                 st.attributes.get("unit_of_measurement"),
                 UnitOfTemperature.CELSIUS,
             )
-            if value is not None:
+            if value is not None and math.isfinite(value) and _plausible(value):
                 letture.append(value)
         if not letture:
             return None

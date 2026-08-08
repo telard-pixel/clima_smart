@@ -534,6 +534,23 @@ class ControllerRegressionTests(unittest.TestCase):
         asyncio.run(ctrl._async_load_memoria())
         self.assertIsNone(ctrl._day_start_done_on)
 
+    def test_a_failed_store_save_is_retried(self):
+        """Un errore transitorio non deve far sembrare salvato cio' che non lo e'."""
+        ctrl = self._smart_controller(room=27.0)
+        ctrl.adaptive_extra = 1.0
+        calls = []
+
+        async def fail_once(data):
+            calls.append(dict(data))
+            if len(calls) == 1:
+                raise RuntimeError("temporary save failure")
+
+        ctrl._store.async_save = fail_once
+        asyncio.run(ctrl._async_save_memoria())
+        asyncio.run(ctrl._async_save_memoria())
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(ctrl._stored, ctrl._memoria())
+
     # ------------------------------------ termometro vero della stanza
     def _con_sonda(self, stanza, ripresa=27.0, target=25.0):
         """Controller con un termometro vero in camera, fuori dal getto d'aria."""
@@ -824,6 +841,24 @@ class ControllerRegressionTests(unittest.TestCase):
             ctrl.hass.states.values[f"sensor.stanza{i}"] = State(
                 str(valore), {"unit_of_measurement": "°C"}
             )
+
+    def test_house_average_skips_non_finite_and_implausible_values(self):
+        """Un sensore guasto viene escluso senza buttare le letture sane."""
+        ctrl = self._con_anello(altre=(26.0, 26.5, 27.0))
+        ctrl.hass.states.values["sensor.stanza0"].state = "nan"
+        ctrl.hass.states.values["sensor.stanza1"].state = "inf"
+        ctrl.hass.states.values["sensor.stanza2"].state = "26.0"
+        self.assertEqual(ctrl._house_average(), 26.0)
+
+    def test_house_average_returns_none_without_valid_evidence(self):
+        """Senza una lettura reale l'anello tiene il target e non inventa prove."""
+        ctrl = self._con_anello(altre=(26.0, 26.5, 27.0))
+        for entity, value in zip(
+            ("sensor.stanza0", "sensor.stanza1", "sensor.stanza2"),
+            ("nan", "-inf", "999"),
+        ):
+            ctrl.hass.states.values[entity].state = value
+        self.assertIsNone(ctrl._house_average())
 
     def test_a_step_that_does_not_move_the_house_is_given_back(self):
         """Il criterio che il divario non sa dare: il passo si giudica dal

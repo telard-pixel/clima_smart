@@ -60,7 +60,7 @@ def test_a_failed_store_save_is_retried(self):
 Run:
 
 ```bash
-python3 -I -m unittest test_regressions.ControllerRegressionTests.test_a_failed_store_save_is_retried -v
+python3 -m unittest test_regressions.ControllerRegressionTests.test_a_failed_store_save_is_retried -v
 ```
 
 Expected: FAIL because `len(calls)` is `1`; the failed first call incorrectly updated `_stored`.
@@ -113,7 +113,7 @@ def test_house_average_returns_none_without_valid_evidence(self):
 Run:
 
 ```bash
-python3 -I -m unittest \
+python3 -m unittest \
   test_regressions.ControllerRegressionTests.test_house_average_skips_non_finite_and_implausible_values \
   test_regressions.ControllerRegressionTests.test_house_average_returns_none_without_valid_evidence -v
 ```
@@ -195,7 +195,7 @@ def test_a_legacy_probe_without_timestamp_is_discarded(self):
 Run:
 
 ```bash
-python3 -I -m unittest \
+python3 -m unittest \
   test_regressions.ControllerRegressionTests.test_a_complete_probe_survives_a_restart \
   test_regressions.ControllerRegressionTests.test_a_legacy_probe_without_timestamp_is_discarded -v
 ```
