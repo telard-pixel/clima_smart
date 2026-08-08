@@ -1321,20 +1321,33 @@ class ClimaSmartController:
             return self.house_trim
 
         passo = passo if passo and passo > 0 else 1.0
-        if errore > 0 and self._saturation_brake(casa, room):
-            # Casa sopra la linea, ma la camera e' gia' molto piu' fredda: da qui
-            # in poi il setpoint compra frequenza, non gradi in casa. Si
-            # **restituisce** un passo invece di limitarsi a fermare la discesa,
-            # perche' fermarsi soltanto lascerebbe inchiodato un target che ci e'
-            # gia' arrivato - com'e' successo il 7 agosto, target a 22.0 dalle
-            # dieci del mattino alle sei di sera.
+        # La prova in sospeso si giudica SEMPRE, non solo nel ramo che spinge in
+        # giu': altrimenti resta appesa finche' non ricapita la stessa
+        # condizione, e quando infine viene giudicata confronta la casa di adesso
+        # con una base di ore prima invece che di tre quarti d'ora prima. E'
+        # innocuo chiamarla a vuoto - senza una prova in sospeso non fa nulla.
+        #
+        # Misurato l'8 agosto 2026: col freno di saturazione inserito il verdetto
+        # restava sospeso per ore, perche' il ramo che lo giudicava non veniva
+        # nemmeno raggiunto.
+        pagato = self._last_step_paid(casa, passo, now)
+        saturo = errore > 0 and self._saturation_brake(casa, room)
+        if errore > 0 and (saturo or not pagato):
+            # Casa sopra la linea, ma spingere non rende piu': o la camera e'
+            # gia' molto piu' fredda della casa (il divario compra solo
+            # frequenza), o l'ultimo passo non ha mosso la casa (il verdetto
+            # diretto, che quando c'e' vince sul divario). Si **restituisce** un
+            # passo invece di limitarsi a fermare la discesa, perche' fermarsi
+            # soltanto lascerebbe inchiodato un target che ci e' gia' arrivato -
+            # com'e' successo il 7 agosto, target a 22.0 dalle dieci del mattino
+            # alle sei di sera.
             #
             # Restituendo un passo alla volta, con la stessa attesa di tutto
             # l'anello, il target si assesta da solo attorno al divario utile:
             # scende finche' rende, risale appena smette. E l'isteresi tiene
             # l'assestamento lento invece di farlo oscillare.
             #
-            # Il freno restituisce **fino al target di giorno e non oltre**. Serve
+            # Restituisce **fino al target di giorno e non oltre**. Serve
             # un'ancora: rigiocando il 7 agosto senza, il target risaliva di un
             # passo ogni tre quarti d'ora fino al tetto del trim e ci restava,
             # perche' il divario si chiude solo quando la camera si scalda e in un
@@ -1343,15 +1356,6 @@ class ClimaSmartController:
             # quanto renda", non "smetti di raffreddare". Salire **sopra** il
             # target di giorno resta mestiere dell'altro ramo, quello che molla la
             # presa quando la casa sta gia' bene.
-            tetto = min(massimo, max(self.target_home, minimo))
-            nuovo = (
-                min(self.house_trim + passo, tetto)
-                if self.house_trim < tetto
-                else self.house_trim
-            )
-        elif errore > 0 and not self._last_step_paid(casa, passo, now):
-            # L'ultimo passo in giu' non ha mosso la casa: si restituisce. Il
-            # divario e' un indizio, questo e' il verdetto - e il verdetto vince.
             tetto = min(massimo, max(self.target_home, minimo))
             nuovo = (
                 min(self.house_trim + passo, tetto)
