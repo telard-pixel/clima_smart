@@ -330,6 +330,7 @@ class ClimaSmartController:
         # bocciati hanno lasciato per la giornata in corso.
         self._trim_probe_casa: float | None = None
         self._trim_probe_level: float | None = None
+        self._trim_probe_started_at: datetime | None = None
         self._trim_floor_today: float | None = None
         self._trim_floor_day: date | None = None
         # Cio' che non deve morire con il processo: i contrassegni "gia' fatto
@@ -854,6 +855,7 @@ class ClimaSmartController:
             # aveva gia' bocciato alle 16:13.
             "trim_probe_casa": self._trim_probe_casa,
             "trim_probe_level": self._trim_probe_level,
+            "trim_probe_started_at": giorno(self._trim_probe_started_at),
             "trim_floor_today": self._trim_floor_today,
             "trim_floor_day": giorno(self._trim_floor_day),
             "trim_changed_at": giorno(self._trim_changed_at),
@@ -904,16 +906,23 @@ class ClimaSmartController:
         if isinstance(tr, (int, float)):
             self.house_trim = float(tr)
         self._saturated = bool(dati.get("saturated", False))
-        for chiave, campo in (
-            ("trim_probe_casa", "_trim_probe_casa"),
-            ("trim_probe_level", "_trim_probe_level"),
-            ("trim_floor_today", "_trim_floor_today"),
+        def temperatura_di(chiave):
+            valore = dati.get(chiave)
+            if isinstance(valore, bool) or not isinstance(valore, (int, float)):
+                return None
+            valore = float(valore)
+            return valore if math.isfinite(valore) and _plausible(valore) else None
+
+        self._trim_probe_casa = temperatura_di("trim_probe_casa")
+        self._trim_probe_level = temperatura_di("trim_probe_level")
+        self._trim_probe_started_at = istante_di("trim_probe_started_at")
+        self._trim_floor_today = temperatura_di("trim_floor_today")
+        if (
+            self._trim_probe_casa is None
+            or self._trim_probe_level is None
+            or self._trim_probe_started_at is None
         ):
-            valore_trim = dati.get(chiave)
-            setattr(
-                self, campo,
-                float(valore_trim) if isinstance(valore_trim, (int, float)) else None,
-            )
+            self._clear_trim_probe()
         self._trim_floor_day = data_di("trim_floor_day")
         valore = dati.get("adaptive_extra")
         if isinstance(valore, (int, float)):
@@ -1235,7 +1244,15 @@ class ClimaSmartController:
             self._trim_floor_day = now.date()
             self._trim_floor_today = None
 
-    def _last_step_paid(self, casa: float, passo: float, now: datetime) -> bool:
+    def _clear_trim_probe(self) -> None:
+        """Discard every part of the current measurement as one atomic state."""
+        self._trim_probe_casa = None
+        self._trim_probe_level = None
+        self._trim_probe_started_at = None
+
+    def _last_step_paid(
+        self, casa: float, passo: float, now: datetime
+    ) -> bool | None:
         """Se l'ultimo passo in giu' ha davvero mosso la casa.
 
         E' il criterio che il divario non sa dare. Il divario si stringe **proprio
@@ -1253,11 +1270,20 @@ class ClimaSmartController:
         """
         self._reset_trim_floor(now)
         if self._trim_probe_casa is None:
-            return True                      # nessun passo da giudicare
+            return None                     # nessun passo da giudicare
+        started = self._trim_probe_started_at
+        if started is None or started.date() != now.date():
+            self._clear_trim_probe()
+            return None
+        age = (now - started).total_seconds()
+        if age < HOUSE_TRIM_DWELL_SECONDS:
+            return None
+        if age > 2 * HOUSE_TRIM_DWELL_SECONDS:
+            self._clear_trim_probe()
+            return None
         reso = casa <= self._trim_probe_casa - TRIM_PROBE_GAIN
         livello = self._trim_probe_level
-        self._trim_probe_casa = None
-        self._trim_probe_level = None
+        self._clear_trim_probe()
         if not reso and livello is not None:
             passo = passo if passo and passo > 0 else 1.0
             candidato = livello + passo
@@ -1333,7 +1359,7 @@ class ClimaSmartController:
         # nemmeno raggiunto.
         pagato = self._last_step_paid(casa, passo, now)
         saturo = errore > 0 and self._saturation_brake(casa, room)
-        if errore > 0 and (saturo or not pagato):
+        if errore > 0 and (saturo or pagato is False):
             # Casa sopra la linea, ma spingere non rende piu': o la camera e'
             # gia' molto piu' fredda della casa (il divario compra solo
             # frequenza), o l'ultimo passo non ha mosso la casa (il verdetto
@@ -1379,6 +1405,7 @@ class ClimaSmartController:
                 # Si segna da dove si parte, per poter giudicare fra un'attesa.
                 self._trim_probe_casa = casa
                 self._trim_probe_level = nuovo
+                self._trim_probe_started_at = now
         else:
             nuovo = min(self.house_trim + passo, massimo)
 

@@ -551,6 +551,33 @@ class ControllerRegressionTests(unittest.TestCase):
         self.assertEqual(len(calls), 2)
         self.assertEqual(ctrl._stored, ctrl._memoria())
 
+    def test_a_complete_probe_survives_a_restart(self):
+        """Baseline, livello e istante devono viaggiare come un solo stato."""
+        ctrl = self._con_anello()
+        self._casa(ctrl, 28.0)
+        ctrl._compute(GIORNO)
+        started = GIORNO + timedelta(
+            seconds=controller_module.HOUSE_TRIM_DWELL_SECONDS + 60
+        )
+        ctrl._compute(started)
+        asyncio.run(ctrl._async_save_memoria())
+        after = self._riavvia(ctrl)
+        self.assertEqual(after._trim_probe_casa, 28.0)
+        self.assertEqual(after._trim_probe_level, 24.0)
+        self.assertEqual(after._trim_probe_started_at, started)
+
+    def test_a_legacy_probe_without_timestamp_is_discarded(self):
+        """Una prova 1.12.2 senza eta' non puo' produrre lezioni dopo l'upgrade."""
+        ctrl = self._con_anello()
+        ctrl._store._dati[ctrl._store.key] = {
+            "trim_probe_casa": 28.0,
+            "trim_probe_level": 24.0,
+        }
+        asyncio.run(ctrl._async_load_memoria())
+        self.assertIsNone(ctrl._trim_probe_casa)
+        self.assertIsNone(ctrl._trim_probe_level)
+        self.assertIsNone(ctrl._trim_probe_started_at)
+
     # ------------------------------------ termometro vero della stanza
     def _con_sonda(self, stanza, ripresa=27.0, target=25.0):
         """Controller con un termometro vero in camera, fuori dal getto d'aria."""
@@ -875,6 +902,33 @@ class ControllerRegressionTests(unittest.TestCase):
         # La casa non si muove: quel passo non ha reso.
         t += timedelta(seconds=controller_module.HOUSE_TRIM_DWELL_SECONDS + 60)
         self.assertEqual(ctrl._compute(t).setpoint, 25.0)   # restituito
+
+    def test_a_previous_day_probe_expires_without_learning(self):
+        """Una baseline di ieri non deve creare il pavimento di oggi."""
+        ctrl = self._con_anello()
+        ctrl._trim_probe_casa = 28.0
+        ctrl._trim_probe_level = 24.0
+        ctrl._trim_probe_started_at = GIORNO
+        result = ctrl._last_step_paid(28.0, 1.0, GIORNO + timedelta(days=1))
+        self.assertIsNone(result)
+        self.assertIsNone(ctrl._trim_floor_today)
+        self.assertIsNone(ctrl._trim_probe_casa)
+
+    def test_an_overdue_probe_expires_without_learning(self):
+        """Dopo due attese la misura non descrive piu' il passo originario."""
+        ctrl = self._con_anello()
+        ctrl._trim_probe_casa = 28.0
+        ctrl._trim_probe_level = 24.0
+        ctrl._trim_probe_started_at = GIORNO
+        result = ctrl._last_step_paid(
+            28.0,
+            1.0,
+            GIORNO
+            + timedelta(seconds=2 * controller_module.HOUSE_TRIM_DWELL_SECONDS + 1),
+        )
+        self.assertIsNone(result)
+        self.assertIsNone(ctrl._trim_floor_today)
+        self.assertIsNone(ctrl._trim_probe_casa)
 
     def test_a_failed_level_is_not_retried_for_the_rest_of_the_day(self):
         """Senza il pavimento della giornata l'anello ritenterebbe lo stesso passo
