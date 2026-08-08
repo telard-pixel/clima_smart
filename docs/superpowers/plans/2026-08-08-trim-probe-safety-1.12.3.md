@@ -546,7 +546,100 @@ git commit -m "Release Clima Smart 1.12.3"
 
 ---
 
-### Task 5: Verify, independently review, integrate and deploy
+### Task 5: Harden early returns, stored timestamps and override persistence
+
+**Files:**
+- Modify: `controller.py:860-950`
+- Modify: `controller.py:1260-1310`
+- Modify: `controller.py:1688-1775`
+- Modify: `controller.py:1918-2005`
+- Test: `test_regressions.py:480-590`
+- Test: `test_regressions.py:880-1080`
+
+**Interfaces:**
+- Consumes: `_clear_trim_probe()`, `_async_save_memoria()`, Home Assistant-aware `dt_util.now()`.
+- Produces: `_trim_probe_age(now: datetime) -> float | None`, fail-safe Store parsing and a durably persisted real override path.
+
+- [ ] **Step 1: Write failing lifetime and timezone tests**
+
+Add tests proving that an overdue probe is cleared with `casa=None`, sleep clears
+it even while climate is `heat`, a naive stored timestamp is rejected, a future
+timestamp is cancelled, and a valid different-offset timestamp is compared by
+elapsed UTC time.
+
+- [ ] **Step 2: Run each test separately and verify RED**
+
+Run:
+
+```bash
+python3 -m unittest \
+  test_regressions.ControllerRegressionTests.test_an_overdue_probe_expires_even_without_house_reading \
+  test_regressions.ControllerRegressionTests.test_sleep_cancels_probe_even_while_heating \
+  test_regressions.ControllerRegressionTests.test_a_naive_stored_probe_timestamp_is_discarded \
+  test_regressions.ControllerRegressionTests.test_a_future_probe_expires_without_learning \
+  test_regressions.ControllerRegressionTests.test_probe_age_uses_elapsed_utc_across_offsets -v
+```
+
+Expected failures must be the retained probe or the naive/aware `TypeError`,
+never a fixture error.
+
+- [ ] **Step 3: Centralize probe-age housekeeping**
+
+Implement `_trim_probe_age(now)` to reject missing/naive/future/cross-day/overdue
+timestamps, compare aware values in UTC, and clear invalid probes without a
+floor. Call it before `_house_trim()` early returns and near the start of
+`_compute()`; cancel sleep/wind-down immediately after phase calculation and
+before mode/season/HVAC early returns. `_last_step_paid()` consumes the returned
+age and judges only after one dwell.
+
+- [ ] **Step 4: Verify lifetime/timezone tests GREEN and run the full suite**
+
+Expected: all new cases pass and the existing 148 tests remain green.
+
+- [ ] **Step 5: Write failing corrupt-Store tests**
+
+Cover top-level list/string/scalar payloads, naive datetime strings,
+`house_trim` as NaN/inf/bool, `adaptive_extra` as NaN/inf/bool and `saturated`
+as non-boolean. Assert `_async_load_memoria()` never raises and leaves clean,
+finite defaults.
+
+Name the tests `test_non_mapping_store_payload_is_ignored` and
+`test_corrupt_persisted_scalars_are_ignored`.
+
+- [ ] **Step 6: Implement fail-safe Store validation and verify GREEN**
+
+Require a dict top level. Make `istante_di()` return only aware datetimes.
+Introduce a finite non-boolean numeric parser, add plausibility only for
+temperatures, and accept `saturated` only when `isinstance(value, bool)`.
+
+- [ ] **Step 7: Write the failing real override persistence test**
+
+Drive `_maybe_flag_manual()` with a user-context climate event, prepare the
+controller restore barrier and service stubs, call `async_evaluate("evento")`,
+then create/reload a new controller. Do not call `_async_save_memoria()` in the
+test. Expected RED: Store save count is zero or the restarted controller has no
+active override.
+
+Name the test `test_a_real_manual_event_persists_override_before_early_return`.
+
+- [ ] **Step 8: Persist at the override early-return boundary**
+
+Inside `async_evaluate()`, await `_async_save_memoria()` before returning from
+the `override_active` guard. This keeps the state durable and retains fail-once
+retry semantics without spawning a competing save task.
+
+- [ ] **Step 9: Verify Task 5 and commit**
+
+Run all new focused tests, `python3 -I test_regressions.py`, compile/JSON checks
+and `git diff --check`, then commit controller, tests, specification and plan as:
+
+```bash
+git commit -m "Harden persisted controller state"
+```
+
+---
+
+### Task 6: Verify, independently review, integrate and deploy
 
 **Files:**
 - Verify: `controller.py`, `const.py`, `manifest.json`, `test_regressions.py`, `translations/*.json`

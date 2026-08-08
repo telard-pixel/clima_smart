@@ -24,6 +24,15 @@ Two independent read-only reviews of `755e655..048fcb3` reproduced these cases:
 3. A non-finite house reading can falsely fail and consume a probe.
 4. `_async_save_memoria()` updates its in-memory saved snapshot before the
    asynchronous save succeeds, so a transient failure suppresses later retries.
+5. Early returns for missing house data, disabled control, climate heat, season
+   guards and mode guards can bypass probe expiry or night-window cancellation.
+6. A stored ISO timestamp without an offset is accepted by `fromisoformat()` but
+   later raises when subtracted from Home Assistant's timezone-aware clock.
+7. A JSON-valid Store payload with a non-mapping top level, or corrupted scalar
+   values such as NaN and truthy strings, can abort startup or poison decisions.
+8. The real manual-override event queues an evaluation which returns while the
+   override is active, before the only state-save call; the existing restart test
+   hid this by invoking the private save method directly.
 
 The existing 134-test suite passes but does not cover the 1.12.2 delta or these
 failure modes.
@@ -48,6 +57,16 @@ trim. After twice the dwell, at a day boundary, or on entry into sleep/wind-down
 the controller cancels it without creating a floor. A temporarily missing house
 reading does not immediately cancel a valid probe; the age bound handles that
 case without learning from missing data.
+
+Lifetime housekeeping runs before every early return that can bypass house-trim
+evaluation. It therefore expires probes even when the house average is missing,
+the loop is disabled, the climate is heating, the season guard returns, or the
+controller is off. Sleep and wind-down cancel a probe before those same guards.
+
+Persisted datetimes are accepted only when timezone-aware. Probe age is computed
+after normalizing both timestamps to UTC, avoiding DST and differing-offset
+arithmetic. Naive, future and invalid timestamps cancel the probe without a
+floor.
 
 ## Probe verdict and branch precedence
 
@@ -82,12 +101,24 @@ Persisted numeric probe and floor fields receive the same finite/plausible check
 needed for their role. Invalid persisted probe state is discarded without
 learning.
 
+The Store top level must be a mapping. Any other JSON value is logged and treated
+as an empty Store so startup continues. `house_trim` must be a finite plausible
+temperature, `adaptive_extra` must be finite and non-boolean, and `saturated`
+must be an actual boolean; invalid values fall back to clean defaults.
+
 ## Persistence retry
 
 `_async_save_memoria()` compares the current snapshot with the last successfully
 saved snapshot. It assigns `_stored` only after `async_save()` completes. On an
 exception, `_stored` remains unchanged so the next controller pass retries the
 same state. Save failures continue to be logged and must not stop evaluation.
+
+When a real state-change event starts or updates a manual override, the queued
+evaluation persists that state before returning through the `override_active`
+guard. A failed save remains retryable on the next evaluation. Override expiry
+continues through a normal evaluation and persists the cleared timestamp. The
+restart regression must exercise event, evaluation, Store and a new controller;
+it may not call `_async_save_memoria()` directly.
 
 ## Test-driven implementation
 
@@ -105,6 +136,10 @@ failing for the expected reason. Tests cover:
    house sensors cannot corrupt a verdict;
 7. a fail-once store is retried and succeeds on the next save;
 8. no-probe and repeated-evaluation paths remain idempotent.
+9. missing house data and all early-return modes still expire or cancel probes;
+10. naive, future and alternate-offset timestamps cannot break evaluation;
+11. list/string/scalar Store payloads and corrupt persisted scalars fail cleanly;
+12. a real manual event persists its override across a controller restart.
 
 Final verification runs the complete standalone suite, Python compilation,
 manifest/translation JSON parsing and `git diff --check`. Two fresh independent
