@@ -1339,8 +1339,6 @@ class ClimaSmartController:
             return self.house_trim           # nessuna media: si tiene quello che c'e'
 
         errore = casa - linea
-        if abs(errore) <= HOUSE_TRIM_DEADBAND:
-            return self.house_trim
         if (
             self._trim_changed_at is not None
             and (now - self._trim_changed_at).total_seconds() < HOUSE_TRIM_DWELL_SECONDS
@@ -1359,7 +1357,12 @@ class ClimaSmartController:
         # nemmeno raggiunto.
         pagato = self._last_step_paid(casa, passo, now)
         saturo = errore > 0 and self._saturation_brake(casa, room)
-        if errore > 0 and (saturo or pagato is False):
+        deve_restituire = pagato is False or (pagato is None and saturo)
+        if abs(errore) <= HOUSE_TRIM_DEADBAND and pagato is not False:
+            # Anche dentro la banda una prova ormai matura va chiusa. Se ha reso
+            # si tiene il passo; se non ha reso, il ramo sotto lo restituisce.
+            return self.house_trim
+        if errore > 0 and deve_restituire:
             # Casa sopra la linea, ma spingere non rende piu': o la camera e'
             # gia' molto piu' fredda della casa (il divario compra solo
             # frequenza), o l'ultimo passo non ha mosso la casa (il verdetto

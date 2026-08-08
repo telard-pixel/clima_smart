@@ -965,6 +965,92 @@ class ControllerRegressionTests(unittest.TestCase):
             visti.append(ctrl._compute(t).setpoint)
         self.assertEqual(visti, [24.0, 23.0, 22.0])
 
+    def test_a_paid_probe_overrides_the_saturation_brake(self):
+        """Il risultato misurato vince sull'indizio del divario camera-casa."""
+        ctrl = self._con_anello(ripresa=27.5)
+        ctrl.entry.options = dict(ctrl.entry.options, trim_min=22.0)
+        self._casa(ctrl, 28.0)
+        ctrl._compute(GIORNO)
+        first = GIORNO + timedelta(
+            seconds=controller_module.HOUSE_TRIM_DWELL_SECONDS + 60
+        )
+        self.assertEqual(ctrl._compute(first).setpoint, 24.0)
+        self._casa(ctrl, 27.85)
+        ctrl.hass.states.values["climate.test"].attributes[
+            "current_temperature"
+        ] = 25.0
+        second = first + timedelta(
+            seconds=controller_module.HOUSE_TRIM_DWELL_SECONDS + 60
+        )
+        self.assertEqual(ctrl._compute(second).setpoint, 23.0)
+
+    def test_an_unpaid_probe_is_given_back_while_saturated(self):
+        """Verdetto e saturazione concordi restituiscono un solo passo."""
+        ctrl = self._con_anello(ripresa=27.5)
+        ctrl.entry.options = dict(ctrl.entry.options, trim_min=22.0)
+        self._casa(ctrl, 28.0)
+        ctrl._compute(GIORNO)
+        first = GIORNO + timedelta(
+            seconds=controller_module.HOUSE_TRIM_DWELL_SECONDS + 60
+        )
+        self.assertEqual(ctrl._compute(first).setpoint, 24.0)
+        ctrl.hass.states.values["climate.test"].attributes[
+            "current_temperature"
+        ] = 25.0
+        second = first + timedelta(
+            seconds=controller_module.HOUSE_TRIM_DWELL_SECONDS + 60
+        )
+        self.assertEqual(ctrl._compute(second).setpoint, 25.0)
+        self.assertEqual(ctrl._trim_floor_today, 25.0)
+
+    def test_a_paid_probe_is_closed_inside_the_deadband(self):
+        """Entrare in banda grazie al passo chiude la prova e tiene il target."""
+        ctrl = self._con_anello(altre=(26.9, 26.9, 26.9))
+        ctrl._compute(GIORNO)
+        first = GIORNO + timedelta(
+            seconds=controller_module.HOUSE_TRIM_DWELL_SECONDS + 60
+        )
+        self.assertEqual(ctrl._compute(first).setpoint, 24.0)
+        self._casa(ctrl, 26.7)
+        second = first + timedelta(
+            seconds=controller_module.HOUSE_TRIM_DWELL_SECONDS + 60
+        )
+        self.assertEqual(ctrl._compute(second).setpoint, 24.0)
+        self.assertIsNone(ctrl._trim_probe_casa)
+        self.assertIsNone(ctrl._trim_probe_level)
+        self.assertIsNone(ctrl._trim_probe_started_at)
+        self.assertIsNone(ctrl._trim_floor_today)
+
+    def test_an_unpaid_probe_is_given_back_inside_the_deadband(self):
+        """La banda non nasconde un passo che non ha raggiunto il guadagno minimo."""
+        ctrl = self._con_anello(altre=(26.8, 26.8, 26.8))
+        ctrl._compute(GIORNO)
+        first = GIORNO + timedelta(
+            seconds=controller_module.HOUSE_TRIM_DWELL_SECONDS + 60
+        )
+        self.assertEqual(ctrl._compute(first).setpoint, 24.0)
+        self._casa(ctrl, 26.74)
+        second = first + timedelta(
+            seconds=controller_module.HOUSE_TRIM_DWELL_SECONDS + 60
+        )
+        self.assertEqual(ctrl._compute(second).setpoint, 25.0)
+        self.assertEqual(ctrl._trim_floor_today, 25.0)
+        self.assertIsNone(ctrl._trim_probe_casa)
+
+    def test_probe_verdict_is_consumed_only_once(self):
+        """Ripetere la stessa valutazione non duplica il pavimento imparato."""
+        ctrl = self._con_anello()
+        ctrl._trim_probe_casa = 28.0
+        ctrl._trim_probe_level = 24.0
+        ctrl._trim_probe_started_at = GIORNO
+        due = GIORNO + timedelta(
+            seconds=controller_module.HOUSE_TRIM_DWELL_SECONDS + 60
+        )
+        self.assertFalse(ctrl._last_step_paid(28.0, 1.0, due))
+        floor = ctrl._trim_floor_today
+        self.assertIsNone(ctrl._last_step_paid(28.0, 1.0, due))
+        self.assertEqual(ctrl._trim_floor_today, floor)
+
     def test_the_learned_floor_expires_with_the_day(self):
         """Una casa che oggi non risponde puo' rispondere domani: cambia il sole,
         cambiano le finestre aperte. La lezione vale per la giornata."""
