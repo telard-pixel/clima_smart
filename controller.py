@@ -1752,6 +1752,7 @@ class ClimaSmartController:
             return Desired(reason="clima non disponibile")
 
         cur_mode = climate.state
+        cooling_active = cur_mode in (HVAC_COOL, HVAC_DRY)
         climate_unit = self._system_temperature_unit
         ripresa = _convert_temperature(
             _to_float(climate.attributes.get("current_temperature")),
@@ -1766,7 +1767,7 @@ class ClimaSmartController:
             summer = (
                 outdoor > self.summer_threshold
                 or (
-                    cur_mode == HVAC_COOL
+                    cooling_active
                     and outdoor > self.summer_threshold - SUMMER_HYSTERESIS
                 )
             )
@@ -1775,7 +1776,7 @@ class ClimaSmartController:
             # Outdoor sensors unavailable: fail closed. We may maintain a cooling
             # cycle already in progress, but never start one from an indoor-only
             # reading that could actually be caused by winter heating.
-            summer = cur_mode == HVAC_COOL
+            summer = cooling_active
 
         if self.mode == MODE_OFF:
             self.current_phase = None
@@ -1812,7 +1813,7 @@ class ClimaSmartController:
 
         if not summer:
             self.active_target = None
-            if cur_mode in (HVAC_COOL, HVAC_DRY):
+            if cooling_active:
                 return Desired(hvac=HVAC_OFF, reason="fuori stagione: spengo raffrescamento")
             return Desired(reason="fuori stagione: non tocco il riscaldamento")
 

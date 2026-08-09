@@ -1767,6 +1767,27 @@ class ControllerRegressionTests(unittest.TestCase):
         desired = ctrl._compute(GIORNO)
         self.assertEqual(desired.hvac, "off")
 
+    def test_dry_keeps_the_same_season_hysteresis_as_cool(self):
+        """Dentro l'isteresi, `dry` e `cool` sono lo stesso ciclo frigorifero."""
+        ctrl = self._smart_controller(room=25.0, humidity=70, outdoor=20.0)
+        ctrl.hass.states.values["climate.test"].state = "dry"
+        ctrl._not_summer_since = GIORNO - timedelta(
+            seconds=controller_module.SEASON_EXIT_CONFIRM_SECONDS
+        )
+        desired = ctrl._compute(GIORNO)
+        self.assertNotEqual(desired.hvac, "off")
+
+    def test_missing_outdoor_keeps_an_existing_dry_cycle_running(self):
+        """Un sensore esterno assente non prova che un `dry` attivo sia invernale."""
+        ctrl = self._smart_controller(room=25.0, humidity=70, outdoor=20.0)
+        ctrl.hass.states.values["climate.test"].state = "dry"
+        ctrl.hass.states.values.pop("sensor.outdoor")
+        ctrl._not_summer_since = GIORNO - timedelta(
+            seconds=controller_module.SEASON_EXIT_CONFIRM_SECONDS
+        )
+        desired = ctrl._compute(GIORNO)
+        self.assertNotEqual(desired.hvac, "off")
+
     def test_morning_switch_off_retries_when_the_command_fails(self):
         ctrl = self._smart_controller(room=24.0)
         self._profilo_notte(ctrl)
