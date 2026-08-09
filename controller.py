@@ -1812,8 +1812,8 @@ class ClimaSmartController:
 
         if not summer:
             self.active_target = None
-            if cur_mode == HVAC_COOL:
-                return Desired(hvac=HVAC_OFF, reason="fuori stagione: spengo cool")
+            if cur_mode in (HVAC_COOL, HVAC_DRY):
+                return Desired(hvac=HVAC_OFF, reason="fuori stagione: spengo raffrescamento")
             return Desired(reason="fuori stagione: non tocco il riscaldamento")
 
         if cur_mode == HVAC_HEAT:
