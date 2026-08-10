@@ -1740,6 +1740,7 @@ class ControllerRegressionTests(unittest.TestCase):
         self.assertIn("fermo mattino saltato", desired.reason)
 
     def test_morning_switch_off_requires_every_configured_reading(self):
+        """Con nessuna lettura valida la media aggregata non esiste: si salta."""
         ctrl = self._con_casa(room=24.0, altre=(25.0,), outdoor=31.0)
         ctrl.hass.states.values["climate.test"].state = "cool"
         ctrl.hass.states.values.pop("sensor.stanza0")
@@ -1788,6 +1789,12 @@ class ControllerRegressionTests(unittest.TestCase):
         ctrl.hass.states.values["climate.test"].state = "dry"
         desired = ctrl._compute(GIORNO.replace(hour=8, minute=31))
         self.assertNotEqual(desired.hvac, "off")
+
+    def test_dry_morning_switch_off_still_happens_with_headroom(self):
+        ctrl = self._con_casa(room=26.9, altre=(25.6, 25.6), outdoor=31.0)
+        ctrl.hass.states.values["climate.test"].state = "dry"
+        desired = ctrl._compute(GIORNO.replace(hour=8, minute=31))
+        self.assertEqual(desired.hvac, "off")
 
     def test_smart_never_turns_the_unit_on(self):
         ctrl = self._smart_controller(room=28.0)
