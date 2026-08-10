@@ -1771,18 +1771,31 @@ class ControllerRegressionTests(unittest.TestCase):
         ctrl = self._con_casa(room=24.0, altre=(25.8, 25.8), outdoor=31.0)
         ctrl.hass.states.values["climate.test"].state = "cool"
         ctrl._restore_event.set()
+        chiamate = []
 
         async def succeeds(domain, service, data=None):
+            chiamate.append(service)
             return True
 
         ctrl._call = succeeds
         self._orologio(GIORNO.replace(hour=8, minute=31))
         asyncio.run(ctrl.async_evaluate("prova"))
+        self.assertNotIn("turn_off", chiamate)
         self.assertEqual(ctrl._morning_off_done_on, GIORNO.date())
+        self.assertEqual(
+            ctrl._store._dati[ctrl._store.key]["morning_off_done_on"],
+            GIORNO.date().isoformat(),
+        )
+
+        dopo_riavvio = self._riavvia(ctrl)
+        self.assertEqual(dopo_riavvio._morning_off_done_on, GIORNO.date())
         for entity_id in ("sensor.stanza0", "sensor.stanza1"):
             ctrl.hass.states.values[entity_id].state = "25.0"
-        desired = ctrl._compute(GIORNO.replace(hour=8, minute=36))
+        self._orologio(GIORNO.replace(hour=8, minute=36))
+        dopo_riavvio._call = succeeds
+        desired = dopo_riavvio._compute(GIORNO.replace(hour=8, minute=36))
         self.assertNotEqual(desired.hvac, "off")
+        self.assertNotIn("turn_off", chiamate)
 
     def test_dry_uses_the_same_conditional_morning_stop(self):
         ctrl = self._con_casa(room=24.0, altre=(25.8, 25.8), outdoor=31.0)
