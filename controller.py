@@ -122,6 +122,8 @@ from .const import (
     MODES,
     MODE_OFF,
     MODE_SMART,
+    MORNING_OFF_HOUSE_HEADROOM,
+    MORNING_OFF_ROOM_HEADROOM,
     MORNING_OFF_WINDOW_MINUTES,
     PHASE_DAY,
     PHASE_GAP,
@@ -344,6 +346,7 @@ class ClimaSmartController:
         # della passata in corso che lo ha deciso.
         self._morning_off_done_on = None
         self._morning_off_armed = False
+        self._morning_off_skip_armed = False
         # Stessa coppia per l'avvio serale.
         self._sleep_start_done_on = None
         self._sleep_start_armed = False
@@ -1516,8 +1519,35 @@ class ClimaSmartController:
             return None
         return sum(letture) / len(letture)
 
+    def _morning_off_skip_reason(
+        self, room: float | None, house: float | None
+    ) -> str | None:
+        """Why the scheduled morning stop would immediately be undone."""
+        house_threshold = float(
+            self._cfg(CONF_AUTO_START_HOUSE, DEFAULT_AUTO_START_HOUSE) or 0.0
+        )
+        if house_threshold > 0:
+            if house is None:
+                return "media casa non disponibile"
+            if house >= house_threshold - MORNING_OFF_HOUSE_HEADROOM:
+                return f"casa {house:.1f} vicina alla soglia {house_threshold:.1f}"
+
+        room_threshold = float(
+            self._cfg(CONF_AUTO_START_ROOM, DEFAULT_AUTO_START_ROOM) or 0.0
+        )
+        if room_threshold > 0:
+            if room is None:
+                return "temperatura camera non disponibile"
+            if room >= room_threshold - MORNING_OFF_ROOM_HEADROOM:
+                return f"camera {room:.1f} vicina alla soglia {room_threshold:.1f}"
+        return None
+
     def _day_start_due(
-        self, now: datetime, room: float | None, outdoor: float | None
+        self,
+        now: datetime,
+        room: float | None,
+        outdoor: float | None,
+        house: float | None,
     ) -> str | None:
         """Why the unit should be started now, or None to leave it off.
 
@@ -1544,9 +1574,8 @@ class ClimaSmartController:
             self._cfg(CONF_AUTO_START_HOUSE, DEFAULT_AUTO_START_HOUSE) or 0.0
         )
         if soglia_casa > 0:
-            casa = self._house_average()
-            if casa is not None and casa >= soglia_casa:
-                return f"casa {casa:.1f} oltre {soglia_casa:.1f}"
+            if house is not None and house >= soglia_casa:
+                return f"casa {house:.1f} oltre {soglia_casa:.1f}"
         return None
 
     def _vane_day_due(self, now: datetime) -> bool:
@@ -1762,6 +1791,7 @@ class ClimaSmartController:
         room = ripresa
         comodino = self._read_bedside()
         outdoor, outdoor_valid = self._read_outdoor()
+        house = self._house_average()
 
         if outdoor_valid:
             summer = (
@@ -1790,6 +1820,7 @@ class ClimaSmartController:
         # target. Everything that keyed off "is it night" must include it.
         is_night = phase in (PHASE_NIGHT, PHASE_SLEEP)
 
+        morning_skip_reason = None
         if phase == PHASE_GAP and self.mode == MODE_SMART:
             # For MODE_SMART the morning switch-off is one event, not a state held
             # for two hours: outside its window the phase behaves like the day, so a
@@ -1798,12 +1829,15 @@ class ClimaSmartController:
             # and would have shut down a running heating cycle every winter morning,
             # the one thing the rest of this file promises never to do.
             if self._morning_off_due(now) and cur_mode in (HVAC_COOL, HVAC_DRY):
+                morning_skip_reason = self._morning_off_skip_reason(room, house)
                 # Marked only once the command has actually gone through, in
                 # async_evaluate: marking here meant a failed turn_off was never
                 # retried and the unit cooled all day.
-                self._morning_off_armed = True
-                self.active_target = None
-                return Desired(hvac=HVAC_OFF, reason="smart: spegnimento del mattino")
+                if morning_skip_reason is None:
+                    self._morning_off_armed = True
+                    self.active_target = None
+                    return Desired(hvac=HVAC_OFF, reason="smart: spegnimento del mattino")
+                self._morning_off_skip_armed = True
         elif phase == PHASE_GAP:
             self.active_target = None
             # Turn off, but only if cooling (never touch heating).
@@ -1830,7 +1864,7 @@ class ClimaSmartController:
 
         night_window = phase in (PHASE_SLEEP, PHASE_WIND_DOWN)
         passo = _to_float(climate.attributes.get("target_temp_step"))
-        casa = self._house_average()
+        casa = house
         trim = None
         compensazione = 0.0
         if night_window:
@@ -1888,7 +1922,7 @@ class ClimaSmartController:
                 phase == PHASE_GAP and self._morning_off_window_closed(now)
             )
             perche = (
-                self._day_start_due(now, room, outdoor) if puo_partire else None
+                self._day_start_due(now, room, outdoor, house) if puo_partire else None
             )
             if perche is not None:
                 self._sleep_start_armed = True
@@ -1981,7 +2015,12 @@ class ClimaSmartController:
             night=is_night,
             vane_h=alette_h,
             vane_v=alette_v,
-            reason=f"smart {phase}: target {target}, {detail}",
+            reason=(
+                f"smart {phase}: fermo mattino saltato ({morning_skip_reason}); "
+                f"target {target}, {detail}"
+                if morning_skip_reason is not None
+                else f"smart {phase}: target {target}, {detail}"
+            ),
         )
 
 
@@ -2026,11 +2065,14 @@ class ClimaSmartController:
             now = dt_util.now()
             try:
                 self._morning_off_armed = False
+                self._morning_off_skip_armed = False
                 self._sleep_start_armed = False
                 desired = self._compute(now)
                 self._apply_errors.clear()
                 await self._apply(desired)
-                if self._morning_off_armed and not self._apply_errors:
+                if self._morning_off_skip_armed:
+                    self._morning_off_done_on = now.date()
+                elif self._morning_off_armed and not self._apply_errors:
                     # The switch-off went through: no second attempt today.
                     self._morning_off_done_on = now.date()
                 if self._sleep_start_armed and not self._apply_errors:

@@ -371,6 +371,10 @@ SLEEP_BOOST_MIN_DELTA = 0.3
 # minutes past its time it is not attempted at all, so a restart later in the
 # morning cannot switch off a unit the user has just turned back on.
 MORNING_OFF_WINDOW_MINUTES = 30
+# A morning stop is pointless if the normal Smart thresholds would need the
+# climate again almost immediately.
+MORNING_OFF_ROOM_HEADROOM = 1.0
+MORNING_OFF_HOUSE_HEADROOM = 0.3
 # Same idea for the evening start: one attempt inside this window after
 # sleep_start, so a climate switched off at 01:00 stays off.
 SLEEP_START_WINDOW_MINUTES = 30
