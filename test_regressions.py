@@ -1739,7 +1739,7 @@ class ControllerRegressionTests(unittest.TestCase):
         self.assertNotEqual(desired.hvac, "off")
         self.assertIn("fermo mattino saltato", desired.reason)
 
-    def test_morning_switch_off_requires_every_configured_reading(self):
+    def test_morning_switch_off_skips_when_house_average_is_unavailable(self):
         """Con nessuna lettura valida la media aggregata non esiste: si salta."""
         ctrl = self._con_casa(room=24.0, altre=(25.0,), outdoor=31.0)
         ctrl.hass.states.values["climate.test"].state = "cool"

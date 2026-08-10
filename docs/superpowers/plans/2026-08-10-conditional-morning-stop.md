@@ -13,7 +13,9 @@
 - Do not change the house loop, its configured targets, or its 45-minute dwell.
 - Room headroom is strictly greater than 1.0 C below `auto_start_room`.
 - House headroom is strictly greater than 0.3 C below `auto_start_house`.
-- Missing readings for configured signals skip the stop.
+- The house average uses all valid configured house readings; individual missing
+  readings are ignored. If no configured house reading is valid, the average is
+  unavailable and the stop is skipped.
 - Disabled daytime-start thresholds preserve legacy unconditional stopping.
 - Never stop heating; treat `cool` and `dry` consistently.
 - Release version is 1.12.5.
@@ -50,10 +52,10 @@ Expected: FAIL because the current controller returns `hvac='off'`.
 
 - [ ] **Step 3: Add the remaining failing boundary tests**
 
-Add separate tests asserting: exact margin boundaries skip; sufficient room and house headroom still stop; a missing configured house reading skips; disabled thresholds preserve the current stop; and a skipped stop is marked done so a later evaluation cannot turn the unit off that day.
+Add separate tests asserting: exact margin boundaries skip; sufficient room and house headroom still stop; an unavailable house average skips; disabled thresholds preserve the current stop; and a skipped stop is marked done so a later evaluation cannot turn the unit off that day.
 
 ```python
-def test_morning_switch_off_requires_every_configured_reading(self):
+def test_morning_switch_off_skips_when_house_average_is_unavailable(self):
     ctrl = self._con_casa(room=24.0, altre=(25.0,), outdoor=31.0)
     ctrl.hass.states.values["climate.test"].state = "cool"
     ctrl.hass.states.values.pop("sensor.stanza0")
@@ -106,7 +108,7 @@ def test_dry_uses_the_same_conditional_morning_stop(self):
 
 - [ ] **Step 4: Run the focused group and verify failures are behavioral**
 
-Run: `python3 -I -m unittest test_regressions.ControllerTests.test_morning_switch_off_is_skipped_when_house_would_restart_soon test_regressions.ControllerTests.test_morning_switch_off_requires_every_configured_reading test_regressions.ControllerTests.test_morning_switch_off_skips_exact_headroom_boundaries test_regressions.ControllerTests.test_morning_switch_off_still_happens_with_headroom test_regressions.ControllerTests.test_morning_switch_off_keeps_legacy_behavior_without_start_thresholds test_regressions.ControllerTests.test_skipped_morning_switch_off_is_one_shot test_regressions.ControllerTests.test_dry_uses_the_same_conditional_morning_stop -v`
+Run: `python3 -I -m unittest test_regressions.ControllerTests.test_morning_switch_off_is_skipped_when_house_would_restart_soon test_regressions.ControllerTests.test_morning_switch_off_skips_when_house_average_is_unavailable test_regressions.ControllerTests.test_morning_switch_off_skips_exact_headroom_boundaries test_regressions.ControllerTests.test_morning_switch_off_still_happens_with_headroom test_regressions.ControllerTests.test_morning_switch_off_keeps_legacy_behavior_without_start_thresholds test_regressions.ControllerTests.test_skipped_morning_switch_off_is_one_shot test_regressions.ControllerTests.test_dry_uses_the_same_conditional_morning_stop -v`
 
 Expected: the new skip cases fail because the current code always stops an active cooling mode inside the morning window; retained-behavior cases pass.
 

@@ -24,8 +24,10 @@ headroom:
   more than 1.0 C;
 - configured house threshold: the house average must be strictly below the
   threshold by more than 0.3 C;
-- a configured signal with no valid reading does not prove headroom and therefore
-  skips the stop;
+- the house average is available when at least one configured house sensor has a
+  valid reading; individual missing or invalid sensors are ignored;
+- when no configured house sensor has a valid reading, the house average is
+  unavailable and the stop is skipped;
 - a disabled threshold is ignored;
 - when both thresholds are disabled, preserve the legacy unconditional stop.
 
@@ -56,8 +58,8 @@ inside the existing window after a failed command.
 
 ## Verification
 
-Regression tests must prove: skip near the house threshold, skip on a missing
-configured house reading, preserve the stop with sufficient headroom, preserve
+Regression tests must prove: skip near the house threshold, skip when the house
+average has no valid reading, preserve the stop with sufficient headroom, preserve
 legacy behavior with thresholds disabled, persist the skipped one-shot, and keep
 the failed-command retry behavior. Run the complete regression suite, compileall,
 and `git diff --check`; then obtain an independent review before any live upload.
