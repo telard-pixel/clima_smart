@@ -1732,6 +1732,63 @@ class ControllerRegressionTests(unittest.TestCase):
         tardi = ctrl._compute(GIORNO.replace(hour=9, minute=30))
         self.assertNotEqual(tardi.hvac, "off")
 
+    def test_morning_switch_off_is_skipped_when_house_would_restart_soon(self):
+        ctrl = self._con_casa(room=24.0, altre=(25.8, 25.8), outdoor=31.0)
+        ctrl.hass.states.values["climate.test"].state = "cool"
+        desired = ctrl._compute(GIORNO.replace(hour=8, minute=31))
+        self.assertNotEqual(desired.hvac, "off")
+        self.assertIn("fermo mattino saltato", desired.reason)
+
+    def test_morning_switch_off_requires_every_configured_reading(self):
+        ctrl = self._con_casa(room=24.0, altre=(25.0,), outdoor=31.0)
+        ctrl.hass.states.values["climate.test"].state = "cool"
+        ctrl.hass.states.values.pop("sensor.stanza0")
+        desired = ctrl._compute(GIORNO.replace(hour=8, minute=31))
+        self.assertNotEqual(desired.hvac, "off")
+
+    def test_morning_switch_off_skips_exact_headroom_boundaries(self):
+        for room, altre in ((27.0, (25.0, 25.0)), (24.0, (25.7, 25.7))):
+            with self.subTest(room=room, altre=altre):
+                ctrl = self._con_casa(room=room, altre=altre, outdoor=31.0)
+                ctrl.hass.states.values["climate.test"].state = "cool"
+                desired = ctrl._compute(GIORNO.replace(hour=8, minute=31))
+                self.assertNotEqual(desired.hvac, "off")
+
+    def test_morning_switch_off_still_happens_with_headroom(self):
+        ctrl = self._con_casa(room=26.9, altre=(25.6, 25.6), outdoor=31.0)
+        ctrl.hass.states.values["climate.test"].state = "cool"
+        desired = ctrl._compute(GIORNO.replace(hour=8, minute=31))
+        self.assertEqual(desired.hvac, "off")
+
+    def test_morning_switch_off_keeps_legacy_behavior_without_start_thresholds(self):
+        ctrl = self._smart_controller(room=24.0)
+        self._profilo_notte(ctrl)
+        desired = ctrl._compute(GIORNO.replace(hour=8, minute=31))
+        self.assertEqual(desired.hvac, "off")
+
+    def test_skipped_morning_switch_off_is_one_shot(self):
+        ctrl = self._con_casa(room=24.0, altre=(25.8, 25.8), outdoor=31.0)
+        ctrl.hass.states.values["climate.test"].state = "cool"
+        ctrl._restore_event.set()
+
+        async def succeeds(domain, service, data=None):
+            return True
+
+        ctrl._call = succeeds
+        self._orologio(GIORNO.replace(hour=8, minute=31))
+        asyncio.run(ctrl.async_evaluate("prova"))
+        self.assertEqual(ctrl._morning_off_done_on, GIORNO.date())
+        for entity_id in ("sensor.stanza0", "sensor.stanza1"):
+            ctrl.hass.states.values[entity_id].state = "25.0"
+        desired = ctrl._compute(GIORNO.replace(hour=8, minute=36))
+        self.assertNotEqual(desired.hvac, "off")
+
+    def test_dry_uses_the_same_conditional_morning_stop(self):
+        ctrl = self._con_casa(room=24.0, altre=(25.8, 25.8), outdoor=31.0)
+        ctrl.hass.states.values["climate.test"].state = "dry"
+        desired = ctrl._compute(GIORNO.replace(hour=8, minute=31))
+        self.assertNotEqual(desired.hvac, "off")
+
     def test_smart_never_turns_the_unit_on(self):
         ctrl = self._smart_controller(room=28.0)
         self._profilo_notte(ctrl)
