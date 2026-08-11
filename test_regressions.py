@@ -1498,15 +1498,15 @@ class ControllerRegressionTests(unittest.TestCase):
 
     # -------------------------------- notte fonda, correzione, muto e ventola
     def _orari(self, ctrl, **extra):
-        ctrl.entry.options = dict(
-            ctrl.entry.options,
+        base = dict(
             morning_off_start="08:00:00",
             day_start="10:00:00",
             night_start="22:00:00",
             sleep_start="23:30:00",
             sleep_end="07:30:00",
-            **extra,
         )
+        base.update(extra)
+        ctrl.entry.options = dict(ctrl.entry.options, **base)
 
     def test_sleep_window_wraps_around_midnight(self):
         ctrl = self._smart_controller()
@@ -1524,6 +1524,35 @@ class ControllerRegressionTests(unittest.TestCase):
             self.assertEqual(
                 ctrl._phase(NOW.replace(hour=h, minute=m)), atteso, f"{h:02d}:{m:02d}"
             )
+
+    def test_morning_off_can_be_disabled(self):
+        """Tolto lo spegnimento del mattino, dopo la notte fonda si va diretti al
+        giorno: niente wind_down, niente gap, niente stop. Su questa casa il calore
+        entra fra le 07:30 e le 10:00, quindi quello stop era controproducente."""
+        ctrl = self._smart_controller()
+        self._orari(ctrl, morning_off_start="08:30:00", morning_off_enabled=False)
+        casi = {
+            (7, 29): "sleep",   # ancora notte fonda
+            (7, 30): "day",     # subito giorno, non piu' wind_down
+            (9, 0): "day",      # dove prima c'era la gap a clima spento
+            (12, 0): "day",
+            (22, 0): "night",   # la sera resta com'era
+        }
+        for (h, m), atteso in casi.items():
+            self.assertEqual(
+                ctrl._phase(NOW.replace(hour=h, minute=m)), atteso, f"{h:02d}:{m:02d}"
+            )
+        # E lo spegnimento one-shot non scatta piu'.
+        self.assertFalse(ctrl._morning_off_due(NOW.replace(hour=8, minute=35)))
+        self.assertTrue(ctrl._morning_off_window_closed(NOW.replace(hour=8, minute=0)))
+
+    def test_morning_off_enabled_by_default_keeps_the_old_cycle(self):
+        """Di default nulla cambia: wind_down, gap e spegnimento restano."""
+        ctrl = self._smart_controller()
+        self._orari(ctrl, morning_off_start="08:30:00")   # enabled non impostato
+        self.assertEqual(ctrl._phase(NOW.replace(hour=7, minute=45)), "wind_down")
+        self.assertEqual(ctrl._phase(NOW.replace(hour=9, minute=0)), "gap")
+        self.assertTrue(ctrl._morning_off_due(NOW.replace(hour=8, minute=35)))
 
     def test_sleep_window_uses_its_own_target(self):
         ctrl = self._smart_controller(room=26.0)

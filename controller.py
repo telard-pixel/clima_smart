@@ -48,6 +48,7 @@ from .const import (
     CONF_HOT_OUTDOOR,
     CONF_HOUSE_TARGET,
     CONF_HUMIDITY,
+    CONF_MORNING_OFF_ENABLED,
     CONF_MORNING_OFF_START,
     CONF_MUTE_SWITCH,
     CONF_NIGHT_START,
@@ -88,6 +89,7 @@ from .const import (
     DEFAULT_ECO_BAND,
     DEFAULT_ECO_OUTDOOR_OFF,
     DEFAULT_ECO_OUTDOOR_ON,
+    DEFAULT_MORNING_OFF_ENABLED,
     DEFAULT_MORNING_OFF_START,
     DEFAULT_NIGHT_START,
     DEFAULT_OVERRIDE_MINUTES,
@@ -1110,8 +1112,19 @@ class ClimaSmartController:
         back = _convert_temperature(snapped, unit, UnitOfTemperature.CELSIUS)
         return target if back is None else back
 
+    def _morning_off_enabled(self) -> bool:
+        """Se lo spegnimento del mattino (e la gap) sono attivi.
+
+        Disattivandolo, dopo la notte fonda si va diretti alla gestione di giorno,
+        senza spegnere alle 08:30: su questa casa il calore entra fra le 07:30 e le
+        10:00, quindi quello stop lasciava scaldare la casa nel momento peggiore.
+        """
+        value = self._cfg(CONF_MORNING_OFF_ENABLED, DEFAULT_MORNING_OFF_ENABLED)
+        return bool(value) if value is not None else DEFAULT_MORNING_OFF_ENABLED
+
     def _phase(self, now: datetime) -> str:
         t = now.time()
+        enabled = self._morning_off_enabled()
         morning = _parse_time(
             self._cfg(CONF_MORNING_OFF_START, DEFAULT_MORNING_OFF_START),
             DEFAULT_MORNING_OFF_START,
@@ -1136,12 +1149,17 @@ class ClimaSmartController:
             if in_sleep:
                 return PHASE_SLEEP
             # From the end of the sleep window to the morning switch-off: still the
-            # night target, but at the lowest fan step.
-            if sleep_end <= t < morning:
+            # night target, but at the lowest fan step. Solo se lo spegnimento del
+            # mattino e' attivo: senza, wind_down e gap collassano e dopo la notte
+            # si passa diretti al giorno.
+            if enabled and sleep_end <= t < morning:
                 return PHASE_WIND_DOWN
-        if morning <= t < day:
+        # Con lo spegnimento disattivato il giorno comincia alla fine della notte
+        # fonda, e non esiste ne' wind_down ne' gap.
+        day_begin = day if enabled else sleep_end
+        if enabled and morning <= t < day:
             return PHASE_GAP
-        if day <= t < night:
+        if day_begin <= t < night:
             return PHASE_DAY
         return PHASE_NIGHT
 
@@ -1152,6 +1170,8 @@ class ClimaSmartController:
         Assistant restart later in the morning must not switch off a unit the user
         has meanwhile turned back on.
         """
+        if not self._morning_off_enabled():
+            return False
         if self._morning_off_done_on == now.date():
             return False
         start = _parse_time(
@@ -1580,6 +1600,9 @@ class ClimaSmartController:
         average that was already above threshold - a pointless switch-off, and a
         compressor stopped and restarted inside a minute.
         """
+        if not self._morning_off_enabled():
+            # Nessuno spegnimento del mattino: non c'e' finestra da attendere.
+            return True
         start = _parse_time(
             self._cfg(CONF_MORNING_OFF_START, DEFAULT_MORNING_OFF_START),
             DEFAULT_MORNING_OFF_START,

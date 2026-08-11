@@ -36,6 +36,7 @@ CONF_OVERRIDE_MINUTES = "override_minutes"
 CONF_DAY_START = "day_start"
 CONF_NIGHT_START = "night_start"
 CONF_MORNING_OFF_START = "morning_off_start"
+CONF_MORNING_OFF_ENABLED = "morning_off_enabled"
 # Deep-night window: same quiet behaviour as the night phase, but its own colder
 # target. Crosses midnight, so the end is earlier than the start.
 CONF_TARGET_SLEEP = "target_sleep"
@@ -115,6 +116,14 @@ DEFAULT_OVERRIDE_MINUTES = 60
 DEFAULT_DAY_START = "10:00:00"
 DEFAULT_NIGHT_START = "22:00:00"
 DEFAULT_MORNING_OFF_START = "08:00:00"
+# Lo spegnimento del mattino e la pausa (gap) che lo segue si possono togliere.
+# Misurato su questa casa: il calore entra fra le 07:30 e le 10:00, quindi
+# spegnere alle 08:30 lascia la casa scaldarsi proprio nella finestra peggiore e
+# si riparte da piu' caldo - controproducente. Con lo spegnimento disattivato,
+# dopo la notte fonda si passa diretti alla gestione di giorno (anello attivo),
+# senza wind_down ne' gap ne' spegnimento. Default True per non cambiare il
+# comportamento delle installazioni esistenti.
+DEFAULT_MORNING_OFF_ENABLED = True
 DEFAULT_TARGET_SLEEP = 23.0
 DEFAULT_SLEEP_START = "23:30:00"
 DEFAULT_SLEEP_END = "07:30:00"

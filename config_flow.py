@@ -37,6 +37,7 @@ from .const import (
     CONF_ECO_SWITCH,
     CONF_HOUSE_SENSORS,
     CONF_HUMIDITY,
+    CONF_MORNING_OFF_ENABLED,
     CONF_MORNING_OFF_START,
     CONF_MUTE_SWITCH,
     CONF_NIGHT_START,
@@ -73,6 +74,7 @@ from .const import (
     DEFAULT_ECO_BAND,
     DEFAULT_ECO_OUTDOOR_OFF,
     DEFAULT_ECO_OUTDOOR_ON,
+    DEFAULT_MORNING_OFF_ENABLED,
     DEFAULT_MORNING_OFF_START,
     DEFAULT_NIGHT_START,
     DEFAULT_OVERRIDE_MINUTES,
@@ -348,6 +350,7 @@ class ClimaSmartOptionsFlow(OptionsFlow):
                 vol.Required(CONF_SLEEP_START, default=_num(CONF_SLEEP_START, DEFAULT_SLEEP_START)): selector.TimeSelector(),
                 vol.Required(CONF_SLEEP_END, default=_num(CONF_SLEEP_END, DEFAULT_SLEEP_END)): selector.TimeSelector(),
                 vol.Required(CONF_MORNING_OFF_START, default=_num(CONF_MORNING_OFF_START, DEFAULT_MORNING_OFF_START)): selector.TimeSelector(),
+                vol.Required(CONF_MORNING_OFF_ENABLED, default=_num(CONF_MORNING_OFF_ENABLED, DEFAULT_MORNING_OFF_ENABLED)): bool,
                 vol.Required(CONF_DAY_START, default=_num(CONF_DAY_START, DEFAULT_DAY_START)): selector.TimeSelector(),
                 vol.Required(CONF_NIGHT_START, default=_num(CONF_NIGHT_START, DEFAULT_NIGHT_START)): selector.TimeSelector(),
             }
