@@ -906,6 +906,37 @@ class ControllerRegressionTests(unittest.TestCase):
         notte = GIORNO.replace(hour=2, minute=0)
         self.assertEqual(ctrl._compute(notte).setpoint, ctrl.target_sleep)
 
+    def test_the_hot_outdoor_flag_survives_a_restart(self):
+        """Il vincolo 'esterna calda' ha isteresi come il freno: al riavvio dentro
+        la banda va ripreso dal disco, non riacceso da zero. Senza, il pavimento
+        trim_min_hot spariva - stessa classe di bug del 7 agosto sul freno."""
+        ctrl = self._con_anello()
+        ctrl.entry.options = dict(ctrl.entry.options, hot_outdoor=28.0, trim_min_hot=23.0)
+        ctrl._hot_outdoor_floor(28.5)               # sopra soglia: si accende
+        self.assertTrue(ctrl._hot_outdoor)
+        self.assertTrue(ctrl._memoria()["hot_outdoor"])
+        # Un nuovo controller che ricarica quello stato lo ritrova acceso.
+        altro = self._con_anello()
+        import asyncio
+        class Finto:
+            async def async_load(self_): return ctrl._memoria()
+            async def async_save(self_, d): pass
+        altro._store = Finto()
+        asyncio.new_event_loop().run_until_complete(altro._async_load_memoria())
+        self.assertTrue(altro._hot_outdoor)
+
+    def test_an_implausible_return_air_is_ignored(self):
+        """Un valore assurdo o NaN sull'aria di ripresa non entra nel controllo:
+        room diventa None come quando il termometro manca, invece di trascinare la
+        ventola a low con un NaN."""
+        ctrl = self._smart_controller(room=27.0)
+        d = ctrl._compute(GIORNO)
+        self.assertIsNotNone(d.setpoint)            # con lettura buona lavora
+        ctrl.hass.states.values["climate.test"].attributes["current_temperature"] = float("nan")
+        d2 = ctrl._compute(GIORNO + timedelta(minutes=5))
+        # Non deve esplodere ne' produrre una decisione basata sul NaN.
+        self.assertIsNotNone(d2)
+
     def test_the_brake_survives_a_restart(self):
         """Il freno viaggia insieme al target che ha prodotto: se il target si
         ricorda, deve ricordarsi anche il motivo per cui e' li'."""

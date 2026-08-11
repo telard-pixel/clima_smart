@@ -852,6 +852,11 @@ class ClimaSmartController:
             # riparte staccato e l'anello ricomincia a spingere da dove era
             # arrivato. E' successo il 7 agosto 2026 alle 19:30.
             "saturated": self._saturated,
+            # Il gemello del freno di saturazione: anche il vincolo "esterna calda"
+            # ha isteresi, quindi al riavvio dentro la banda (es. 27.5 con soglia 28
+            # e isteresi 1.0) va ripreso dal disco, altrimenti riparte spento e il
+            # pavimento trim_min_hot sparisce - stessa lezione del 7 agosto.
+            "hot_outdoor": self._hot_outdoor,
             # Anche il giudizio sul passo deve sopravvivere a un riavvio: senza,
             # l'anello dimentica la lezione e ricomincia a spingere. Misurato l'8
             # agosto 2026: riavvio alle 18:48, e alle 18:49 ha rifatto il passo che
@@ -962,6 +967,8 @@ class ClimaSmartController:
         self.house_trim = livello_trim_di("house_trim")
         saturato = dati.get("saturated", False)
         self._saturated = saturato if isinstance(saturato, bool) else False
+        caldo_esterno = dati.get("hot_outdoor", False)
+        self._hot_outdoor = caldo_esterno if isinstance(caldo_esterno, bool) else False
 
         self._trim_probe_casa = temperatura_di("trim_probe_casa")
         self._trim_probe_level = livello_trim_di("trim_probe_level")
@@ -1782,7 +1789,14 @@ class ClimaSmartController:
             climate_unit,
             UnitOfTemperature.CELSIUS,
         )
-        room = ripresa
+        # L'aria di ripresa passa dal vaglio di plausibilita' come tutti gli altri
+        # termometri: un glitch numerico dal cloud (assurdo o NaN) non deve entrare
+        # in delta, eco e saturazione. Senza, un NaN portava la ventola a `low`.
+        room = (
+            ripresa
+            if ripresa is not None and math.isfinite(ripresa) and _plausible(ripresa)
+            else None
+        )
         comodino = self._read_bedside()
         outdoor, outdoor_valid = self._read_outdoor()
 
