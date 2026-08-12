@@ -1991,7 +1991,13 @@ class ClimaSmartController:
                     self._fan_hysteresis(phase),
                 )
         if phase == PHASE_SLEEP:
-            alette_h = alette_v = self._cfg(CONF_VANE_SLEEP, DEFAULT_VANE_SLEEP)
+            # Alette FISSE anche di notte, nella stessa posizione del giorno. Prima
+            # era `swing` (vane_sleep_position): ma oscillando mescolavano l'aria e
+            # il freddo non restava in basso dove si dorme, la camera risaliva e la
+            # macchina faticava a riprendere i gradi dopo la spinta iniziale.
+            # Tolto il 13 agosto 2026 su segnalazione dell'utente.
+            alette_h = self._cfg(CONF_VANE_DAY_H, DEFAULT_VANE_DAY) or None
+            alette_v = self._cfg(CONF_VANE_DAY_V, DEFAULT_VANE_DAY) or None
         elif phase in (PHASE_WIND_DOWN, PHASE_DAY) and self._vane_day_due(now):
             # Fine della notte: le alette tornano ferme, una volta sola. Anche in
             # PHASE_DAY, non solo in wind_down: con lo spegnimento del mattino

@@ -2271,12 +2271,20 @@ class ControllerRegressionTests(unittest.TestCase):
             )
         return ctrl
 
-    def test_vanes_go_to_swing_in_the_deep_night(self):
+    def test_vanes_are_fixed_at_night_like_daytime(self):
+        """Di notte le alette sono FISSE, nella stessa posizione del giorno - non
+        piu' swing: oscillando mescolavano l'aria, il freddo non restava in basso e
+        la camera risaliva (segnalato dall'utente il 13 agosto 2026)."""
         ctrl = self._con_alette()
+        ctrl.entry.options = dict(
+            ctrl.entry.options,
+            vane_day_horizontal="position_0",
+            vane_day_vertical="position_3",
+        )
         desired = ctrl._compute(GIORNO.replace(hour=23, minute=30))
         self.assertEqual(ctrl.current_phase, "sleep")
-        self.assertEqual(desired.vane_h, "swing")
-        self.assertEqual(desired.vane_v, "swing")
+        self.assertEqual(desired.vane_h, "position_0")
+        self.assertEqual(desired.vane_v, "position_3")
         inviati = []
 
         async def record(domain, service, entity_id, data=None):
@@ -2285,8 +2293,7 @@ class ControllerRegressionTests(unittest.TestCase):
 
         ctrl._call_target = record
         asyncio.run(ctrl._apply(desired))
-        self.assertIn(("select.aletta_h", "swing"), inviati)
-        self.assertIn(("select.aletta_v", "swing"), inviati)
+        self.assertIn(("select.aletta_v", "position_3"), inviati)
 
     def test_vanes_are_left_alone_outside_the_deep_night(self):
         ctrl = self._con_alette()
@@ -2310,7 +2317,9 @@ class ControllerRegressionTests(unittest.TestCase):
 
     def test_vane_position_the_unit_does_not_offer_is_reported(self):
         ctrl = self._con_alette(posizioni=("position_0", "position_3"))
-        ctrl.entry.options = dict(ctrl.entry.options, vane_sleep_position="swing")
+        # Una posizione di giorno che l'unita' non offre: di notte le alette usano
+        # quelle di giorno, quindi l'errore si vede anche nella notte fonda.
+        ctrl.entry.options = dict(ctrl.entry.options, vane_day_horizontal="position_9")
         asyncio.run(
             ctrl._apply(ctrl._compute(GIORNO.replace(hour=23, minute=30)))
         )
