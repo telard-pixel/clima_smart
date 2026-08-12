@@ -1984,8 +1984,11 @@ class ClimaSmartController:
                 )
         if phase == PHASE_SLEEP:
             alette_h = alette_v = self._cfg(CONF_VANE_SLEEP, DEFAULT_VANE_SLEEP)
-        elif phase == PHASE_WIND_DOWN and self._vane_day_due(now):
-            # Fine della notte: le alette tornano ferme, una volta sola.
+        elif phase in (PHASE_WIND_DOWN, PHASE_DAY) and self._vane_day_due(now):
+            # Fine della notte: le alette tornano ferme, una volta sola. Anche in
+            # PHASE_DAY, non solo in wind_down: con lo spegnimento del mattino
+            # disattivato (morning_off_enabled=False) la fase wind_down non esiste
+            # piu' e senza questo le alette restavano in swing tutto il giorno.
             alette_h = self._cfg(CONF_VANE_DAY_H, DEFAULT_VANE_DAY) or None
             alette_v = self._cfg(CONF_VANE_DAY_V, DEFAULT_VANE_DAY) or None
         else:
@@ -2250,7 +2253,7 @@ class ClimaSmartController:
         await self._apply_switch(CONF_NIGHT_SWITCH, desired.night)
         # Alette: chieste solo dentro la notte fonda, fuori restano dove sono.
         restore_vanes = (
-            self.current_phase == PHASE_WIND_DOWN
+            self.current_phase in (PHASE_WIND_DOWN, PHASE_DAY)
             and self._vane_day_due(now)
             and (desired.vane_h is not None or desired.vane_v is not None)
         )

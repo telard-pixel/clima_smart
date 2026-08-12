@@ -2299,6 +2299,35 @@ class ControllerRegressionTests(unittest.TestCase):
         # Seconda passata nella stessa fascia: non le tocca piu'.
         self.assertIsNone(ctrl._compute(mattina + timedelta(minutes=10)).vane_h)
 
+    def test_vanes_go_back_to_day_position_without_morning_off(self):
+        """Con lo spegnimento del mattino disattivato non c'e' piu' la fase
+        wind_down: le alette devono tornare ferme comunque, in fase day, altrimenti
+        restano in swing tutto il giorno (segnalato dall'utente il 12 agosto)."""
+        ctrl = self._con_alette(posizioni=("swing", "position_0", "position_5"))
+        ctrl.entry.options = dict(
+            ctrl.entry.options,
+            vane_day_horizontal="position_0",
+            vane_day_vertical="position_5",
+            morning_off_enabled=False,
+            sleep_start="23:00:00", sleep_end="07:30:00",
+            day_start="10:00:00", night_start="22:00:00",
+        )
+
+        async def succeeds(domain, service, entity_id, data=None):
+            return True
+
+        ctrl._call_target = succeeds
+        # Alle 8:00 senza morning_off la fase e' gia' day (niente wind_down/gap).
+        desired = ctrl._compute(GIORNO.replace(hour=8, minute=0))
+        self.assertEqual(ctrl.current_phase, "day")
+        self.assertEqual(desired.vane_h, "position_0")
+        self.assertEqual(desired.vane_v, "position_5")
+        asyncio.run(ctrl._apply(desired))
+        # E una volta sola: al passaggio dopo non le tocca.
+        self.assertIsNone(
+            ctrl._compute(GIORNO.replace(hour=8, minute=10)).vane_h
+        )
+
     def test_wind_down_vane_marker_waits_for_an_actual_restore_request(self):
         ctrl = self._con_alette(posizioni=("swing", "position_0", "position_5"))
         ctrl.entry.options = dict(
