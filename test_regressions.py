@@ -466,8 +466,8 @@ class ControllerRegressionTests(unittest.TestCase):
         finestra di un'ora e tre quarti, a parita' di raffrescamento consegnato e con
         l'esterna piu' fresca: 2.002 kWh contro 1.334 e 1.288 dei due giorni prima.
         """
-        ctrl = self._casa_accesa(room=27.5, altre=(25.2, 25.2, 25.2))
-        # La media direbbe +0.2, cioe' `low`. Decide la ripresa, che dice +2.5.
+        ctrl = self._casa_accesa(room=28.0, altre=(25.2, 25.2, 25.2))
+        # La media direbbe +0.2, cioe' `low`. Decide la ripresa, che dice +3.0 (high).
         self.assertEqual(ctrl._compute(GIORNO).fan, "high")
 
     def test_night_fan_measures_against_the_commanded_setpoint(self):
@@ -1386,14 +1386,15 @@ class ControllerRegressionTests(unittest.TestCase):
         self.assertEqual(esiti, [23.0] * len(traccia), "il vincolo non deve lampeggiare")
 
     def test_smart_fan_follows_the_gap(self):
-        for room, expected in ((27.5, "high"), (26.5, "medium"), (25.2, "low")):
+        # Soglia `high` alzata a 3.0 il 12 agosto: 28.0 = scarto 3.0.
+        for room, expected in ((28.0, "high"), (26.5, "medium"), (25.2, "low")):
             ctrl = self._smart_controller(room=room)
             desired = ctrl._compute(GIORNO)
             self.assertEqual(desired.fan, expected, f"stanza {room}")
             self.assertEqual(desired.setpoint, 25.0)
 
     def test_smart_fan_upgrades_at_once_but_downgrades_slowly(self):
-        ctrl = self._smart_controller(room=27.5)
+        ctrl = self._smart_controller(room=28.0)     # scarto 3.0: high
         self.assertEqual(ctrl._compute(GIORNO).fan, "high")
         # La stanza scende di colpo: il declassamento non deve essere immediato.
         ctrl.hass.states.values["climate.test"].attributes["current_temperature"] = 25.2
@@ -1402,9 +1403,20 @@ class ControllerRegressionTests(unittest.TestCase):
         later = GIORNO + timedelta(seconds=controller_module.MIN_FAN_DWELL_SECONDS + 1)
         self.assertEqual(ctrl._compute(later).fan, "low")
         # E una risalita vale subito, senza aspettare: serve pero' superare il
-        # margine, cioe' 2.0 + 1.5.
-        ctrl.hass.states.values["climate.test"].attributes["current_temperature"] = 28.5
+        # margine, cioe' 3.0 + 1.0 = 4.0.
+        ctrl.hass.states.values["climate.test"].attributes["current_temperature"] = 29.5
         self.assertEqual(ctrl._compute(later).fan, "high")
+
+    def test_a_three_degree_gap_no_longer_forces_high(self):
+        """Il 10 agosto 2026 la ventola andava `high` a scarto 3 - lo scarto che
+        l'anello crea quando abbassa il target per servire la casa - girando a 72 Hz
+        e 814 W senza raffreddare di piu'. Con la soglia `high` alzata a 3.0 (salita
+        effettiva a 4.0), uno scarto di 3 resta `medium`, il cuore efficiente. Solo
+        uno scarto da vero pull-down (>=4) porta a `high`."""
+        ctrl = self._smart_controller(room=28.0, fan="low")   # scarto 3.0
+        self.assertEqual(ctrl._compute(GIORNO).fan, "medium")
+        ctrl.hass.states.values["climate.test"].attributes["current_temperature"] = 29.0
+        self.assertEqual(ctrl._compute(GIORNO).fan, "high")    # scarto 4.0: pull-down
 
     def test_smart_fan_ignores_a_gap_that_only_touches_the_band_edge(self):
         """Misurato sull'unità vera: la stanza a 26.0 con target 25 tocca il confine
@@ -1453,11 +1465,12 @@ class ControllerRegressionTests(unittest.TestCase):
         self.assertEqual(ctrl._compute(dopo).fan, "low")
 
     def test_smart_fan_holds_inside_the_hysteresis_band(self):
-        ctrl = self._smart_controller(room=27.5)
+        ctrl = self._smart_controller(room=28.0)     # scarto 3.0: high
         self.assertEqual(ctrl._compute(GIORNO).fan, "high")
         later = GIORNO + timedelta(seconds=controller_module.MIN_FAN_DWELL_SECONDS + 1)
-        # 1.6 sopra: dentro la banda di isteresi (2.0 - 1.5), la ventola tiene.
-        ctrl.hass.states.values["climate.test"].attributes["current_temperature"] = 26.6
+        # 2.8 sopra: dentro la banda di isteresi (soglia high 3.0 meno il margine di
+        # discesa 0.5 = 2.5), la ventola tiene.
+        ctrl.hass.states.values["climate.test"].attributes["current_temperature"] = 27.8
         self.assertEqual(ctrl._compute(later).fan, "high")
         # 0.4 sopra: fuori dalla banda, adesso scende - e scende fino a `low`, non
         # a `medium`. Con una banda di 1.5 e i bordi distanti 1.0, quando la discesa
@@ -1880,8 +1893,8 @@ class ControllerRegressionTests(unittest.TestCase):
         self.assertEqual(ctrl._compute(GIORNO).fan, "low")
         ctrl.hass.states.values["climate.test"].attributes["current_temperature"] = 27.5
         self.assertEqual(ctrl._compute(GIORNO).fan, "medium")   # +2.5, non piu' low
-        ctrl.hass.states.values["climate.test"].attributes["current_temperature"] = 28.5
-        self.assertEqual(ctrl._compute(GIORNO).fan, "high")     # +3.5: 2.0 + il margine
+        ctrl.hass.states.values["climate.test"].attributes["current_temperature"] = 29.5
+        self.assertEqual(ctrl._compute(GIORNO).fan, "high")     # +4.5: 3.0 + il margine
 
     def test_restore_timeout_opens_the_barrier_degraded(self):
         controller_module.RESTORE_TIMEOUT_SECONDS = 0.05

@@ -287,9 +287,22 @@ MODE_SMART = "smart"
 MODES: list[str] = [MODE_SMART, MODE_OFF]
 
 # --- MODE_SMART: fan steps by how far the room still is above target ---
-# Read as: 2 degrees or more above -> high, 1 or more -> medium, otherwise low.
+# Read as: 3 degrees or more above -> high, 1 or more -> medium, otherwise low.
+#
+# `high` alzata da 2.0 a 3.0 il 12 agosto 2026, sull'analisi energetica a tre
+# agenti indipendenti. Misurato: `high` assorbe ~800 W (53 Hz) contro ~420 W (29
+# Hz) di `medium` - **raddoppia la potenza**. Il 10 agosto la ventola e' stata
+# alta 3.5 ore (fino a 72 Hz, 814 W) e la casa **non e' scesa di un grado**:
+# potenza doppia, zero raffreddamento in piu'. La causa: l'anello abbassa il
+# target per servire la casa, lo scarto camera-target sale a ~3, e la vecchia
+# soglia 2.0 (effettiva 3.0 con l'isteresi) faceva scattare `high` su uno scarto
+# **artificiale**, non su un vero bisogno di raffreddare la camera. La giornata
+# piu' efficiente (9 agosto: casa piu' fredda, 28.7 Hz, la piu' economica pur col
+# meteo piu' caldo) girava tutta a `medium`. Con soglia 3.0 (effettiva 4.0),
+# `high` resta come valvola per il pull-down da avvio molto caldo, ma il regime
+# lavora a `medium`, il cuore efficiente della macchina (28-45 Hz).
 FAN_BANDS: tuple[tuple[float, str], ...] = (
-    (2.0, "high"),
+    (3.0, "high"),
     (1.0, "medium"),
     (0.0, "low"),
 )
