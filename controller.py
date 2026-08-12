@@ -1380,8 +1380,16 @@ class ClimaSmartController:
             return None
         reso = casa <= self._trim_probe_casa - TRIM_PROBE_GAIN
         livello = self._trim_probe_level
+        casa_partenza = self._trim_probe_casa
         self._clear_trim_probe()
-        if not reso and livello is not None:
+        if not reso and livello is not None and casa <= casa_partenza:
+            # Il pavimento si mette solo se la casa NON stava salendo. Se invece e'
+            # salita (casa > casa_partenza) il passo non e' "inutile": il calore
+            # sta entrando - la finestra 07:30-10:00 su questa casa - e il passo lo
+            # contrasta. Bloccare il livello li' vorrebbe dire rinunciare a
+            # raffreddare proprio prima del picco. Segnalato il 12 agosto 2026:
+            # l'anello e' rimasto inchiodato a 25 tutto il giorno perche' il
+            # pavimento era scattato la mattina mentre la casa saliva col sole.
             passo = passo if passo and passo > 0 else 1.0
             candidato = livello + passo
             self._trim_floor_today = (

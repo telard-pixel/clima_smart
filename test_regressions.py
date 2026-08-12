@@ -1087,6 +1087,35 @@ class ControllerRegressionTests(unittest.TestCase):
         t += timedelta(seconds=controller_module.HOUSE_TRIM_DWELL_SECONDS + 60)
         self.assertEqual(ctrl._compute(t).setpoint, 25.0)   # restituito
 
+    def test_no_floor_when_the_house_is_rising_with_the_morning_heat(self):
+        """Nella finestra 07:30-10:00 il calore entra e la casa sale: un passo che
+        'non rende' li' non e' inutile, contrasta il calore. Non deve mettere il
+        pavimento, altrimenti l'anello resta inchiodato a 25 tutto il giorno -
+        segnalato dall'utente il 12 agosto 2026."""
+        ctrl = self._con_anello()
+        ctrl._trim_probe_casa = 26.5          # casa quando ho aperto la prova
+        ctrl._trim_probe_level = 24.0
+        ctrl._trim_probe_started_at = GIORNO
+        dopo = GIORNO + timedelta(
+            seconds=controller_module.HOUSE_TRIM_DWELL_SECONDS + 60
+        )
+        # La casa e' SALITA a 27.0 (il sole scalda): passo non reso, ma nessun pavimento.
+        self.assertFalse(ctrl._last_step_paid(27.0, 1.0, dopo))
+        self.assertIsNone(ctrl._trim_floor_today)
+
+    def test_floor_still_set_when_the_house_is_flat(self):
+        """Se la casa e' ferma - non sale ne' scende - il passo davvero non rende e
+        il livello si blocca, come prima."""
+        ctrl = self._con_anello()
+        ctrl._trim_probe_casa = 26.5
+        ctrl._trim_probe_level = 24.0
+        ctrl._trim_probe_started_at = GIORNO
+        dopo = GIORNO + timedelta(
+            seconds=controller_module.HOUSE_TRIM_DWELL_SECONDS + 60
+        )
+        self.assertFalse(ctrl._last_step_paid(26.5, 1.0, dopo))   # casa ferma
+        self.assertEqual(ctrl._trim_floor_today, 25.0)            # 24 + passo 1
+
     def test_a_previous_day_probe_expires_without_learning(self):
         """Una baseline di ieri non deve creare il pavimento di oggi."""
         ctrl = self._con_anello()
