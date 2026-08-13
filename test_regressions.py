@@ -1346,6 +1346,28 @@ class ControllerRegressionTests(unittest.TestCase):
         self.assertEqual(m["trim_floor_today"], ctrl._trim_floor_today)
         self.assertEqual(m["trim_floor_day"], ctrl._trim_floor_day.isoformat())
 
+    def test_the_fan_dwell_survives_a_restart(self):
+        """Il dwell della ventola va salvato: senza, al riavvio la ventola riparte
+        da zero e puo' cambiare subito invece di aspettare i 30 minuti di
+        MIN_FAN_DWELL. Segnalato dall'utente il 13 agosto 2026."""
+        passato = NOW - timedelta(hours=1)     # nel passato: la guardia non lo scarta
+        ctrl = self._con_anello()
+        ctrl._last_fan_band = "medium"
+        ctrl._last_fan_band_at = passato
+        m = ctrl._memoria()
+        self.assertEqual(m["last_fan_band"], "medium")
+        self.assertEqual(m["last_fan_band_at"], passato.isoformat())
+        # Un altro controller che ricarica quello stato ritrova banda e orologio.
+        import asyncio
+        class Finto:
+            async def async_load(self_): return m
+            async def async_save(self_, d): pass
+        altro = self._con_anello()
+        altro._store = Finto()
+        asyncio.new_event_loop().run_until_complete(altro._async_load_memoria())
+        self.assertEqual(altro._last_fan_band, "medium")
+        self.assertEqual(altro._last_fan_band_at, passato)
+
     def test_a_very_hot_day_puts_a_floor_under_the_loop(self):
         """Sopra la soglia la macchina e' al limite: chiedere di piu' alla camera non
         porta gradi in casa, porta frequenza. Misurato, il rendimento migliore sta

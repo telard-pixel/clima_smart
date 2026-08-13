@@ -868,6 +868,11 @@ class ClimaSmartController:
             "trim_floor_day": giorno(self._trim_floor_day),
             "trim_changed_at": giorno(self._trim_changed_at),
             "adaptive_changed_at": giorno(self._adaptive_changed_at),
+            # Il dwell della ventola: senza, un riavvio faceva ripartire la ventola
+            # da zero e poteva cambiarla subito invece di aspettare i 30 minuti di
+            # MIN_FAN_DWELL. Salvato insieme alla banda che lo ha aperto.
+            "last_fan_band": self._last_fan_band,
+            "last_fan_band_at": giorno(self._last_fan_band_at),
         }
 
     async def _async_load_memoria(self) -> None:
@@ -919,6 +924,9 @@ class ClimaSmartController:
         self._override_until = istante_di("override_until")
         self._adaptive_changed_at = istante_di("adaptive_changed_at")
         self._trim_changed_at = istante_di("trim_changed_at")
+        self._last_fan_band_at = istante_di("last_fan_band_at")
+        banda = dati.get("last_fan_band")
+        self._last_fan_band = banda if banda in FAN_ORDER else None
         adesso = dt_util.now()
 
         def dopo(a: datetime, b: datetime) -> bool:
@@ -939,6 +947,11 @@ class ClimaSmartController:
             self._adaptive_changed_at = None
         if self._trim_changed_at is not None and dopo(self._trim_changed_at, adesso):
             self._trim_changed_at = None
+        # Un timestamp del dwell ventola nel futuro (orologio spostato) non deve
+        # bloccare la ventola per sempre: si scarta e la banda riparte libera.
+        if self._last_fan_band_at is not None and dopo(self._last_fan_band_at, adesso):
+            self._last_fan_band_at = None
+            self._last_fan_band = None
 
         def numero_finito(chiave):
             valore = dati.get(chiave)
