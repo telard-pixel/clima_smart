@@ -1703,6 +1703,51 @@ class ControllerRegressionTests(unittest.TestCase):
         self.assertTrue(ctrl._sleep_boost_active(NOW.replace(hour=0, minute=5)))
         self.assertFalse(ctrl._sleep_boost_active(NOW.replace(hour=0, minute=15)))
 
+    def _presenza(self, ctrl, stato):
+        """Collega un'entita' di presenza al controller e le da uno stato."""
+        ctrl.entry.options = dict(ctrl.entry.options, presence_entity="person.test")
+        ctrl.hass.states.values["person.test"] = State(stato)
+
+    def test_away_skips_the_deep_night_target(self):
+        """Fuori casa la notte fonda non crolla a target_sleep: la camera resta sul
+        comfort di prima, come la fascia notte. Non si insegue il freddo per una
+        stanza vuota - ma la fase resta 'sleep', il resto del sistema non cambia. A
+        casa, stessa ora, torna la notte fonda vera."""
+        ctrl = self._smart_controller(room=26.0)
+        self._orari(ctrl, target_sleep=23.0)
+        self._presenza(ctrl, "not_home")
+        desired = ctrl._compute(NOW.replace(hour=2, minute=0))
+        self.assertEqual(ctrl.current_phase, "sleep")
+        self.assertEqual(desired.setpoint, 25.0)   # comfort, non 23.0
+        self._presenza(ctrl, "home")
+        self.assertEqual(ctrl._compute(NOW.replace(hour=2, minute=1)).setpoint, 23.0)
+
+    def test_away_suppresses_the_fan_boost(self):
+        """La spinta iniziale della ventola e' il cuore della richiesta: fuori casa
+        non deve partire. All'ingresso della notte fonda, da fuori, decidono le
+        bande normali - a un grado dal comfort chiedono `medium`, non il massimo."""
+        ctrl = self._smart_controller(room=26.0)
+        self._orari(ctrl, target_sleep=23.0)
+        self._presenza(ctrl, "not_home")
+        desired = ctrl._compute(NOW.replace(hour=23, minute=35))
+        self.assertNotEqual(desired.fan, "high")
+        self.assertNotIn("spinta iniziale", desired.reason)
+
+    def test_a_named_zone_also_counts_as_away(self):
+        """Non solo `not_home`: qualunque zona reale diversa da casa e' fuori."""
+        ctrl = self._smart_controller(room=26.0)
+        self._orari(ctrl, target_sleep=23.0)
+        self._presenza(ctrl, "Ufficio")
+        self.assertEqual(ctrl._compute(NOW.replace(hour=2, minute=0)).setpoint, 25.0)
+
+    def test_a_broken_locator_counts_as_home(self):
+        """Un GPS rotto non deve togliere la notte fonda a chi dorme: uno stato
+        assente, `unknown` o `unavailable` vale 'a casa'."""
+        ctrl = self._smart_controller(room=26.0)
+        self._orari(ctrl, target_sleep=23.0)
+        self._presenza(ctrl, "unavailable")
+        self.assertEqual(ctrl._compute(NOW.replace(hour=2, minute=0)).setpoint, 23.0)
+
     def test_setpoint_offset_shifts_the_command_not_the_target(self):
         ctrl = self._smart_controller(room=27.0)
         ctrl.entry.options = dict(ctrl.entry.options, setpoint_offset=-1.0)

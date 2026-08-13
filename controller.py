@@ -62,6 +62,7 @@ from .const import (
     CONF_TRIM_MIN_HOT,
     CONF_OVERRIDE_MINUTES,
     CONF_SETPOINT_OFFSET,
+    CONF_PRESENCE_ENTITY,
     CONF_SLEEP_END,
     CONF_SLEEP_START,
     CONF_SUMMER_THRESHOLD,
@@ -93,6 +94,7 @@ from .const import (
     DEFAULT_MORNING_OFF_START,
     DEFAULT_NIGHT_START,
     DEFAULT_OVERRIDE_MINUTES,
+    DEFAULT_PRESENCE_ENTITY,
     DEFAULT_SETPOINT_OFFSET,
     DEFAULT_SLEEP_END,
     DEFAULT_SLEEP_START,
@@ -430,6 +432,11 @@ class ClimaSmartController:
         for conf_key in (CONF_OUTDOOR, CONF_OUTDOOR_FALLBACK):
             if ent := self._cfg(conf_key):
                 watched.add(ent)
+        # La presenza: cosi' l'uscita e - piu' importante - il rientro fanno
+        # rivalutare subito, senza aspettare il tick periodico. Al rientro la notte
+        # fonda deve ripartire in fretta, non con dieci minuti di ritardo.
+        if presenza := self._presence_entity():
+            watched.add(presenza)
         aux_config = {
             conf_key: self._cfg(conf_key)
             for conf_key in (CONF_ECO_SWITCH, CONF_MUTE_SWITCH, CONF_NIGHT_SWITCH)
@@ -1536,6 +1543,26 @@ class ClimaSmartController:
             self._trim_changed_at = now
         return self.house_trim
 
+    def _presence_entity(self) -> str | None:
+        ent = self._cfg(CONF_PRESENCE_ENTITY, DEFAULT_PRESENCE_ENTITY)
+        return ent or None
+
+    def _fuori_casa(self) -> bool:
+        """True solo se il sensore di presenza dice esplicitamente che sono fuori.
+
+        `home` e' a casa; qualunque altra zona reale (`not_home`, il nome di una
+        zona) e' fuori. Uno stato rotto - assente, `unknown`, `unavailable` - o
+        l'entita' non configurata valgono "a casa": un GPS guasto non deve togliere
+        la notte fonda a chi sta dormendo.
+        """
+        ent = self._presence_entity()
+        if not ent:
+            return False
+        st = self.hass.states.get(ent)
+        if st is None:
+            return False
+        return st.state not in ("home", "unknown", "unavailable", "none", "")
+
     def _house_average(self) -> float | None:
         """Average of the other rooms' thermometers, in Celsius.
 
@@ -1886,18 +1913,34 @@ class ClimaSmartController:
                 reason="clima in heat: non tocco hvac/setpoint, aggiorno muto/notte",
             )
 
-        night_window = phase in (PHASE_SLEEP, PHASE_WIND_DOWN)
+        fuori = self._fuori_casa()
+        # La notte fonda vera - target piu' freddo e spinta iniziale della ventola -
+        # vale solo se sono a casa. Fuori, in fascia sleep, il clima resta nel regime
+        # di comfort di prima (come la fascia notte fino alle 23:30): niente crollo a
+        # target_sleep, niente spinta, fasce ventola normali. Non ha senso inseguire i
+        # gradi e spingere la ventola per una stanza vuota. Al rientro riprende da solo.
+        notte_fonda = phase == PHASE_SLEEP and not fuori
         passo = _to_float(climate.attributes.get("target_temp_step"))
         casa = self._house_average()
         trim = None
         compensazione = 0.0
-        if night_window:
+        if phase == PHASE_WIND_DOWN or notte_fonda:
             # Di notte la porta e' chiusa: la casa esce dal quadro e comanda la
             # camera, con il suo target. Anche la prova diurna esce dal quadro:
             # conservarla fino al giorno dopo la trasformerebbe in una misura di
             # ore invece che dei tre quarti d'ora per cui e' stata aperta.
             self._clear_trim_probe()
             target = self.target_sleep
+        elif phase == PHASE_SLEEP:
+            # Fascia notte fonda ma sono fuori: la salto. Non il freddo profondo, ma
+            # nemmeno l'anello di giorno - quello spinge la camera piu' in basso per
+            # raffreddare le altre stanze, l'ultima cosa da fare per una casa vuota.
+            # Solo comfort: il target fisso col ritocco sull'esterna, come la fascia
+            # notte prima delle 23:30. Al rientro riprende la notte fonda vera.
+            self._clear_trim_probe()
+            target = self.target_home
+            compensazione = self._adaptive_extra(outdoor, now, passo)
+            target += compensazione
         else:
             # Di giorno comanda la linea di comfort delle altre stanze, e la camera
             # e' lo strumento per ottenerla.
@@ -1919,8 +1962,9 @@ class ClimaSmartController:
         # decide how it runs, and the only switch-off we do is the scheduled one.
         if cur_mode == HVAC_OFF:
             # L'unica eccezione alla regola "non accendo mai": l'avvio della
-            # notte, se l'utente l'ha chiesto, e una volta sola.
-            if phase == PHASE_SLEEP and self._sleep_start_due(now):
+            # notte, se l'utente l'ha chiesto, e una volta sola. Se sono fuori la
+            # notte fonda non parte affatto: non accendo per una stanza vuota.
+            if notte_fonda and self._sleep_start_due(now):
                 self._sleep_start_armed = True
                 self._start_reason = START_REASON_NIGHT
                 self.active_target = self._reachable_target(target, climate)
@@ -1985,7 +2029,7 @@ class ClimaSmartController:
         else:
             program = self._program_for(delta, humidity, hvac_modes)
             scarto_ventola = self._fan_delta(phase, room, target, compensazione)
-            spinta = phase == PHASE_SLEEP and self._sleep_boost_active(now)
+            spinta = notte_fonda and self._sleep_boost_active(now)
             fan = (
                 self._boost_fan(
                     scarto_ventola, climate.attributes.get("fan_modes"), now
@@ -2000,7 +2044,7 @@ class ClimaSmartController:
                     climate.attributes.get("fan_mode"),
                     now,
                     climate.attributes.get("fan_modes"),
-                    FAN_BANDS_SLEEP if phase == PHASE_SLEEP else FAN_BANDS,
+                    FAN_BANDS_SLEEP if notte_fonda else FAN_BANDS,
                     self._fan_hysteresis(phase),
                 )
         if phase == PHASE_SLEEP:

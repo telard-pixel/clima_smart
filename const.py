@@ -42,6 +42,13 @@ CONF_MORNING_OFF_ENABLED = "morning_off_enabled"
 CONF_TARGET_SLEEP = "target_sleep"
 CONF_SLEEP_START = "sleep_start"
 CONF_SLEEP_END = "sleep_end"
+# Presenza: se sono fuori, la notte fonda (target piu' freddo + spinta iniziale
+# della ventola) non deve partire - non ha senso inseguire i gradi e spingere la
+# ventola per una stanza vuota. Fuori casa il clima resta nel regime di comfort,
+# come prima dell'inizio della notte fonda. Al rientro riprende da solo. Uno stato
+# rotto (unknown/unavailable) o l'entita' vuota valgono "a casa": un GPS guasto non
+# deve togliere la notte fonda a chi sta dormendo.
+CONF_PRESENCE_ENTITY = "presence_entity"
 # Split units read the return air, not the room, and stop short: measured here the
 # room settled 0.5-1.0 above a 25.0 setpoint. This shifts what we send to the unit
 # without touching the target we aim the room at, so the diagnostics stay honest.
@@ -127,6 +134,7 @@ DEFAULT_MORNING_OFF_ENABLED = True
 DEFAULT_TARGET_SLEEP = 23.0
 DEFAULT_SLEEP_START = "23:30:00"
 DEFAULT_SLEEP_END = "07:30:00"
+DEFAULT_PRESENCE_ENTITY = "person.rob"
 DEFAULT_SETPOINT_OFFSET = 0.0
 DEFAULT_VANE_SLEEP = "swing"
 DEFAULT_VANE_DAY = ""
