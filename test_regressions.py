@@ -1822,6 +1822,130 @@ class ControllerRegressionTests(unittest.TestCase):
         self.assertIn("sopra la soglia fredda", ripresa.reason)
         self.assertFalse(ctrl._cold_night_resting)
 
+    # ------------------------------------------------- aiuto invernale
+    def _con_casa_inverno(self, room=17.0, altre=(17.0, 17.0, 17.0), outdoor=5.0):
+        """Camera fredda fuori stagione, con le tre stanze collegate per il
+        tetto di sicurezza. `_not_summer_since` e' gia' maturo - ancorato a
+        mezzanotte meno il margine di conferma, non a `GIORNO`, cosi' resta
+        valido per qualunque ora del giorno usino i singoli test (anche
+        quelle precedenti a mezzogiorno, come la notte fonda): con l'ancora
+        su `GIORNO` una chiamata delle due di notte avrebbe calcolato un
+        tempo trascorso negativo e sarebbe rimasta, per sbaglio, dentro la
+        stagione calda."""
+        ctrl = self._smart_controller(room=room, outdoor=outdoor)
+        for i, v in enumerate(altre):
+            ctrl.hass.states.values[f"sensor.stanza{i}"] = State(
+                str(v), {"unit_of_measurement": "°C"}
+            )
+        ctrl.entry.data = dict(
+            ctrl.entry.data,
+            house_sensors=[f"sensor.stanza{i}" for i in range(len(altre))],
+        )
+        ctrl.entry.options = dict(
+            ctrl.entry.options,
+            winter_room_start=18.0,
+            winter_room_target=19.0,
+            winter_house_ceiling=20.0,
+        )
+        mezzanotte = NOW.replace(hour=0, minute=0, second=0, microsecond=0)
+        ctrl._not_summer_since = mezzanotte - timedelta(
+            seconds=controller_module.SEASON_EXIT_CONFIRM_SECONDS
+        )
+        return ctrl
+
+    def test_winter_heat_starts_below_the_start_threshold(self):
+        """Sotto i 18 gradi, fuori stagione e da svegli, la pompa di calore
+        aiuta i caloriferi puntando al tetto di 19."""
+        ctrl = self._con_casa_inverno(room=17.5)
+        ctrl.hass.states.values["climate.test"].state = "off"
+        desired = ctrl._compute(GIORNO)
+        self.assertEqual(desired.hvac, "heat")
+        self.assertEqual(desired.setpoint, 19.0)
+        self.assertTrue(ctrl._winter_heating)
+
+    def test_winter_heat_stops_at_the_target(self):
+        """Raggiunti i 19 gradi il ciclo si ferma: e' un tetto, non un
+        anello da inseguire di continuo."""
+        ctrl = self._con_casa_inverno(room=17.5)
+        ctrl.hass.states.values["climate.test"].state = "off"
+        ctrl._compute(GIORNO)   # avvia il ciclo
+        self.assertTrue(ctrl._winter_heating)
+        ctrl.hass.states.values["climate.test"].state = "heat"
+        ctrl.hass.states.values["climate.test"].attributes[
+            "current_temperature"
+        ] = 19.0
+        desired = ctrl._compute(GIORNO + timedelta(minutes=20))
+        self.assertEqual(desired.hvac, "off")
+        self.assertFalse(ctrl._winter_heating)
+
+    def test_winter_heat_does_not_start_during_sleep(self):
+        """Il sonno resta escluso: nemmeno una camera molto fredda deve
+        accendere la pompa di calore mentre si dorme."""
+        ctrl = self._con_casa_inverno(room=16.0)
+        self._orari(ctrl)   # sleep 23:30-07:30 di default
+        ctrl.hass.states.values["climate.test"].state = "off"
+        desired = ctrl._compute(NOW.replace(hour=2, minute=0))
+        self.assertIsNone(desired.hvac)
+        self.assertFalse(ctrl._winter_heating)
+
+    def test_winter_heat_stops_if_sleep_begins_mid_cycle(self):
+        """Un ciclo gia' avviato si interrompe se la notte fonda entra prima
+        che la camera raggiunga il tetto: il confine col sonno e' netto,
+        nessuna eccezione per un ciclo gia' in corso."""
+        ctrl = self._con_casa_inverno(room=17.5)
+        self._orari(ctrl)
+        ctrl.hass.states.values["climate.test"].state = "off"
+        ctrl._compute(GIORNO)   # avvia di giorno
+        self.assertTrue(ctrl._winter_heating)
+        ctrl.hass.states.values["climate.test"].state = "heat"
+        desired = ctrl._compute(NOW.replace(hour=2, minute=0))   # entra la notte fonda
+        self.assertEqual(desired.hvac, "off")
+        self.assertFalse(ctrl._winter_heating)
+
+    def test_winter_heat_does_not_start_during_wind_down(self):
+        """Nemmeno nella coda di wind-down, prima che il giorno cominci
+        davvero."""
+        ctrl = self._con_casa_inverno(room=16.0)
+        self._orari(ctrl)   # morning_off_enabled default True -> wind_down 07:30-08:00
+        ctrl.hass.states.values["climate.test"].state = "off"
+        desired = ctrl._compute(NOW.replace(hour=7, minute=45))
+        self.assertIsNone(desired.hvac)
+        self.assertFalse(ctrl._winter_heating)
+
+    def test_winter_heat_respects_the_house_ceiling(self):
+        """Se la casa e' gia' a 20 gradi o oltre, la camera non deve
+        aggiungersi: i caloriferi stanno gia' facendo il loro lavoro."""
+        ctrl = self._con_casa_inverno(room=17.5, altre=(20.0, 20.0, 20.0))
+        ctrl.hass.states.values["climate.test"].state = "off"
+        desired = ctrl._compute(GIORNO)
+        self.assertIsNone(desired.hvac)
+        self.assertFalse(ctrl._winter_heating)
+
+    def test_winter_heat_state_survives_a_restart(self):
+        """Un riavvio a meta' ciclo non deve perdere il contesto: senza
+        persistenza il ciclo ripartirebbe da capo invece di ricordare che
+        stava gia' scaldando."""
+        ctrl = self._con_casa_inverno(room=17.5)
+        ctrl.hass.states.values["climate.test"].state = "off"
+        ctrl._compute(GIORNO)
+        self.assertTrue(ctrl._winter_heating)
+        asyncio.run(ctrl._async_save_memoria())
+        dopo = self._riavvia(ctrl)
+        self.assertTrue(dopo._winter_heating)
+
+    def test_winter_heat_disabled_by_default(self):
+        """Senza configurare winter_room_start, il comportamento resta
+        quello di sempre: passivo, non tocca il riscaldamento. Protegge
+        ogni altra installazione di questa integrazione condivisa."""
+        ctrl = self._smart_controller(room=15.0, outdoor=5.0)
+        ctrl._not_summer_since = GIORNO - timedelta(
+            seconds=controller_module.SEASON_EXIT_CONFIRM_SECONDS
+        )
+        ctrl.hass.states.values["climate.test"].state = "off"
+        desired = ctrl._compute(GIORNO)
+        self.assertIsNone(desired.hvac)
+        self.assertIn("non tocco il riscaldamento", desired.reason)
+
     # -------------------------------------------------------- mattina fresca
     def test_cool_morning_stops_a_running_unit(self):
         """Se la mattina non fa abbastanza caldo, un'unita' gia' accesa - dalla

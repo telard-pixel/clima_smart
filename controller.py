@@ -45,6 +45,9 @@ from .const import (
     CONF_ECO_OUTDOOR_ON,
     CONF_ECO_SWITCH,
     CONF_HOUSE_SENSORS,
+    CONF_WINTER_ROOM_START,
+    CONF_WINTER_ROOM_TARGET,
+    CONF_WINTER_HOUSE_CEILING,
     CONF_HOT_OUTDOOR,
     CONF_HOUSE_TARGET,
     CONF_HUMIDITY,
@@ -95,6 +98,9 @@ from .const import (
     DEFAULT_MORNING_OFF_START,
     DEFAULT_NIGHT_START,
     DEFAULT_NIGHT_START_OUTDOOR,
+    DEFAULT_WINTER_ROOM_START,
+    DEFAULT_WINTER_ROOM_TARGET,
+    DEFAULT_WINTER_HOUSE_CEILING,
     DEFAULT_OVERRIDE_MINUTES,
     DEFAULT_PRESENCE_ENTITY,
     DEFAULT_SETPOINT_OFFSET,
@@ -340,6 +346,10 @@ class ClimaSmartController:
         # oraria: e' un rientro dal riposo, non l'avvio serale.
         self._cold_night = False
         self._cold_night_resting = False
+        # Aiuto invernale: acceso o spento, con le due soglie configurate
+        # (avvio/tetto) come propria isteresi - stesso schema di
+        # _cold_night, stessa ragione di persistenza.
+        self._winter_heating = False
         # Il giudizio del passo in giu': la media di casa al momento in cui e'
         # stato fatto, il livello a cui ha portato, e il pavimento che i passi
         # bocciati hanno lasciato per la giornata in corso.
@@ -885,6 +895,7 @@ class ClimaSmartController:
             # macchina fosse sempre stata spenta per conto suo, non a riposo.
             "cold_night": self._cold_night,
             "cold_night_resting": self._cold_night_resting,
+            "winter_heating": self._winter_heating,
             # Anche il giudizio sul passo deve sopravvivere a un riavvio: senza,
             # l'anello dimentica la lezione e ricomincia a spingere. Misurato l'8
             # agosto 2026: riavvio alle 18:48, e alle 18:49 ha rifatto il passo che
@@ -1014,6 +1025,10 @@ class ClimaSmartController:
         riposo_notte = dati.get("cold_night_resting", False)
         self._cold_night_resting = (
             riposo_notte if isinstance(riposo_notte, bool) else False
+        )
+        scaldo_inverno = dati.get("winter_heating", False)
+        self._winter_heating = (
+            scaldo_inverno if isinstance(scaldo_inverno, bool) else False
         )
         caldo_esterno = dati.get("hot_outdoor", False)
         self._hot_outdoor = caldo_esterno if isinstance(caldo_esterno, bool) else False
@@ -1996,10 +2011,71 @@ class ClimaSmartController:
             )
 
         if not summer:
-            self.active_target = None
             if cooling_active:
-                return Desired(hvac=HVAC_OFF, reason="fuori stagione: spengo raffrescamento")
-            return Desired(reason="fuori stagione: non tocco il riscaldamento")
+                self.active_target = None
+                return Desired(
+                    hvac=HVAC_OFF, reason="fuori stagione: spengo raffrescamento"
+                )
+            soglia_avvio = float(
+                self._cfg(CONF_WINTER_ROOM_START, DEFAULT_WINTER_ROOM_START) or 0.0
+            )
+            target_inverno = float(
+                self._cfg(CONF_WINTER_ROOM_TARGET, DEFAULT_WINTER_ROOM_TARGET) or 0.0
+            )
+            if soglia_avvio <= 0 or target_inverno <= 0:
+                # Aiuto invernale non configurato: comportamento di sempre.
+                self.active_target = None
+                self._winter_heating = False
+                return Desired(reason="fuori stagione: non tocco il riscaldamento")
+            in_sonno = phase in (PHASE_SLEEP, PHASE_WIND_DOWN)
+            if in_sonno:
+                # Il sonno resta escluso: un ciclo gia' avviato si interrompe
+                # se la notte fonda entra prima del tetto, non aspetta - per
+                # questo qui si spegne attivamente, non ci si limita a
+                # smettere di seguirlo (hvac=None lascerebbe la pompa di
+                # calore accesa e incustodita per tutta la notte).
+                self.active_target = None
+                self._winter_heating = False
+                if cur_mode == HVAC_HEAT:
+                    return Desired(
+                        hvac=HVAC_OFF,
+                        reason="fuori stagione: entra il sonno, mi fermo",
+                    )
+                return Desired(
+                    reason="fuori stagione: non tocco il riscaldamento (sonno)"
+                )
+            if room is None:
+                # Sensore assente: non ne parte uno nuovo, ma non si
+                # interrompe nemmeno un ciclo gia' in corso su un dato
+                # transitorio mancante - stessa cautela della guardia
+                # sull'esterna qui sopra.
+                self.active_target = None
+                return Desired(reason="fuori stagione: non tocco il riscaldamento")
+            if self._winter_heating:
+                self._winter_heating = room < target_inverno
+            else:
+                tetto_casa = float(
+                    self._cfg(CONF_WINTER_HOUSE_CEILING, DEFAULT_WINTER_HOUSE_CEILING)
+                    or 0.0
+                )
+                casa = self._house_average()
+                casa_libera = tetto_casa <= 0 or casa is None or casa < tetto_casa
+                self._winter_heating = room < soglia_avvio and casa_libera
+            if not self._winter_heating:
+                self.active_target = None
+                if cur_mode == HVAC_HEAT:
+                    return Desired(
+                        hvac=HVAC_OFF, reason="inverno: camera al tetto, mi fermo"
+                    )
+                return Desired(reason="fuori stagione: non tocco il riscaldamento")
+            self.active_target = target_inverno
+            return Desired(
+                hvac=HVAC_HEAT,
+                setpoint=target_inverno,
+                reason=f"inverno: aiuto i caloriferi, target {target_inverno}",
+            )
+
+        self._winter_heating = False
 
         if cur_mode == HVAC_HEAT:
             # Never touch hvac/setpoint over a running heat cycle, but muto/notte

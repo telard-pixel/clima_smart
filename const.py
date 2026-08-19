@@ -80,6 +80,15 @@ CONF_HOUSE_SENSORS = "house_sensors"
 CONF_AUTO_START_HOUSE = "auto_start_house"
 # Guard: no daytime start at all unless it is really a hot day outside.
 CONF_AUTO_START_OUTDOOR = "auto_start_outdoor"
+# Le due soglie dell'aiuto invernale, sulla stessa aria di ripresa gia'
+# letta per il raffrescamento: sono gia' la propria isteresi (un grado di
+# distanza fra avvio e tetto), non serve aggiungerne una separata. Zero
+# disattiva tutto - il comportamento resta quello di sempre, passivo.
+CONF_WINTER_ROOM_START = "winter_room_start"
+CONF_WINTER_ROOM_TARGET = "winter_room_target"
+# Rete di sicurezza: non accende se la media delle altre stanze e' gia' al
+# tetto di casa. Zero disattiva il controllo (nessun tetto).
+CONF_WINTER_HOUSE_CEILING = "winter_house_ceiling"
 # Sotto questa esterna la notte fonda entra in un regime diverso: l'aria di
 # ripresa non basta piu' a dire se in stanza si sta gia' bene, perche' legge il
 # condotto e non il letto. Sotto soglia si media esterna e comodino, e si lascia
@@ -149,6 +158,9 @@ DEFAULT_AUTO_START_SLEEP = False
 DEFAULT_AUTO_START_ROOM = 0.0
 DEFAULT_AUTO_START_HOUSE = 0.0
 DEFAULT_AUTO_START_OUTDOOR = 0.0
+DEFAULT_WINTER_ROOM_START = 0.0    # zero: aiuto invernale disattivato
+DEFAULT_WINTER_ROOM_TARGET = 19.0
+DEFAULT_WINTER_HOUSE_CEILING = 0.0   # zero: nessun tetto casa
 DEFAULT_NIGHT_START_OUTDOOR = 20.0
 DEFAULT_ADAPTIVE_START = 0.0      # zero disattiva del tutto l'adattamento
 DEFAULT_ADAPTIVE_SLOPE = 0.25     # un quarto di grado di target per grado esterno
