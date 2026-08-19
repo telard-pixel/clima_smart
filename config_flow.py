@@ -42,6 +42,9 @@ from .const import (
     CONF_MUTE_SWITCH,
     CONF_NIGHT_START,
     CONF_NIGHT_START_OUTDOOR,
+    CONF_WINTER_ROOM_START,
+    CONF_WINTER_ROOM_TARGET,
+    CONF_WINTER_HOUSE_CEILING,
     CONF_NIGHT_SWITCH,
     CONF_OUTDOOR,
     CONF_OUTDOOR_FALLBACK,
@@ -79,6 +82,9 @@ from .const import (
     DEFAULT_MORNING_OFF_START,
     DEFAULT_NIGHT_START,
     DEFAULT_NIGHT_START_OUTDOOR,
+    DEFAULT_WINTER_ROOM_START,
+    DEFAULT_WINTER_ROOM_TARGET,
+    DEFAULT_WINTER_HOUSE_CEILING,
     DEFAULT_OVERRIDE_MINUTES,
     DEFAULT_SETPOINT_OFFSET,
     DEFAULT_SLEEP_END,
@@ -351,6 +357,24 @@ class ClimaSmartOptionsFlow(OptionsFlow):
                         CONF_NIGHT_START_OUTDOOR, DEFAULT_NIGHT_START_OUTDOOR
                     ),
                 ): vol.All(vol.Coerce(float), vol.Range(min=0, max=45)),
+                vol.Required(
+                    CONF_WINTER_ROOM_START,
+                    default=_num(
+                        CONF_WINTER_ROOM_START, DEFAULT_WINTER_ROOM_START
+                    ),
+                ): vol.All(vol.Coerce(float), vol.Range(min=0, max=30)),
+                vol.Required(
+                    CONF_WINTER_ROOM_TARGET,
+                    default=_num(
+                        CONF_WINTER_ROOM_TARGET, DEFAULT_WINTER_ROOM_TARGET
+                    ),
+                ): vol.All(vol.Coerce(float), vol.Range(min=0, max=30)),
+                vol.Required(
+                    CONF_WINTER_HOUSE_CEILING,
+                    default=_num(
+                        CONF_WINTER_HOUSE_CEILING, DEFAULT_WINTER_HOUSE_CEILING
+                    ),
+                ): vol.All(vol.Coerce(float), vol.Range(min=0, max=30)),
                 vol.Required(
                     CONF_AUTO_START_SLEEP,
                     default=_num(CONF_AUTO_START_SLEEP, DEFAULT_AUTO_START_SLEEP),
