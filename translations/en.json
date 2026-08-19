@@ -84,7 +84,11 @@
           "trim_max": "Highest target the controller may ask of the bedroom",
           "room_floor": "Temperature the bedroom must not go below (0 = no limit)",
           "hot_outdoor": "Outdoor temperature above which pushing further is pointless (0 = disabled)",
-          "trim_min_hot": "Lowest bedroom target when it is scorching outside"
+          "trim_min_hot": "Lowest bedroom target when it is scorching outside",
+          "night_start_outdoor": "Outdoor below which deep night lets the unit rest (0 = disabled)",
+          "winter_room_start": "Winter: bedroom temperature below which to help the radiators (0 = disabled)",
+          "winter_room_target": "Winter: bedroom temperature to reach, then stop",
+          "winter_house_ceiling": "Winter: do not heat if the other rooms are already this warm (0 = no limit)"
         },
         "data_description": {
           "auto_start_sleep": "If the unit is off at that time, it is switched on once. Outside that moment the controller never starts it by itself.",

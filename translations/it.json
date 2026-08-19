@@ -84,7 +84,11 @@
           "trim_max": "Target massimo che il controller può chiedere alla camera",
           "room_floor": "Temperatura sotto cui la camera non deve scendere (0 = nessun limite)",
           "hot_outdoor": "Esterna sopra cui non ha senso spingere oltre (0 = disattivato)",
-          "trim_min_hot": "Target minimo della camera quando fuori è torrido"
+          "trim_min_hot": "Target minimo della camera quando fuori è torrido",
+          "night_start_outdoor": "Esterna sotto cui la notte fonda lascia riposare la macchina (0 = disattivato)",
+          "winter_room_start": "Inverno: temperatura camera sotto cui aiutare i caloriferi (0 = disattivato)",
+          "winter_room_target": "Inverno: temperatura camera da raggiungere, poi si ferma",
+          "winter_house_ceiling": "Inverno: non scaldare se le altre stanze sono già a questa temperatura (0 = nessun limite)"
         },
         "data_description": {
           "auto_start_sleep": "Se il clima è spento all'orario di inizio, lo accende una volta sola. Fuori da quel momento il controller non accende mai da sé.",
