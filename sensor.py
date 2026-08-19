@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
+from homeassistant.components.sensor import (
+    SensorDeviceClass,
+    SensorEntity,
+    SensorStateClass,
+)
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory, UnitOfTemperature
 from homeassistant.core import HomeAssistant
@@ -47,6 +51,11 @@ class ClimaSmartHouseSensor(ClimaSmartEntity, SensorEntity):
     _attr_icon = "mdi:home-thermometer-outline"
     _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
     _attr_device_class = SensorDeviceClass.TEMPERATURE
+    # Senza questo il recorder non archivia nulla oltre la finestra di purge, e
+    # ogni taratura resta prigioniera degli ultimi giorni: le statistiche a lungo
+    # termine sono aggregati orari che sopravvivono per sempre e costano pochi
+    # byte al giorno. E' la base dati di ogni confronto fra stagioni.
+    _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_suggested_display_precision = 1
 
     def __init__(self, controller) -> None:
@@ -97,6 +106,10 @@ class ClimaSmartTargetSensor(ClimaSmartEntity, SensorEntity):
     _attr_icon = "mdi:thermometer-check"
     _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
     _attr_device_class = SensorDeviceClass.TEMPERATURE
+    # Come la media di casa: e' il target che il controller ha davvero scelto, la
+    # traccia di cosa ha deciso l'algoritmo. Senza archivio non si puo' rigiocare
+    # una giornata a distanza di mesi.
+    _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, controller) -> None:
