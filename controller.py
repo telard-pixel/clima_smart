@@ -52,6 +52,7 @@ from .const import (
     CONF_MORNING_OFF_START,
     CONF_MUTE_SWITCH,
     CONF_NIGHT_START,
+    CONF_NIGHT_START_OUTDOOR,
     CONF_NIGHT_SWITCH,
     CONF_OUTDOOR,
     CONF_OUTDOOR_FALLBACK,
@@ -93,6 +94,7 @@ from .const import (
     DEFAULT_MORNING_OFF_ENABLED,
     DEFAULT_MORNING_OFF_START,
     DEFAULT_NIGHT_START,
+    DEFAULT_NIGHT_START_OUTDOOR,
     DEFAULT_OVERRIDE_MINUTES,
     DEFAULT_PRESENCE_ENTITY,
     DEFAULT_SETPOINT_OFFSET,
@@ -108,6 +110,8 @@ from .const import (
     DRY_HUMIDITY_OFF,
     DRY_HUMIDITY_ON,
     DRY_MAX_DELTA,
+    COLD_NIGHT_HYSTERESIS,
+    EVENT_COOL_OFF,
     EVENT_STARTED,
     FAN_BANDS,
     FAN_BANDS_SLEEP,
@@ -330,6 +334,12 @@ class ClimaSmartController:
         # Il freno della saturazione e' inserito o no: anche questo con isteresi,
         # perche' guarda l'aria di ripresa, che si muove a mezzo grado per volta.
         self._saturated = False
+        # Notte fredda: il vincolo esterna+comodino e' inserito o no, con la
+        # stessa isteresi degli altri due. E se e' inserito e ha appena spento la
+        # macchina, cosi' un riavvio a riposo sa che la ripresa non ha finestra
+        # oraria: e' un rientro dal riposo, non l'avvio serale.
+        self._cold_night = False
+        self._cold_night_resting = False
         # Il giudizio del passo in giu': la media di casa al momento in cui e'
         # stato fatto, il livello a cui ha portato, e il pavimento che i passi
         # bocciati hanno lasciato per la giornata in corso.
@@ -352,6 +362,11 @@ class ClimaSmartController:
         self._sleep_start_done_on = None
         self._sleep_start_armed = False
         self._day_start_done_on = None
+        # E per lo spegnimento di una mattina fresca: come lo spegnimento del
+        # mattino, un tentativo al giorno, cosi' un riavvio non lo ritenta
+        # all'infinito ne' spegne un'unita' che l'utente ha appena riacceso.
+        self._morning_cool_off_done_on = None
+        self._morning_cool_off_armed = False
         self._vane_restored_on = None
         self._start_reason: str | None = None
 
@@ -851,6 +866,7 @@ class ClimaSmartController:
             "morning_off_done_on": giorno(self._morning_off_done_on),
             "sleep_start_done_on": giorno(self._sleep_start_done_on),
             "day_start_done_on": giorno(self._day_start_done_on),
+            "morning_cool_off_done_on": giorno(self._morning_cool_off_done_on),
             "vane_restored_on": giorno(self._vane_restored_on),
             "override_until": giorno(self._override_until),
             "adaptive_extra": self.adaptive_extra,
@@ -864,6 +880,11 @@ class ClimaSmartController:
             # e isteresi 1.0) va ripreso dal disco, altrimenti riparte spento e il
             # pavimento trim_min_hot sparisce - stessa lezione del 7 agosto.
             "hot_outdoor": self._hot_outdoor,
+            # Il terzo della famiglia: come gli altri due, senza questo un riavvio
+            # dentro il riposo per notte fredda lo perde e riparte come se la
+            # macchina fosse sempre stata spenta per conto suo, non a riposo.
+            "cold_night": self._cold_night,
+            "cold_night_resting": self._cold_night_resting,
             # Anche il giudizio sul passo deve sopravvivere a un riavvio: senza,
             # l'anello dimentica la lezione e ricomincia a spingere. Misurato l'8
             # agosto 2026: riavvio alle 18:48, e alle 18:49 ha rifatto il passo che
@@ -927,6 +948,7 @@ class ClimaSmartController:
         self._morning_off_done_on = data_di("morning_off_done_on")
         self._sleep_start_done_on = data_di("sleep_start_done_on")
         self._day_start_done_on = data_di("day_start_done_on")
+        self._morning_cool_off_done_on = data_di("morning_cool_off_done_on")
         self._vane_restored_on = data_di("vane_restored_on")
         self._override_until = istante_di("override_until")
         self._adaptive_changed_at = istante_di("adaptive_changed_at")
@@ -987,6 +1009,12 @@ class ClimaSmartController:
         self.house_trim = livello_trim_di("house_trim")
         saturato = dati.get("saturated", False)
         self._saturated = saturato if isinstance(saturato, bool) else False
+        freddo_notte = dati.get("cold_night", False)
+        self._cold_night = freddo_notte if isinstance(freddo_notte, bool) else False
+        riposo_notte = dati.get("cold_night_resting", False)
+        self._cold_night_resting = (
+            riposo_notte if isinstance(riposo_notte, bool) else False
+        )
         caldo_esterno = dati.get("hot_outdoor", False)
         self._hot_outdoor = caldo_esterno if isinstance(caldo_esterno, bool) else False
 
@@ -1271,6 +1299,59 @@ class ClimaSmartController:
         self._adaptive_changed_at = now
         self.adaptive_extra = nuovo
         return nuovo
+
+    def _cold_night_off(self, outdoor: float | None, comodino: float | None) -> bool:
+        """Se la notte fonda deve riposare perche' fuori sta gia' facendo il lavoro.
+
+        Sotto `night_start_outdoor` l'aria di ripresa non basta piu' a dire se in
+        stanza si sta gia' bene: legge il condotto, non il letto. Si media con il
+        comodino, che legge la stanza vera, e si lascia riposare la macchina
+        quando quella media e' gia' al target di notte fonda o sotto. Non e' un
+        secondo target: `target_sleep` resta l'unico, questo dice solo quando
+        raggiungerlo da soli costa niente farlo fare all'aria di fuori.
+
+        Con isteresi sulla stessa media, per lo stesso motivo di sempre: le
+        letture ballano sulla soglia.
+        """
+        soglia = float(
+            self._cfg(CONF_NIGHT_START_OUTDOOR, DEFAULT_NIGHT_START_OUTDOOR) or 0.0
+        )
+        if soglia <= 0 or outdoor is None or outdoor >= soglia or comodino is None:
+            self._cold_night = False
+            return False
+        riferimento = (outdoor + comodino) / 2
+        obiettivo = self.target_sleep
+        if self._cold_night:
+            self._cold_night = riferimento <= obiettivo + COLD_NIGHT_HYSTERESIS
+        else:
+            self._cold_night = riferimento <= obiettivo
+        return self._cold_night
+
+    def _morning_cool_off_due(self, now: datetime, outdoor: float | None) -> bool:
+        """Se una mattina troppo fresca deve fermare una macchina gia' accesa.
+
+        Simmetrico alla guardia dell'avvio diurno (`_day_start_due`), ma al
+        contrario: quella impedisce di accendere in una mattina fresca, questa
+        spegne chi era gia' acceso - dalla notte fonda, o perche' l'utente l'ha
+        riacceso a mano. Un solo tentativo al giorno, nella finestra fra la fine
+        della notte fonda e l'inizio del giorno pieno: fuori da li' decide il
+        resto dell'algoritmo, non questa guardia.
+        """
+        if self._morning_cool_off_done_on == now.date():
+            return False
+        guard = float(
+            self._cfg(CONF_AUTO_START_OUTDOOR, DEFAULT_AUTO_START_OUTDOOR) or 0.0
+        )
+        if guard <= 0 or outdoor is None or outdoor >= guard:
+            return False
+        sleep_end = _parse_time(
+            self._cfg(CONF_SLEEP_END, DEFAULT_SLEEP_END), DEFAULT_SLEEP_END
+        )
+        day_start = _parse_time(
+            self._cfg(CONF_DAY_START, DEFAULT_DAY_START), DEFAULT_DAY_START
+        )
+        t = now.time()
+        return sleep_end <= t < day_start
 
     def _hot_outdoor_floor(self, outdoor: float | None) -> float | None:
         """Il minimo che l'esterna impone al target della camera, se lo impone.
@@ -1896,6 +1977,24 @@ class ClimaSmartController:
                 return Desired(hvac=HVAC_OFF, reason="fascia 08-10: spengo")
             return Desired(reason="fascia 08-10: clima gia spento")
 
+        # Mattina fresca: simmetrico alla guardia dell'avvio diurno, ma per una
+        # macchina gia' accesa - dalla notte fonda, o perche' l'utente l'ha
+        # riaccesa a mano. Se quella mattina non fa abbastanza caldo per
+        # giustificare l'anello di giorno, si spegne; _day_start_due la fara'
+        # ripartire da sola piu' tardi lo stesso giorno se l'esterna sale sopra
+        # soglia, perche' questo ramo non tocca il suo contrassegno.
+        if (
+            cur_mode in (HVAC_COOL, HVAC_DRY)
+            and self._morning_cool_off_due(now, outdoor)
+        ):
+            # Marcato solo quando lo spegnimento e' andato a segno davvero, in
+            # async_evaluate: stessa cautela dello spegnimento del mattino.
+            self._morning_cool_off_armed = True
+            self.active_target = None
+            return Desired(
+                hvac=HVAC_OFF, reason="smart: mattina fresca, non serve raffrescare"
+            )
+
         if not summer:
             self.active_target = None
             if cooling_active:
@@ -1958,29 +2057,67 @@ class ClimaSmartController:
                 target += compensazione
         self.active_target = self._reachable_target(target, climate)
 
+        # Notte fredda: sotto night_start_outdoor la media esterna/comodino puo'
+        # dire che la stanza e' gia' al target di notte fonda mentre l'aria di
+        # ripresa legge ancora caldo. In quel caso la macchina riposa - non e'
+        # un'eccezione alla regola "non spengo mai mio conto": e' la stessa
+        # regola letta al contrario di quella della mattina fresca qui sopra.
+        freddo = notte_fonda and self._cold_night_off(outdoor, comodino)
+        if not notte_fonda:
+            self._cold_night_resting = False
+        if freddo and cur_mode in (HVAC_COOL, HVAC_DRY):
+            self._cold_night_resting = True
+            return Desired(
+                hvac=HVAC_OFF,
+                reason=f"smart {phase}: fuori sotto soglia, la camera riposa",
+            )
+
         # MODE_SMART never starts the unit: the user decides when it runs, we
         # decide how it runs, and the only switch-off we do is the scheduled one.
         if cur_mode == HVAC_OFF:
-            # L'unica eccezione alla regola "non accendo mai": l'avvio della
-            # notte, se l'utente l'ha chiesto, e una volta sola. Se sono fuori la
-            # notte fonda non parte affatto: non accendo per una stanza vuota.
-            if notte_fonda and self._sleep_start_due(now):
+            if notte_fonda and freddo:
+                # Ancora sotto la soglia fredda: resto spento senza consumare il
+                # tentativo unico dell'avvio serale, che deve restare libero per
+                # quando (se) la notte fonda tornera' a chiederlo sul serio. Marco
+                # comunque il riposo: anche se non ho mai acceso stanotte, il
+                # rientro sopra soglia non deve dipendere dalla finestra
+                # dell'avvio delle 23, che a quel punto puo' essere gia' chiusa.
+                self._cold_night_resting = True
+                return Desired(
+                    reason=f"smart {phase}: fuori sotto soglia, resto spento"
+                )
+            # Si riparte per due motivi distinti: l'avvio della notte, se
+            # l'utente l'ha chiesto e una volta sola, oppure il rientro dal
+            # riposo per notte fredda, che non ha finestra oraria perche' puo'
+            # capitare a qualunque ora - la temperatura non guarda l'orologio.
+            # Se sono fuori la notte fonda non parte affatto: non accendo per
+            # una stanza vuota.
+            riparte_dal_riposo = notte_fonda and self._cold_night_resting
+            if notte_fonda and (riparte_dal_riposo or self._sleep_start_due(now)):
                 self._sleep_start_armed = True
                 self._start_reason = START_REASON_NIGHT
+                self._cold_night_resting = False
                 self.active_target = self._reachable_target(target, climate)
                 scarto = (room - target) if room is not None else 0.0
                 # L'avvio cade sempre dentro la spinta iniziale, e una stanza che
                 # arriva dal target del giorno e' proprio il caso per cui esiste.
+                # Al rientro dal riposo invece la stanza e' gia' al target: la
+                # spinta non ha senso, bastano le bande normali.
                 partenza = (
                     self._boost_fan(scarto, climate.attributes.get("fan_modes"), now)
-                    if self._sleep_boost_active(now)
+                    if self._sleep_boost_active(now) and not riparte_dal_riposo
                     else None
+                )
+                motivo = (
+                    "sopra la soglia fredda, riparto"
+                    if riparte_dal_riposo
+                    else f"avvio della notte, target {target}"
                 )
                 return Desired(
                     hvac=HVAC_COOL,
                     setpoint=target,
                     fan=partenza or _fan_band(scarto, FAN_BANDS_SLEEP),
-                    reason=f"smart {phase}: avvio della notte, target {target}",
+                    reason=f"smart {phase}: {motivo}",
                 )
             # Anche nella fascia fra lo spegnimento del mattino e l'inizio del
             # giorno: quell'attesa era un orario fisso ereditato dai valori
@@ -2138,12 +2275,19 @@ class ClimaSmartController:
             try:
                 self._morning_off_armed = False
                 self._sleep_start_armed = False
+                self._morning_cool_off_armed = False
                 desired = self._compute(now)
                 self._apply_errors.clear()
                 await self._apply(desired)
                 if self._morning_off_armed and not self._apply_errors:
                     # The switch-off went through: no second attempt today.
                     self._morning_off_done_on = now.date()
+                if self._morning_cool_off_armed and not self._apply_errors:
+                    self._morning_cool_off_done_on = now.date()
+                    # Chi vuole avvisare di aprire le finestre ascolta questo.
+                    self.hass.bus.async_fire(
+                        EVENT_COOL_OFF, {"entity_id": self.climate_entity}
+                    )
                 if self._sleep_start_armed and not self._apply_errors:
                     if self._start_reason == START_REASON_DAY:
                         self._day_start_done_on = now.date()
@@ -2250,6 +2394,7 @@ class ClimaSmartController:
                 # Un comando che non e' andato a buon fine non va registrato come
                 # fatto, altrimenti oggi non lo si ritenta piu'.
                 self._morning_off_armed = False
+                self._morning_cool_off_armed = False
                 self._sleep_start_armed = False
                 return
             # Treat the unit as already in the target mode for the rest of this pass.

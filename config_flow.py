@@ -41,6 +41,7 @@ from .const import (
     CONF_MORNING_OFF_START,
     CONF_MUTE_SWITCH,
     CONF_NIGHT_START,
+    CONF_NIGHT_START_OUTDOOR,
     CONF_NIGHT_SWITCH,
     CONF_OUTDOOR,
     CONF_OUTDOOR_FALLBACK,
@@ -77,6 +78,7 @@ from .const import (
     DEFAULT_MORNING_OFF_ENABLED,
     DEFAULT_MORNING_OFF_START,
     DEFAULT_NIGHT_START,
+    DEFAULT_NIGHT_START_OUTDOOR,
     DEFAULT_OVERRIDE_MINUTES,
     DEFAULT_SETPOINT_OFFSET,
     DEFAULT_SLEEP_END,
@@ -342,6 +344,12 @@ class ClimaSmartOptionsFlow(OptionsFlow):
                 vol.Required(
                     CONF_AUTO_START_OUTDOOR,
                     default=_num(CONF_AUTO_START_OUTDOOR, DEFAULT_AUTO_START_OUTDOOR),
+                ): vol.All(vol.Coerce(float), vol.Range(min=0, max=45)),
+                vol.Required(
+                    CONF_NIGHT_START_OUTDOOR,
+                    default=_num(
+                        CONF_NIGHT_START_OUTDOOR, DEFAULT_NIGHT_START_OUTDOOR
+                    ),
                 ): vol.All(vol.Coerce(float), vol.Range(min=0, max=45)),
                 vol.Required(
                     CONF_AUTO_START_SLEEP,

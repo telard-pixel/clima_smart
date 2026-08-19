@@ -1748,6 +1748,123 @@ class ControllerRegressionTests(unittest.TestCase):
         self._presenza(ctrl, "unavailable")
         self.assertEqual(ctrl._compute(NOW.replace(hour=2, minute=0)).setpoint, 23.0)
 
+    # ------------------------------------------------------------ notte fredda
+    def _comodino(self, ctrl, valore):
+        ctrl.hass.states.values["sensor.comodino"] = State(str(valore), {})
+        ctrl.entry.data = dict(ctrl.entry.data, room_sensor="sensor.comodino")
+
+    def test_cold_night_above_threshold_behaves_normally(self):
+        """Sopra night_start_outdoor il vincolo non si inserisce per niente: la
+        notte fonda resta quella di sempre, media esterna/comodino o no."""
+        ctrl = self._smart_controller(room=26.0, outdoor=21.0)
+        self._orari(ctrl, target_sleep=22.0)
+        ctrl.entry.options = dict(
+            ctrl.entry.options, night_start_outdoor=20.0, summer_threshold=5.0
+        )
+        self._comodino(ctrl, 10.0)   # bassissimo: se contasse, spegnerebbe
+        desired = ctrl._compute(NOW.replace(hour=2, minute=0))
+        self.assertEqual(desired.hvac, "cool")
+        self.assertFalse(ctrl._cold_night)
+
+    def test_cold_night_skips_the_deep_night_start(self):
+        """Sotto soglia, se la media esterna/comodino e' gia' al target di notte
+        fonda, l'avvio delle 23:30 non scatta: fuori sta gia' facendo il lavoro
+        da solo, e il tentativo unico dell'avvio serale non si consuma."""
+        ctrl = self._smart_controller(room=26.0, outdoor=18.0)
+        ctrl.hass.states.values["climate.test"].state = "off"
+        self._orari(ctrl, target_sleep=22.0)
+        ctrl.entry.options = dict(
+            ctrl.entry.options, night_start_outdoor=20.0, summer_threshold=5.0
+        )
+        self._comodino(ctrl, 24.0)   # media (18+24)/2 = 21.0, sotto il target
+        desired = ctrl._compute(NOW.replace(hour=23, minute=35))
+        self.assertIsNone(desired.hvac)   # resta spento, nessun comando
+        self.assertIn("sotto soglia", desired.reason)
+        self.assertTrue(ctrl._cold_night_resting)
+
+    def test_cold_night_rest_stops_a_running_unit(self):
+        """Se la notte fonda e' gia' partita e poi l'esterna scende sotto
+        soglia con la media gia' al target, la macchina si spegne per riposare -
+        non e' il comfort a chiederlo, e' l'aria di fuori che lo offre gratis."""
+        ctrl = self._smart_controller(room=26.0, outdoor=15.0)
+        self._orari(ctrl, target_sleep=22.0)
+        ctrl.entry.options = dict(
+            ctrl.entry.options, night_start_outdoor=20.0, summer_threshold=5.0
+        )
+        self._comodino(ctrl, 21.0)   # media (15+21)/2 = 18.0
+        riposo = ctrl._compute(NOW.replace(hour=2, minute=0))
+        self.assertEqual(riposo.hvac, "off")
+        self.assertIn("riposa", riposo.reason)
+        self.assertTrue(ctrl._cold_night_resting)
+
+    def test_cold_night_rest_resumes_outside_the_start_window(self):
+        """A riposo, se il comodino risale e la media supera soglia piu'
+        isteresi, il clima riparte anche molto fuori dai 30 minuti della
+        finestra dell'avvio delle 23:30 - la temperatura non guarda l'orologio."""
+        ctrl = self._smart_controller(room=26.0, outdoor=15.0)
+        self._orari(ctrl, target_sleep=22.0)
+        ctrl.entry.options = dict(
+            ctrl.entry.options, night_start_outdoor=20.0, summer_threshold=5.0
+        )
+        self._comodino(ctrl, 21.0)
+        riposo = ctrl._compute(NOW.replace(hour=2, minute=0))
+        self.assertEqual(riposo.hvac, "off")
+        ctrl.hass.states.values["climate.test"].state = "off"
+        # Isteresi: 22.0 non basta (soglia+1=23.0), deve superarla per davvero.
+        self._comodino(ctrl, 30.0)   # media (15+30)/2 = 22.5: non ancora
+        self.assertEqual(
+            ctrl._compute(NOW.replace(hour=2, minute=30)).hvac, None
+        )
+        self._comodino(ctrl, 33.0)   # media (15+33)/2 = 24.0: sopra soglia+isteresi
+        ripresa = ctrl._compute(NOW.replace(hour=3, minute=30))   # ben fuori finestra
+        self.assertEqual(ripresa.hvac, "cool")
+        self.assertEqual(ripresa.setpoint, 22.0)
+        self.assertIn("sopra la soglia fredda", ripresa.reason)
+        self.assertFalse(ctrl._cold_night_resting)
+
+    # -------------------------------------------------------- mattina fresca
+    def test_cool_morning_stops_a_running_unit(self):
+        """Se la mattina non fa abbastanza caldo, un'unita' gia' accesa - dalla
+        notte fonda, o riaccesa a mano - si spegne: non serve l'anello di
+        giorno per una mattina fresca."""
+        ctrl = self._smart_controller(room=25.0, outdoor=22.0)
+        self._orari(ctrl, morning_off_enabled=False)
+        ctrl.entry.options = dict(ctrl.entry.options, auto_start_outdoor=26.0)
+        desired = ctrl._compute(NOW.replace(hour=8, minute=0))
+        self.assertEqual(desired.hvac, "off")
+        self.assertIn("mattina fresca", desired.reason)
+
+    def test_cool_morning_off_is_a_one_shot_per_day(self):
+        """Spento per una mattina fresca, non ci si riprova a ogni passata: un
+        solo tentativo, come lo spegnimento del mattino a orario fisso."""
+        ctrl = self._smart_controller(room=25.0, outdoor=22.0)
+        self._orari(ctrl, morning_off_enabled=False)
+        ctrl.entry.options = dict(ctrl.entry.options, auto_start_outdoor=26.0)
+        ctrl._compute(NOW.replace(hour=8, minute=0))
+        ctrl._morning_cool_off_done_on = NOW.date()
+        # L'utente lo riaccende a mano nella stessa mattina fresca.
+        ctrl.hass.states.values["climate.test"].state = "cool"
+        desired = ctrl._compute(NOW.replace(hour=8, minute=30))
+        self.assertNotEqual(desired.hvac, "off")   # non lo rispegne una seconda volta
+        self.assertNotIn("mattina fresca", desired.reason)
+
+    def test_cool_morning_off_restarts_once_it_warms_up(self):
+        """Spento per una mattina fresca, riparte da solo piu' tardi lo stesso
+        giorno se l'esterna sale sopra soglia: lo spegnimento non deve
+        consumare il contrassegno dell'avvio diurno, solo il suo."""
+        ctrl = self._smart_controller(room=27.6, outdoor=22.0)
+        self._orari(ctrl, morning_off_enabled=False)
+        ctrl.entry.options = dict(
+            ctrl.entry.options, auto_start_outdoor=26.0, auto_start_room=27.5
+        )
+        spegne = ctrl._compute(NOW.replace(hour=8, minute=0))
+        self.assertEqual(spegne.hvac, "off")
+        ctrl._morning_cool_off_done_on = NOW.date()   # marcato da async_evaluate
+        ctrl.hass.states.values["climate.test"].state = "off"
+        ctrl.hass.states.values["sensor.outdoor"].state = "30.0"
+        riparte = ctrl._compute(NOW.replace(hour=9, minute=0))
+        self.assertEqual(riparte.hvac, "cool")
+
     def test_setpoint_offset_shifts_the_command_not_the_target(self):
         ctrl = self._smart_controller(room=27.0)
         ctrl.entry.options = dict(ctrl.entry.options, setpoint_offset=-1.0)

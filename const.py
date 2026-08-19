@@ -80,6 +80,13 @@ CONF_HOUSE_SENSORS = "house_sensors"
 CONF_AUTO_START_HOUSE = "auto_start_house"
 # Guard: no daytime start at all unless it is really a hot day outside.
 CONF_AUTO_START_OUTDOOR = "auto_start_outdoor"
+# Sotto questa esterna la notte fonda entra in un regime diverso: l'aria di
+# ripresa non basta piu' a dire se in stanza si sta gia' bene, perche' legge il
+# condotto e non il letto. Sotto soglia si media esterna e comodino, e si lascia
+# riposare la macchina quando quella media e' gia' al target di notte fonda -
+# tanto fuori sta facendo il lavoro da solo. Zero disattiva: notte fonda sempre
+# uguale, come prima.
+CONF_NIGHT_START_OUTDOOR = "night_start_outdoor"
 
 # --- La linea di comfort delle altre stanze (anello esterno) ---
 # Di giorno l'obiettivo non e' la camera: sono salotto, cucina e ingresso. La
@@ -142,6 +149,7 @@ DEFAULT_AUTO_START_SLEEP = False
 DEFAULT_AUTO_START_ROOM = 0.0
 DEFAULT_AUTO_START_HOUSE = 0.0
 DEFAULT_AUTO_START_OUTDOOR = 0.0
+DEFAULT_NIGHT_START_OUTDOOR = 20.0
 DEFAULT_ADAPTIVE_START = 0.0      # zero disattiva del tutto l'adattamento
 DEFAULT_ADAPTIVE_SLOPE = 0.25     # un quarto di grado di target per grado esterno
 DEFAULT_ADAPTIVE_MAX = 1.5
@@ -214,6 +222,9 @@ HOUSE_TRIM_DEADBAND = 0.25
 # attraversare da un singolo campione e il lampeggio tornerebbe. Un grado la
 # copre con margine e dimezza comunque l'attesa rispetto a prima.
 HOT_OUTDOOR_HYSTERESIS = 1.0
+# Stessa isteresi, stesso motivo, sul lato opposto: la media esterna/comodino
+# balla sulla soglia dei 22 quanto quella esterna/hot_outdoor balla sulla sua.
+COLD_NIGHT_HYSTERESIS = 1.0
 
 # --- Anello esterno: il freno della saturazione ---
 # La camera e' lo strumento, non l'obiettivo: si accetta che stia piu' fredda del
@@ -411,6 +422,10 @@ SLEEP_START_WINDOW_MINUTES = 30
 EVENT_STARTED = "clima_smart_avviato"
 START_REASON_DAY = "giorno"
 START_REASON_NIGHT = "notte"
+
+# Fired when the morning switch-off for a cool day goes through, so an
+# automation can suggest opening the windows instead. Data: entity_id.
+EVENT_COOL_OFF = "clima_smart_spento_per_fresco"
 
 # Measured twice on this unit: an aux switch we just turned on comes back to its
 # previous value about 60-70 s later, with no user context, when the unit does not
