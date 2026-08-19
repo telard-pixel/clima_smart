@@ -431,7 +431,7 @@ class ControllerRegressionTests(unittest.TestCase):
                     "current_temperature": room,
                     "fan_mode": fan,
                     "fan_modes": ["high", "medium", "low", "auto"],
-                    "hvac_modes": ["off", "cool", "dry"],
+                    "hvac_modes": ["off", "cool", "dry", "heat"],
                     "min_temp": 16.0,
                     "max_temp": 30.0,
                     "target_temp_step": 1.0,
@@ -1945,6 +1945,61 @@ class ControllerRegressionTests(unittest.TestCase):
         desired = ctrl._compute(GIORNO)
         self.assertIsNone(desired.hvac)
         self.assertIn("non tocco il riscaldamento", desired.reason)
+
+    def test_winter_heat_setpoint_is_sent_to_the_unit(self):
+        """Il target invernale calcolato da _compute deve arrivare davvero
+        alla macchina: prima di questa prova _apply lo ignorava - il ciclo
+        passava a heat ma teneva qualunque temperatura avesse gia' impostata.
+        L'offset dell'imposta, calibrato sulla ripresa in raffrescamento, non
+        deve toccare il target invernale."""
+        ctrl = self._con_casa_inverno(room=17.5)
+        ctrl.entry.options = dict(ctrl.entry.options, setpoint_offset=1.0)
+        ctrl.hass.states.values["climate.test"].state = "off"
+        desired = ctrl._compute(GIORNO)
+        self.assertEqual(desired.hvac, "heat")
+        self.assertEqual(desired.setpoint, 19.0)
+        sent = []
+
+        async def record(domain, service, data):
+            sent.append((service, data))
+            return True
+
+        ctrl._call = record
+        asyncio.run(ctrl._apply(desired))
+        self.assertIn(("set_hvac_mode", {"hvac_mode": "heat"}), sent)
+        self.assertIn(("set_temperature", {"temperature": 19.0}), sent)
+        self.assertNotIn(("set_temperature", {"temperature": 20.0}), sent)
+
+    def test_winter_heat_fails_closed_without_house_average(self):
+        """Se il tetto di casa e' configurato ma nessun sensore di stanza e'
+        leggibile, il ciclo non deve partire di nascosto: il tetto di
+        sicurezza fallisce chiuso, non aperto, esattamente come dice lo
+        spec."""
+        ctrl = self._con_casa_inverno(room=16.0)
+        for i in range(3):
+            del ctrl.hass.states.values[f"sensor.stanza{i}"]
+        ctrl.hass.states.values["climate.test"].state = "off"
+        desired = ctrl._compute(GIORNO)
+        self.assertNotEqual(desired.hvac, "heat")
+        self.assertFalse(ctrl._winter_heating)
+
+    def test_winter_heat_rejects_crossed_thresholds(self):
+        """Soglie incrociate o uguali farebbero accendere e spegnere il
+        compressore a ogni passata: con target sotto (o uguale a) l'avvio il
+        ciclo deve restare passivo, sia alla prima passata sia a distanza di
+        minuti."""
+        ctrl = self._con_casa_inverno(room=15.0)
+        ctrl.entry.options = dict(
+            ctrl.entry.options, winter_room_start=18.0, winter_room_target=17.0
+        )
+        ctrl.hass.states.values["climate.test"].state = "off"
+        primo = ctrl._compute(GIORNO)
+        self.assertIsNone(primo.hvac)
+        self.assertFalse(ctrl._winter_heating)
+        secondo = ctrl._compute(GIORNO + timedelta(minutes=5))
+        self.assertIsNone(secondo.hvac)
+        self.assertFalse(ctrl._winter_heating)
+        self.assertEqual(primo.reason, secondo.reason)
 
     # -------------------------------------------------------- mattina fresca
     def test_cool_morning_stops_a_running_unit(self):

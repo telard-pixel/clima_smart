@@ -2022,8 +2022,10 @@ class ClimaSmartController:
             target_inverno = float(
                 self._cfg(CONF_WINTER_ROOM_TARGET, DEFAULT_WINTER_ROOM_TARGET) or 0.0
             )
-            if soglia_avvio <= 0 or target_inverno <= 0:
-                # Aiuto invernale non configurato: comportamento di sempre.
+            if soglia_avvio <= 0 or target_inverno <= 0 or target_inverno <= soglia_avvio:
+                # Aiuto invernale non configurato (o soglie incrociate/uguali,
+                # che farebbero accendere e spegnere il compressore a ogni
+                # passata): comportamento di sempre.
                 self.active_target = None
                 self._winter_heating = False
                 return Desired(reason="fuori stagione: non tocco il riscaldamento")
@@ -2059,7 +2061,11 @@ class ClimaSmartController:
                     or 0.0
                 )
                 casa = self._house_average()
-                casa_libera = tetto_casa <= 0 or casa is None or casa < tetto_casa
+                # Fail closed: un tetto configurato senza una media di casa
+                # leggibile blocca la partenza, non la lascia passare.
+                casa_libera = tetto_casa <= 0 or (
+                    casa is not None and casa < tetto_casa
+                )
                 self._winter_heating = room < soglia_avvio and casa_libera
             if not self._winter_heating:
                 self.active_target = None
@@ -2068,7 +2074,7 @@ class ClimaSmartController:
                         hvac=HVAC_OFF, reason="inverno: camera al tetto, mi fermo"
                     )
                 return Desired(reason="fuori stagione: non tocco il riscaldamento")
-            self.active_target = target_inverno
+            self.active_target = self._reachable_target(target_inverno, climate)
             return Desired(
                 hvac=HVAC_HEAT,
                 setpoint=target_inverno,
@@ -2476,21 +2482,25 @@ class ClimaSmartController:
             # Treat the unit as already in the target mode for the rest of this pass.
             cur_mode = desired.hvac
 
-        # Setpoint / fan / eco only make sense while we intend the unit to cool or
-        # dehumidify (MODE_SMART's `dry` still takes a setpoint and a fan step).
-        if not hvac_blocked and desired.hvac in (HVAC_COOL, HVAC_DRY):
-            # 2) Setpoint. Snap the desired value to the climate's own step
-            # first (a unit that quantizes, e.g. to whole degrees, would report
-            # back a value that never equals ours and we would re-send at every
-            # pass); the small tolerance absorbs float noise in the reported
-            # state. _last_setpoint_cmd stores the snapped value, so the manual
-            # detection compares against what the device will actually echo.
-            # The offset shifts what the unit is asked for, never the target we aim
-            # the room at: active_target and the eco decision keep using the real
-            # goal, so the diagnostics do not start lying to compensate a machine.
+        # 2) Setpoint. Cooling/dry and the winter heat-assist cycle all send one
+        # (fan/eco below stay cooling-only: the winter spec leaves fan/vane
+        # untouched, "start simple" until there is field data to justify more).
+        # Snap the desired value to the climate's own step first (a unit that
+        # quantizes, e.g. to whole degrees, would report back a value that never
+        # equals ours and we would re-send at every pass); the small tolerance
+        # absorbs float noise in the reported state. _last_setpoint_cmd stores the
+        # snapped value, so the manual detection compares against what the device
+        # will actually echo.
+        # The offset shifts what the unit is asked for, never the target we aim
+        # the room at: active_target and the eco decision keep using the real
+        # goal, so the diagnostics do not start lying to compensate a machine.
+        # It is calibrated for cooling overshoot on the return-air reading only:
+        # no field data yet justifies applying it to the winter heat setpoint.
+        if not hvac_blocked and desired.hvac in (HVAC_COOL, HVAC_DRY, HVAC_HEAT):
             want_set = desired.setpoint
-            if want_set is not None:
+            if want_set is not None and desired.hvac != HVAC_HEAT:
                 want_set += self.setpoint_offset
+            if want_set is not None:
                 want_set = _convert_temperature(
                     want_set, UnitOfTemperature.CELSIUS, climate_unit
                 )
@@ -2512,6 +2522,10 @@ class ClimaSmartController:
                     self._last_setpoint_cmd = prev
                     self._settle_setpoint_until = None
 
+        # Fan / eco only make sense while we intend the unit to cool or
+        # dehumidify (MODE_SMART's `dry` still takes a fan step); the winter
+        # heat-assist cycle above stops at the setpoint.
+        if not hvac_blocked and desired.hvac in (HVAC_COOL, HVAC_DRY):
             # 3) Fan, unless the unit is in quiet mode. Measured on the real unit:
             # with `muto` on it puts the fan back to `auto` about a minute after our
             # command, and that contextless divergence is exactly what
