@@ -191,6 +191,12 @@
       },
       "winter_house_ceiling": {
         "name": "Winter: house ceiling"
+      },
+      "night_mild_outdoor": {
+        "name": "Mild night: outdoor below"
+      },
+      "target_sleep_mild": {
+        "name": "Mild night: room target"
       }
     }
   },

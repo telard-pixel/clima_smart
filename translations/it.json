@@ -191,6 +191,12 @@
       },
       "winter_house_ceiling": {
         "name": "Inverno: tetto casa"
+      },
+      "night_mild_outdoor": {
+        "name": "Notte mite: esterna sotto"
+      },
+      "target_sleep_mild": {
+        "name": "Notte mite: target camera"
       }
     }
   },
