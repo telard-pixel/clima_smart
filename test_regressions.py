@@ -2058,6 +2058,30 @@ class ControllerRegressionTests(unittest.TestCase):
         self.assertIsNone(desired.hvac)
         self.assertIn("chiedo il permesso", desired.reason)
 
+    def test_approval_fires_the_night_event_and_marks_the_evening(self):
+        """Lo stesso percorso, ma passato per `async_evaluate`: deve lanciare
+        l'evento col payload della notte fonda (non quello del giorno) e
+        marcare `_sleep_start_done_on`, lasciando `_day_start_done_on`
+        intatto - e' il ramo `else` di `async_evaluate` a dover scegliere il
+        contrassegno giusto, non l'altro."""
+        ctrl = self._con_approvazione(room=26.0)
+        self._orari(ctrl, target_sleep=22.0)   # notte fonda dalle 23:30
+        ctrl.entry.options = dict(ctrl.entry.options, auto_start_sleep=True)
+        sera = NOW.replace(hour=23, minute=35)
+        self._pronto_a_valutare(ctrl, quando=sera)
+        asyncio.run(ctrl.async_evaluate("prova"))
+        eventi = self._eventi(ctrl, controller_module.EVENT_APPROVAL_NEEDED)
+        self.assertEqual(len(eventi), 1)
+        dati = eventi[0]
+        self.assertEqual(dati["entity_id"], "climate.test")
+        self.assertEqual(dati["fase"], "sleep")
+        self.assertIn("notte fonda", dati["motivo"])
+        self.assertAlmostEqual(dati["camera"], 26.0)
+        self.assertAlmostEqual(dati["esterna"], 30.0)
+        self.assertIsNotNone(dati["target"])
+        self.assertEqual(ctrl._sleep_start_done_on, sera.date())
+        self.assertIsNone(ctrl._day_start_done_on)
+
     def test_approval_does_not_ask_to_resume_from_the_cold_night_rest(self):
         """La ripresa dal riposo per notte fredda non e' un avvio nuovo: e' il
         rientro da una pausa decisa dal controller su un'unita' che era gia'
