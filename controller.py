@@ -77,6 +77,7 @@ from .const import (
     CONF_VANE_H,
     CONF_VANE_SLEEP,
     CONF_VANE_V,
+    CONF_START_APPROVAL,
     DEFAULT_ADAPTIVE_MAX,
     DEFAULT_HOT_OUTDOOR,
     DEFAULT_HOUSE_TARGET,
@@ -90,6 +91,7 @@ from .const import (
     DEFAULT_AUTO_START_OUTDOOR,
     DEFAULT_AUTO_START_ROOM,
     DEFAULT_AUTO_START_SLEEP,
+    DEFAULT_START_APPROVAL,
     DEFAULT_DAY_START,
     DEFAULT_ECO_BAND,
     DEFAULT_ECO_OUTDOOR_OFF,
@@ -117,6 +119,7 @@ from .const import (
     DRY_HUMIDITY_ON,
     DRY_MAX_DELTA,
     COLD_NIGHT_HYSTERESIS,
+    EVENT_APPROVAL_NEEDED,
     EVENT_COOL_OFF,
     EVENT_STARTED,
     FAN_BANDS,
@@ -371,6 +374,11 @@ class ClimaSmartController:
         # Stessa coppia per l'avvio serale.
         self._sleep_start_done_on = None
         self._sleep_start_armed = False
+        # I dati dell'evento di richiesta, armati da `_compute` e lanciati da
+        # `async_evaluate`: stesso schema degli altri contrassegni, ma qui non
+        # c'e' nessun comando da mandare all'unita', quindi non dipende
+        # dall'esito di `_apply`.
+        self._approval_armed: dict | None = None
         self._day_start_done_on = None
         # E per lo spegnimento di una mattina fresca: come lo spegnimento del
         # mattino, un tentativo al giorno, cosi' un riavvio non lo ritenta
@@ -1687,6 +1695,11 @@ class ClimaSmartController:
             return None
         return sum(letture) / len(letture)
 
+    def _start_approval(self) -> bool:
+        """Se l'avvio deve passare da una persona invece di scattare da solo."""
+        valore = self._cfg(CONF_START_APPROVAL, DEFAULT_START_APPROVAL)
+        return bool(valore) if valore is not None else DEFAULT_START_APPROVAL
+
     def _day_start_due(
         self, now: datetime, room: float | None, outdoor: float | None
     ) -> str | None:
@@ -2176,6 +2189,24 @@ class ClimaSmartController:
             # una stanza vuota.
             riparte_dal_riposo = notte_fonda and self._cold_night_resting
             if notte_fonda and (riparte_dal_riposo or self._sleep_start_due(now)):
+                # La ripresa dal riposo per notte fredda non chiede il
+                # permesso: non e' un avvio nuovo, e' il rientro da una pausa
+                # decisa dal controller su un'unita' gia' accesa col consenso
+                # dell'utente.
+                if self._start_approval() and not riparte_dal_riposo:
+                    self._start_reason = START_REASON_NIGHT
+                    self._approval_armed = {
+                        "motivo": f"notte fonda, target {target}",
+                        "fase": phase,
+                        "casa": casa,
+                        "camera": room,
+                        "esterna": outdoor,
+                        "target": self._reachable_target(target, climate),
+                    }
+                    self.active_target = None
+                    return Desired(
+                        reason=f"smart {phase}: chiedo il permesso, notte fonda"
+                    )
                 self._sleep_start_armed = True
                 self._start_reason = START_REASON_NIGHT
                 self._cold_night_resting = False
@@ -2212,6 +2243,20 @@ class ClimaSmartController:
                 self._day_start_due(now, room, outdoor) if puo_partire else None
             )
             if perche is not None:
+                if self._start_approval():
+                    self._start_reason = START_REASON_DAY
+                    self._approval_armed = {
+                        "motivo": perche,
+                        "fase": phase,
+                        "casa": casa,
+                        "camera": room,
+                        "esterna": outdoor,
+                        "target": self._reachable_target(target, climate),
+                    }
+                    self.active_target = None
+                    return Desired(
+                        reason=f"smart {phase}: chiedo il permesso, {perche}"
+                    )
                 self._sleep_start_armed = True
                 self._start_reason = START_REASON_DAY
                 self.active_target = self._reachable_target(target, climate)
@@ -2358,6 +2403,7 @@ class ClimaSmartController:
                 self._morning_off_armed = False
                 self._sleep_start_armed = False
                 self._morning_cool_off_armed = False
+                self._approval_armed = None
                 desired = self._compute(now)
                 self._apply_errors.clear()
                 await self._apply(desired)
@@ -2384,6 +2430,17 @@ class ClimaSmartController:
                             "phase": self.current_phase,
                             "motivo": self._start_reason,
                         },
+                    )
+                if self._approval_armed is not None:
+                    # Marcata come se l'avvio fosse avvenuto: e' cosi' che un
+                    # silenzio o un no chiudono la giornata senza altro stato.
+                    if self._start_reason == START_REASON_DAY:
+                        self._day_start_done_on = now.date()
+                    else:
+                        self._sleep_start_done_on = now.date()
+                    self.hass.bus.async_fire(
+                        EVENT_APPROVAL_NEEDED,
+                        {"entity_id": self.climate_entity, **self._approval_armed},
                     )
             except Exception as err:  # noqa: BLE001 - one bad pass must not wedge the loop silently
                 _LOGGER.exception(

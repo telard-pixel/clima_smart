@@ -66,6 +66,14 @@ CONF_VANE_DAY_V = "vane_day_vertical"
 # of the sleep window, it may: one attempt per night, so that switching the climate
 # off later in the night is not undone at the next pass.
 CONF_AUTO_START_SLEEP = "auto_start_sleep"
+# Con questa accesa il controller non accende mai da solo: quando le
+# condizioni di avvio scattano lancia un evento e lascia decidere una
+# persona. Serve perche' le soglie misurate non sanno tutto - il 20 agosto
+# 2026 l'avvio e' scattato a regola d'arte un'ora prima di un temporale che
+# ha portato l'esterna da 30 a 22 gradi da solo. Chi ascolta l'evento (una
+# automazione, fuori di qui) chiede e poi accende. Spenta di default:
+# nessuna installazione esistente cambia comportamento.
+CONF_START_APPROVAL = "start_approval"
 # Daytime start: the room temperature at which the controller switches the unit on
 # by itself, once a day. Zero disables it. This is a real start - the room has got
 # hot and someone has to close the windows - while the evening one is just the
@@ -155,6 +163,7 @@ DEFAULT_SETPOINT_OFFSET = 0.0
 DEFAULT_VANE_SLEEP = "swing"
 DEFAULT_VANE_DAY = ""
 DEFAULT_AUTO_START_SLEEP = False
+DEFAULT_START_APPROVAL = False
 DEFAULT_AUTO_START_ROOM = 0.0
 DEFAULT_AUTO_START_HOUSE = 0.0
 DEFAULT_AUTO_START_OUTDOOR = 0.0
@@ -432,6 +441,10 @@ SLEEP_START_WINDOW_MINUTES = 30
 # announce it. Data: entity_id, target, phase, and `motivo`, which tells the two
 # apart: "giorno" is the room getting hot, "notte" is the schedule beginning.
 EVENT_STARTED = "clima_smart_avviato"
+# Lanciato quando il controller avrebbe avviato ma `start_approval` glielo
+# impedisce: chi ascolta chiede a una persona e, se acconsente, accende.
+# Dati: entity_id, motivo, fase, casa, camera, esterna, target.
+EVENT_APPROVAL_NEEDED = "clima_smart_avvio_richiesto"
 START_REASON_DAY = "giorno"
 START_REASON_NIGHT = "notte"
 

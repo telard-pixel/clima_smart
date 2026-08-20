@@ -1946,6 +1946,153 @@ class ControllerRegressionTests(unittest.TestCase):
         self.assertIsNone(desired.hvac)
         self.assertIn("non tocco il riscaldamento", desired.reason)
 
+    # --------------------------------------------- approvazione dell'avvio
+    def _con_approvazione(self, room=28.0, altre=(28.0, 28.0, 28.0), outdoor=30.0):
+        """Condizioni di avvio diurno gia' soddisfatte, con l'approvazione
+        accesa. Il clima e' spento: e' il caso in cui il controller
+        partirebbe da solo."""
+        ctrl = self._smart_controller(room=room, outdoor=outdoor)
+        ctrl.hass.states.values["climate.test"].state = "off"
+        for i, v in enumerate(altre):
+            ctrl.hass.states.values[f"sensor.stanza{i}"] = State(
+                str(v), {"unit_of_measurement": "°C"}
+            )
+        ctrl.entry.data = dict(
+            ctrl.entry.data,
+            house_sensors=[f"sensor.stanza{i}" for i in range(len(altre))],
+        )
+        ctrl.entry.options = dict(
+            ctrl.entry.options,
+            auto_start_outdoor=26.0,
+            # Sopra la lettura di default della camera (28.0): a scattare deve
+            # essere la soglia di casa, non quella di camera, cosi' i test che
+            # verificano il motivo dell'evento vedono "casa" e non "stanza".
+            auto_start_room=29.0,
+            auto_start_house=27.5,
+            morning_off_enabled=False,
+            start_approval=True,
+        )
+        return ctrl
+
+    def _eventi(self, ctrl, tipo):
+        return [d for t, d in ctrl.hass.bus.eventi if t == tipo]
+
+    def _pronto_a_valutare(self, ctrl, quando=GIORNO):
+        """Quel che serve a `async_evaluate` per arrivare davvero alla logica.
+
+        Tre inciampi, tutti gia' pagati altrove in questo file: senza
+        `_restore_event` la passata esce subito ("attendo ripristino"); senza
+        orologio fissato userebbe l'ora vera del calcolatore, e la prova
+        cambierebbe risultato secondo l'ora in cui gira; e `_call` va sostituito
+        perche' l'Hass finto non ha `services`, quindi un comando vero
+        riempirebbe `_apply_errors` e i contrassegni non verrebbero mai marcati.
+        """
+        self._orologio(quando)
+        ctrl._restore_event.set()
+        inviati = []
+
+        async def registra(domain, service, data):
+            inviati.append((service, data))
+            return True
+
+        ctrl._call = registra
+        return inviati
+
+    def test_approval_blocks_the_daytime_start(self):
+        """Con l'approvazione accesa il controller non accende: annuncia e
+        aspetta che qualcuno decida."""
+        ctrl = self._con_approvazione()
+        desired = ctrl._compute(GIORNO)
+        self.assertIsNone(desired.hvac)
+        self.assertIn("chiedo il permesso", desired.reason)
+
+    def test_approval_fires_the_event_with_the_numbers_to_decide_on(self):
+        """L'evento deve bastare, da solo, a comporre il messaggio: motivo,
+        fase e le tre temperature. Chi ascolta non deve rileggere gli stati."""
+        ctrl = self._con_approvazione()
+        self._pronto_a_valutare(ctrl)
+        asyncio.run(ctrl.async_evaluate("prova"))
+        eventi = self._eventi(ctrl, controller_module.EVENT_APPROVAL_NEEDED)
+        self.assertEqual(len(eventi), 1)
+        dati = eventi[0]
+        self.assertEqual(dati["entity_id"], "climate.test")
+        self.assertEqual(dati["fase"], "day")
+        self.assertIn("casa", dati["motivo"])
+        self.assertAlmostEqual(dati["casa"], 28.0)
+        self.assertAlmostEqual(dati["camera"], 28.0)
+        self.assertAlmostEqual(dati["esterna"], 30.0)
+        self.assertIsNotNone(dati["target"])
+
+    def test_approval_asks_once_per_day(self):
+        """Chiesto una volta, non si richiede: il contrassegno del giorno
+        viene marcato come se l'avvio fosse avvenuto, cosi' un silenzio o un
+        no chiudono la questione senza bisogno di altro stato."""
+        ctrl = self._con_approvazione()
+        self._pronto_a_valutare(ctrl)
+        asyncio.run(ctrl.async_evaluate("prima"))
+        self.assertEqual(ctrl._day_start_done_on, GIORNO.date())
+        asyncio.run(ctrl.async_evaluate("seconda"))
+        eventi = self._eventi(ctrl, controller_module.EVENT_APPROVAL_NEEDED)
+        self.assertEqual(len(eventi), 1, "non deve richiedere nella stessa giornata")
+
+    def test_approval_survives_a_restart(self):
+        """Un riavvio nel pomeriggio non deve far ripartire le domande: il
+        contrassegno e' gia' fra quelli persistiti."""
+        ctrl = self._con_approvazione()
+        self._pronto_a_valutare(ctrl)
+        asyncio.run(ctrl.async_evaluate("prima"))
+        asyncio.run(ctrl._async_save_memoria())
+        dopo = self._riavvia(ctrl)
+        self.assertEqual(dopo._day_start_done_on, GIORNO.date())
+
+    def test_approval_blocks_the_evening_start_too(self):
+        """Anche l'avvio della notte fonda chiede il permesso, e se nessuno
+        risponde la notte fonda non parte."""
+        ctrl = self._con_approvazione(room=26.0)
+        self._orari(ctrl, target_sleep=22.0)   # notte fonda dalle 23:30
+        ctrl.entry.options = dict(ctrl.entry.options, auto_start_sleep=True)
+        # Dentro i trenta minuti di finestra dell'avvio serale, non prima:
+        # alle 23:05 la fase sarebbe ancora `night` e il ramo non si aprirebbe.
+        sera = NOW.replace(hour=23, minute=35)
+        desired = ctrl._compute(sera)
+        self.assertIsNone(desired.hvac)
+        self.assertIn("chiedo il permesso", desired.reason)
+
+    def test_approval_does_not_ask_to_resume_from_the_cold_night_rest(self):
+        """La ripresa dal riposo per notte fredda non e' un avvio nuovo: e' il
+        rientro da una pausa decisa dal controller su un'unita' che era gia'
+        accesa col consenso dell'utente. Chiedere li' sarebbe rumore."""
+        ctrl = self._con_approvazione(room=26.0, outdoor=15.0)
+        self._orari(ctrl, target_sleep=22.0)
+        ctrl.entry.options = dict(
+            ctrl.entry.options, night_start_outdoor=20.0, summer_threshold=5.0
+        )
+        ctrl.hass.states.values["sensor.comodino"] = State("21.0", {})
+        ctrl.entry.data = dict(ctrl.entry.data, room_sensor="sensor.comodino")
+        notte = NOW.replace(hour=2, minute=0)
+        ctrl.hass.states.values["climate.test"].state = "cool"
+        self.assertEqual(ctrl._compute(notte).hvac, "off")   # entra in riposo
+        self.assertTrue(ctrl._cold_night_resting)
+        ctrl.hass.states.values["climate.test"].state = "off"
+        ctrl.hass.states.values["sensor.comodino"] = State("33.0", {})
+        ripresa = ctrl._compute(NOW.replace(hour=3, minute=0))
+        self.assertEqual(ripresa.hvac, "cool")
+        self.assertNotIn("chiedo il permesso", ripresa.reason)
+
+    def test_without_approval_nothing_changes(self):
+        """Spenta - il default - il comportamento resta quello di sempre:
+        nessun evento, avvio normale. Protegge ogni altra installazione."""
+        ctrl = self._con_approvazione()
+        ctrl.entry.options = dict(ctrl.entry.options, start_approval=False)
+        inviati = self._pronto_a_valutare(ctrl)
+        asyncio.run(ctrl.async_evaluate("prova"))
+        self.assertEqual(self._eventi(ctrl, controller_module.EVENT_APPROVAL_NEEDED), [])
+        # Positiva, non solo negativa: senza questa la prova passerebbe anche
+        # se il controller non avesse fatto proprio nulla.
+        self.assertIn("set_hvac_mode", [s for s, _ in inviati])
+        avviati = self._eventi(ctrl, controller_module.EVENT_STARTED)
+        self.assertEqual(len(avviati), 1, "deve essere partito davvero")
+
     def test_winter_heat_setpoint_is_sent_to_the_unit(self):
         """Il target invernale calcolato da _compute deve arrivare davvero
         alla macchina: prima di questa prova _apply lo ignorava - il ciclo
