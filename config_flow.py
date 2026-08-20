@@ -41,6 +41,7 @@ from .const import (
     CONF_MORNING_OFF_START,
     CONF_MUTE_SWITCH,
     CONF_NIGHT_START,
+    CONF_NIGHT_MILD_OUTDOOR,
     CONF_NIGHT_START_OUTDOOR,
     CONF_START_APPROVAL,
     CONF_WINTER_ROOM_START,
@@ -57,6 +58,7 @@ from .const import (
     CONF_SUMMER_THRESHOLD,
     CONF_TARGET_HOME,
     CONF_TARGET_SLEEP,
+    CONF_TARGET_SLEEP_MILD,
     CONF_VANE_DAY_H,
     CONF_VANE_DAY_V,
     CONF_VANE_H,
@@ -82,6 +84,7 @@ from .const import (
     DEFAULT_MORNING_OFF_ENABLED,
     DEFAULT_MORNING_OFF_START,
     DEFAULT_NIGHT_START,
+    DEFAULT_NIGHT_MILD_OUTDOOR,
     DEFAULT_NIGHT_START_OUTDOOR,
     DEFAULT_START_APPROVAL,
     DEFAULT_WINTER_ROOM_START,
@@ -94,6 +97,7 @@ from .const import (
     DEFAULT_SUMMER_THRESHOLD,
     DEFAULT_TARGET_HOME,
     DEFAULT_TARGET_SLEEP,
+    DEFAULT_TARGET_SLEEP_MILD,
     DEFAULT_VANE_DAY,
     DEFAULT_VANE_SLEEP,
     DOMAIN,
@@ -359,6 +363,18 @@ class ClimaSmartOptionsFlow(OptionsFlow):
                         CONF_NIGHT_START_OUTDOOR, DEFAULT_NIGHT_START_OUTDOOR
                     ),
                 ): vol.All(vol.Coerce(float), vol.Range(min=0, max=45)),
+                vol.Required(
+                    CONF_NIGHT_MILD_OUTDOOR,
+                    default=_num(
+                        CONF_NIGHT_MILD_OUTDOOR, DEFAULT_NIGHT_MILD_OUTDOOR
+                    ),
+                ): vol.All(vol.Coerce(float), vol.Range(min=0, max=45)),
+                vol.Required(
+                    CONF_TARGET_SLEEP_MILD,
+                    default=_num(
+                        CONF_TARGET_SLEEP_MILD, DEFAULT_TARGET_SLEEP_MILD
+                    ),
+                ): vol.All(vol.Coerce(float), vol.Range(min=16, max=30)),
                 vol.Required(
                     CONF_WINTER_ROOM_START,
                     default=_num(

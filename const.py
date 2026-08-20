@@ -105,6 +105,21 @@ CONF_WINTER_HOUSE_CEILING = "winter_house_ceiling"
 # uguale, come prima.
 CONF_NIGHT_START_OUTDOOR = "night_start_outdoor"
 
+# --- Notte mite: fuori e' fresco ma le finestre restano chiuse ---
+# Fra la notte normale e la pausa per notte fredda manca una via di mezzo, e
+# nasce da un vincolo che non e' termico ma di sicurezza: di notte le finestre
+# restano chiuse, quindi l'aria fresca di fuori non entra e il clima resta
+# l'unica cosa che raffredda. Pero' con l'esterna bassa i muri smettono di
+# spingere calore dentro, e inseguire il target pieno diventa spesa senza
+# guadagno: la notte del 21 agosto 2026, con 21 gradi fuori, la macchina
+# lavorava a 460-580 W per scendere da 26.5 a 22.
+# Quindi sotto `night_mild_outdoor` la notte fonda si accontenta di
+# `target_sleep_mild`, piu' alto del target pieno. Non e' la pausa per notte
+# fredda, che spegne: qui la macchina continua a lavorare, solo con un obiettivo
+# meno ambizioso. Zero disattiva: notte fonda sempre uguale, come prima.
+CONF_NIGHT_MILD_OUTDOOR = "night_mild_outdoor"
+CONF_TARGET_SLEEP_MILD = "target_sleep_mild"
+
 # --- La linea di comfort delle altre stanze (anello esterno) ---
 # Di giorno l'obiettivo non e' la camera: sono salotto, cucina e ingresso. La
 # camera e' lo strumento - sta piu' fredda perche' e' la sorgente di freddo di
@@ -171,6 +186,8 @@ DEFAULT_WINTER_ROOM_START = 0.0    # zero: aiuto invernale disattivato
 DEFAULT_WINTER_ROOM_TARGET = 19.0
 DEFAULT_WINTER_HOUSE_CEILING = 0.0   # zero: nessun tetto casa
 DEFAULT_NIGHT_START_OUTDOOR = 20.0
+DEFAULT_NIGHT_MILD_OUTDOOR = 0.0   # zero: nessuna notte mite, come prima
+DEFAULT_TARGET_SLEEP_MILD = 23.0
 DEFAULT_ADAPTIVE_START = 0.0      # zero disattiva del tutto l'adattamento
 DEFAULT_ADAPTIVE_SLOPE = 0.25     # un quarto di grado di target per grado esterno
 DEFAULT_ADAPTIVE_MAX = 1.5
@@ -246,6 +263,12 @@ HOT_OUTDOOR_HYSTERESIS = 1.0
 # Stessa isteresi, stesso motivo, sul lato opposto: la media esterna/comodino
 # balla sulla soglia dei 22 quanto quella esterna/hot_outdoor balla sulla sua.
 COLD_NIGHT_HYSTERESIS = 1.0
+# E ancora la stessa, sulla soglia della notte mite. Qui il segnale e' l'esterna
+# nuda, che di notte scivola lentamente ma balla sul decimo: senza banda, una
+# notte assestata a ridosso della soglia farebbe rimbalzare il target fra pieno
+# e mite - e un grado di target su questa macchina e' un grado di scarto, che si
+# trascina dietro anche la ventola.
+NIGHT_MILD_HYSTERESIS = 1.0
 
 # --- Anello esterno: il freno della saturazione ---
 # La camera e' lo strumento, non l'obiettivo: si accetta che stia piu' fredda del

@@ -90,7 +90,9 @@
           "winter_room_target": "Inverno: temperatura camera da raggiungere, poi si ferma",
           "winter_house_ceiling": "Inverno: non scaldare se le altre stanze sono già a questa temperatura (0 = nessun limite)",
           "start_approval": "Chiedi il permesso prima di avviare (invece di partire da solo)",
-          "morning_off_enabled": "Spegni al mattino all'orario fisso e attendi l'inizio del giorno"
+          "morning_off_enabled": "Spegnimento del mattino attivo",
+          "night_mild_outdoor": "Notte mite: esterna sotto cui la notte fonda si accontenta (0 = disattivato)",
+          "target_sleep_mild": "Notte mite: target della camera quando fuori è fresco"
         },
         "data_description": {
           "auto_start_sleep": "Se il clima è spento all'orario di inizio, lo accende una volta sola. Fuori da quel momento il controller non accende mai da sé.",
@@ -207,6 +209,12 @@
     },
     "winter_target_not_above_start": {
       "message": "Il target invernale della camera deve stare sopra la soglia di avvio, altrimenti il compressore si accende e si spegne di continuo. Usa 0 per disattivare l'aiuto invernale."
+    },
+    "sleep_mild_not_above_sleep": {
+      "message": "Il target della notte mite deve stare sopra quello della notte fonda: se no una notte fresca verrebbe raffreddata più di una calda."
+    },
+    "sleep_not_below_sleep_mild": {
+      "message": "Il target della notte fonda deve stare sotto quello della notte mite: se no una notte fresca verrebbe raffreddata più di una calda. Metti a 0 la soglia della notte mite per disattivarla."
     }
   }
 }

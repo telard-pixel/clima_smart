@@ -19,11 +19,13 @@ from .const import (
     CONF_ECO_BAND,
     CONF_ECO_OUTDOOR_OFF,
     CONF_ECO_OUTDOOR_ON,
+    CONF_NIGHT_MILD_OUTDOOR,
     CONF_OVERRIDE_MINUTES,
     CONF_SETPOINT_OFFSET,
     CONF_SUMMER_THRESHOLD,
     CONF_TARGET_HOME,
     CONF_TARGET_SLEEP,
+    CONF_TARGET_SLEEP_MILD,
     CONF_WINTER_HOUSE_CEILING,
     CONF_WINTER_ROOM_START,
     CONF_WINTER_ROOM_TARGET,
@@ -31,11 +33,13 @@ from .const import (
     DEFAULT_ECO_BAND,
     DEFAULT_ECO_OUTDOOR_OFF,
     DEFAULT_ECO_OUTDOOR_ON,
+    DEFAULT_NIGHT_MILD_OUTDOOR,
     DEFAULT_OVERRIDE_MINUTES,
     DEFAULT_SETPOINT_OFFSET,
     DEFAULT_SUMMER_THRESHOLD,
     DEFAULT_TARGET_HOME,
     DEFAULT_TARGET_SLEEP,
+    DEFAULT_TARGET_SLEEP_MILD,
     DEFAULT_WINTER_HOUSE_CEILING,
     DEFAULT_WINTER_ROOM_START,
     DEFAULT_WINTER_ROOM_TARGET,
@@ -64,6 +68,17 @@ _NUMBERS: tuple[TuneNumber, ...] = (
                unit=UnitOfTemperature.CELSIUS),
     TuneNumber(device_class=NumberDeviceClass.TEMPERATURE, key=CONF_TARGET_SLEEP, default=DEFAULT_TARGET_SLEEP,
                minimum=16, maximum=30, step=0.5, icon="mdi:bed",
+               unit=UnitOfTemperature.CELSIUS),
+    # La coppia della notte mite, accanto a target_sleep perche' e' la sua
+    # variante: stessa fascia oraria, stesso ruolo, si differenziano solo per
+    # quanto fa fresco fuori. Zero sulla soglia disattiva tutto.
+    TuneNumber(device_class=NumberDeviceClass.TEMPERATURE, key=CONF_NIGHT_MILD_OUTDOOR,
+               default=DEFAULT_NIGHT_MILD_OUTDOOR,
+               minimum=0, maximum=30, step=0.5, icon="mdi:weather-night-partly-cloudy",
+               unit=UnitOfTemperature.CELSIUS),
+    TuneNumber(device_class=NumberDeviceClass.TEMPERATURE, key=CONF_TARGET_SLEEP_MILD,
+               default=DEFAULT_TARGET_SLEEP_MILD,
+               minimum=16, maximum=30, step=0.5, icon="mdi:bed-outline",
                unit=UnitOfTemperature.CELSIUS),
     TuneNumber(key=CONF_SETPOINT_OFFSET, default=DEFAULT_SETPOINT_OFFSET,
                minimum=-3, maximum=3, step=0.5, icon="mdi:tune-vertical",
@@ -134,12 +149,12 @@ class ClimaSmartNumber(ClimaSmartEntity, NumberEntity):
             return float(entry.options[self._desc.key])
         return float(entry.data.get(self._desc.key, self._desc.default))
 
-    def _winter_option(self, key: str, default: float) -> float:
-        """L'altra soglia della coppia invernale, come la legge il controller.
+    def _altra_opzione(self, key: str, default: float) -> float:
+        """L'altra soglia di una coppia legata, come la legge il controller.
 
-        Non c'e' una proprieta' sul controller per queste due - le legge dalle
-        opzioni al momento di decidere - quindi qui si guarda nello stesso
-        posto, invece di aggiungere due proprieta' usate solo da questa guardia.
+        Il controller legge queste soglie dalle opzioni al momento di decidere,
+        senza esporle come proprieta', quindi qui si guarda nello stesso posto
+        invece di aggiungere proprieta' usate solo da queste guardie.
         """
         entry = self._controller.entry
         grezzo = entry.options.get(key, entry.data.get(key, default))
@@ -170,15 +185,36 @@ class ClimaSmartNumber(ClimaSmartEntity, NumberEntity):
         # "non configurate", ma dirlo qui e' onesto: chi gira la manopola vede
         # perche' quel valore non va, invece di trovarsi la funzione muta.
         # Lo zero resta libero in entrambe: e' il modo di disattivare.
+        # Il target mite deve stare SOPRA quello pieno, se no la notte fresca
+        # verrebbe raffreddata piu' di quella calda - l'esatto contrario. Il
+        # controller si difende gia' da solo ignorando la coppia incrociata, ma
+        # dirlo qui evita di girare la manopola e trovare la funzione muta.
+        if self._desc.key == CONF_TARGET_SLEEP_MILD:
+            pieno = self._altra_opzione(CONF_TARGET_SLEEP, DEFAULT_TARGET_SLEEP)
+            if value <= pieno:
+                raise HomeAssistantError(
+                    translation_domain=DOMAIN,
+                    translation_key="sleep_mild_not_above_sleep",
+                )
+        if self._desc.key == CONF_TARGET_SLEEP:
+            mite = self._altra_opzione(CONF_TARGET_SLEEP_MILD, DEFAULT_TARGET_SLEEP_MILD)
+            soglia = self._altra_opzione(
+                CONF_NIGHT_MILD_OUTDOOR, DEFAULT_NIGHT_MILD_OUTDOOR
+            )
+            if soglia > 0 and value >= mite:
+                raise HomeAssistantError(
+                    translation_domain=DOMAIN,
+                    translation_key="sleep_not_below_sleep_mild",
+                )
         if self._desc.key == CONF_WINTER_ROOM_START:
-            tetto = self._winter_option(CONF_WINTER_ROOM_TARGET, DEFAULT_WINTER_ROOM_TARGET)
+            tetto = self._altra_opzione(CONF_WINTER_ROOM_TARGET, DEFAULT_WINTER_ROOM_TARGET)
             if value > 0 and tetto > 0 and value >= tetto:
                 raise HomeAssistantError(
                     translation_domain=DOMAIN,
                     translation_key="winter_start_not_below_target",
                 )
         if self._desc.key == CONF_WINTER_ROOM_TARGET:
-            avvio = self._winter_option(CONF_WINTER_ROOM_START, DEFAULT_WINTER_ROOM_START)
+            avvio = self._altra_opzione(CONF_WINTER_ROOM_START, DEFAULT_WINTER_ROOM_START)
             if value > 0 and avvio > 0 and value <= avvio:
                 raise HomeAssistantError(
                     translation_domain=DOMAIN,

@@ -1748,6 +1748,95 @@ class ControllerRegressionTests(unittest.TestCase):
         self._presenza(ctrl, "unavailable")
         self.assertEqual(ctrl._compute(NOW.replace(hour=2, minute=0)).setpoint, 23.0)
 
+    # -------------------------------------------------------------- notte mite
+    def _notte_mite(self, ctrl, soglia=22.0, mite=23.0, pieno=22.0):
+        self._orari(ctrl, target_sleep=pieno)
+        ctrl.entry.options = dict(
+            ctrl.entry.options,
+            night_mild_outdoor=soglia,
+            target_sleep_mild=mite,
+            summer_threshold=5.0,
+            night_start_outdoor=0.0,   # la pausa per notte fredda fuori dai piedi
+        )
+
+    def test_mild_night_relaxes_the_target_when_it_is_cool_outside(self):
+        """Il caso che ha fatto nascere la funzione: 21 gradi fuori, finestre
+        chiuse per sicurezza, e la macchina che spendeva 460-580 W per inseguire
+        i 22. Sotto soglia si accontenta del target mite."""
+        ctrl = self._smart_controller(room=26.0, outdoor=21.0)
+        self._notte_mite(ctrl)
+        desired = ctrl._compute(NOW.replace(hour=2, minute=0))
+        self.assertEqual(desired.setpoint, 23.0)
+        self.assertTrue(ctrl._night_mild)
+
+    def test_hot_night_still_chases_the_full_target(self):
+        """Sopra soglia la notte e' calda e i gradi vanno presi davvero: il
+        target mite non deve alzare anche le notti in cui serve scendere."""
+        ctrl = self._smart_controller(room=28.0, outdoor=26.0)
+        self._notte_mite(ctrl)
+        desired = ctrl._compute(NOW.replace(hour=2, minute=0))
+        self.assertEqual(desired.setpoint, 22.0)
+        self.assertFalse(ctrl._night_mild)
+
+    def test_mild_night_has_hysteresis_on_the_outdoor_reading(self):
+        """Entrata sotto 22, l'uscita non e' a 22 ma a 23: una notte assestata a
+        ridosso della soglia rimbalzerebbe fra i due target, e un grado di
+        target su questa macchina si trascina dietro anche la ventola."""
+        ctrl = self._smart_controller(room=26.0, outdoor=21.0)
+        self._notte_mite(ctrl)
+        ctrl._compute(NOW.replace(hour=2, minute=0))
+        self.assertTrue(ctrl._night_mild)
+        ctrl.hass.states.values["sensor.outdoor"] = State("22.5", {"unit_of_measurement": "°C"})
+        dentro = ctrl._compute(NOW.replace(hour=2, minute=10))
+        self.assertEqual(dentro.setpoint, 23.0, "22.5 e' ancora dentro la banda")
+        ctrl.hass.states.values["sensor.outdoor"] = State("23.5", {"unit_of_measurement": "°C"})
+        fuori = ctrl._compute(NOW.replace(hour=2, minute=20))
+        self.assertEqual(fuori.setpoint, 22.0)
+        self.assertFalse(ctrl._night_mild)
+
+    def test_mild_night_is_off_by_default(self):
+        """Soglia a zero: nessuna installazione esistente cambia comportamento."""
+        ctrl = self._smart_controller(room=26.0, outdoor=15.0)
+        self._notte_mite(ctrl, soglia=0.0)
+        desired = ctrl._compute(NOW.replace(hour=2, minute=0))
+        self.assertEqual(desired.setpoint, 22.0)
+        self.assertFalse(ctrl._night_mild)
+
+    def test_mild_night_ignores_a_crossed_pair(self):
+        """Un target mite sotto quello pieno raffredderebbe di piu' la notte
+        fresca: configurazione senza senso, si tratta come non configurata."""
+        ctrl = self._smart_controller(room=26.0, outdoor=15.0)
+        self._notte_mite(ctrl, mite=21.0)
+        desired = ctrl._compute(NOW.replace(hour=2, minute=0))
+        self.assertEqual(desired.setpoint, 22.0)
+        self.assertFalse(ctrl._night_mild)
+
+    def test_mild_night_survives_a_restart(self):
+        """Come per la notte fredda: un riavvio a meta' notte non deve far
+        ripartire il target da capo e rimbalzare di un grado."""
+        ctrl = self._smart_controller(room=26.0, outdoor=21.0)
+        self._notte_mite(ctrl)
+        ctrl._compute(NOW.replace(hour=2, minute=0))
+        self.assertTrue(ctrl._night_mild)
+        asyncio.run(ctrl._async_save_memoria())
+        dopo = self._riavvia(ctrl)
+        self.assertTrue(dopo._night_mild)
+        dopo.hass.states.values["sensor.outdoor"] = State("22.5", {"unit_of_measurement": "°C"})
+        self.assertEqual(
+            dopo._compute(NOW.replace(hour=2, minute=30)).setpoint,
+            23.0,
+            "senza la memoria del flag l'isteresi ripartirebbe da fuori banda",
+        )
+
+    def test_mild_night_does_not_touch_the_day(self):
+        """Vale solo per la notte fonda: di giorno comanda l'anello della casa,
+        e un target di notte non deve entrarci."""
+        ctrl = self._smart_controller(room=26.0, outdoor=21.0)
+        self._notte_mite(ctrl)
+        desired = ctrl._compute(NOW.replace(hour=12, minute=0))
+        self.assertNotEqual(desired.setpoint, 23.0)
+        self.assertFalse(ctrl._night_mild)
+
     # ------------------------------------------------------------ notte fredda
     def _comodino(self, ctrl, valore):
         ctrl.hass.states.values["sensor.comodino"] = State(str(valore), {})

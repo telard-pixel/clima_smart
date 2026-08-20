@@ -55,6 +55,7 @@ from .const import (
     CONF_MORNING_OFF_START,
     CONF_MUTE_SWITCH,
     CONF_NIGHT_START,
+    CONF_NIGHT_MILD_OUTDOOR,
     CONF_NIGHT_START_OUTDOOR,
     CONF_NIGHT_SWITCH,
     CONF_OUTDOOR,
@@ -72,6 +73,7 @@ from .const import (
     CONF_SUMMER_THRESHOLD,
     CONF_TARGET_HOME,
     CONF_TARGET_SLEEP,
+    CONF_TARGET_SLEEP_MILD,
     CONF_VANE_DAY_H,
     CONF_VANE_DAY_V,
     CONF_VANE_H,
@@ -99,6 +101,7 @@ from .const import (
     DEFAULT_MORNING_OFF_ENABLED,
     DEFAULT_MORNING_OFF_START,
     DEFAULT_NIGHT_START,
+    DEFAULT_NIGHT_MILD_OUTDOOR,
     DEFAULT_NIGHT_START_OUTDOOR,
     DEFAULT_WINTER_ROOM_START,
     DEFAULT_WINTER_ROOM_TARGET,
@@ -111,6 +114,7 @@ from .const import (
     DEFAULT_SUMMER_THRESHOLD,
     DEFAULT_TARGET_HOME,
     DEFAULT_TARGET_SLEEP,
+    DEFAULT_TARGET_SLEEP_MILD,
     DEFAULT_VANE_DAY,
     DEFAULT_VANE_SLEEP,
     DOMAIN,
@@ -119,6 +123,7 @@ from .const import (
     DRY_HUMIDITY_ON,
     DRY_MAX_DELTA,
     COLD_NIGHT_HYSTERESIS,
+    NIGHT_MILD_HYSTERESIS,
     EVENT_APPROVAL_NEEDED,
     EVENT_COOL_OFF,
     EVENT_STARTED,
@@ -349,6 +354,10 @@ class ClimaSmartController:
         # oraria: e' un rientro dal riposo, non l'avvio serale.
         self._cold_night = False
         self._cold_night_resting = False
+        # Notte mite: dentro o fuori dalla banda dell'isteresi. Persistito come
+        # _cold_night e per lo stesso motivo - un riavvio a meta' notte non deve
+        # far ripartire il target da capo e rimbalzare di un grado.
+        self._night_mild = False
         # Aiuto invernale: acceso o spento, con le due soglie configurate
         # (avvio/tetto) come propria isteresi - stesso schema di
         # _cold_night, stessa ragione di persistenza.
@@ -432,6 +441,34 @@ class ClimaSmartController:
     @property
     def target_sleep(self) -> float:
         return float(self._cfg(CONF_TARGET_SLEEP, DEFAULT_TARGET_SLEEP))
+
+    def _sleep_target(self, outdoor: float | None) -> float:
+        """Il target della notte fonda, pieno o mite a seconda dell'esterna.
+
+        Sotto `night_mild_outdoor` i muri smettono di spingere calore dentro e
+        inseguire il target pieno costa senza rendere; sopra, la notte e' calda
+        e i gradi vanno presi davvero. Con isteresi sull'esterna, perche' una
+        notte assestata a ridosso della soglia rimbalzerebbe fra i due target.
+
+        Il mite vale solo se e' **sopra** il pieno: un valore incrociato sarebbe
+        una configurazione senza senso, e la si tratta come non configurata
+        invece di raffreddare di piu' proprio quando fuori e' fresco.
+        """
+        pieno = self.target_sleep
+        soglia = float(
+            self._cfg(CONF_NIGHT_MILD_OUTDOOR, DEFAULT_NIGHT_MILD_OUTDOOR) or 0.0
+        )
+        mite = float(
+            self._cfg(CONF_TARGET_SLEEP_MILD, DEFAULT_TARGET_SLEEP_MILD) or 0.0
+        )
+        if soglia <= 0 or mite <= pieno or outdoor is None:
+            self._night_mild = False
+            return pieno
+        if self._night_mild:
+            self._night_mild = outdoor < soglia + NIGHT_MILD_HYSTERESIS
+        else:
+            self._night_mild = outdoor < soglia
+        return mite if self._night_mild else pieno
 
     @property
     def setpoint_offset(self) -> float:
@@ -903,6 +940,7 @@ class ClimaSmartController:
             # macchina fosse sempre stata spenta per conto suo, non a riposo.
             "cold_night": self._cold_night,
             "cold_night_resting": self._cold_night_resting,
+            "night_mild": self._night_mild,
             "winter_heating": self._winter_heating,
             # Anche il giudizio sul passo deve sopravvivere a un riavvio: senza,
             # l'anello dimentica la lezione e ricomincia a spingere. Misurato l'8
@@ -1034,6 +1072,8 @@ class ClimaSmartController:
         self._cold_night_resting = (
             riposo_notte if isinstance(riposo_notte, bool) else False
         )
+        notte_mite = dati.get("night_mild", False)
+        self._night_mild = notte_mite if isinstance(notte_mite, bool) else False
         scaldo_inverno = dati.get("winter_heating", False)
         self._winter_heating = (
             scaldo_inverno if isinstance(scaldo_inverno, bool) else False
@@ -2124,7 +2164,7 @@ class ClimaSmartController:
             # conservarla fino al giorno dopo la trasformerebbe in una misura di
             # ore invece che dei tre quarti d'ora per cui e' stata aperta.
             self._clear_trim_probe()
-            target = self.target_sleep
+            target = self._sleep_target(outdoor)
         elif phase == PHASE_SLEEP:
             # Fascia notte fonda ma sono fuori: la salto. Non il freddo profondo, ma
             # nemmeno l'anello di giorno - quello spinge la camera piu' in basso per

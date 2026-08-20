@@ -90,7 +90,9 @@
           "winter_room_target": "Winter: bedroom temperature to reach, then stop",
           "winter_house_ceiling": "Winter: do not heat if the other rooms are already this warm (0 = no limit)",
           "start_approval": "Ask for permission before starting (instead of starting by itself)",
-          "morning_off_enabled": "Switch off in the morning at the fixed time and wait for the day to begin"
+          "morning_off_enabled": "Morning shutdown enabled",
+          "night_mild_outdoor": "Mild night: outdoor below which deep night settles for less (0 = disabled)",
+          "target_sleep_mild": "Mild night: room target when it is cool outside"
         },
         "data_description": {
           "auto_start_sleep": "If the unit is off at that time, it is switched on once. Outside that moment the controller never starts it by itself.",
@@ -207,6 +209,12 @@
     },
     "winter_target_not_above_start": {
       "message": "The winter bedroom target must sit above the start threshold, otherwise the compressor short-cycles. Use 0 to disable winter assist."
+    },
+    "sleep_mild_not_above_sleep": {
+      "message": "The mild-night target must be above the deep-night one, otherwise a cool night would be cooled harder than a hot one."
+    },
+    "sleep_not_below_sleep_mild": {
+      "message": "The deep-night target must be below the mild-night one, otherwise a cool night would be cooled harder than a hot one. Set the mild-night threshold to 0 to disable it."
     }
   }
 }
