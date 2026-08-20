@@ -178,6 +178,15 @@
       },
       "setpoint_offset": {
         "name": "Setpoint correction"
+      },
+      "winter_room_start": {
+        "name": "Winter: help below"
+      },
+      "winter_room_target": {
+        "name": "Winter: bedroom target"
+      },
+      "winter_house_ceiling": {
+        "name": "Winter: house ceiling"
       }
     }
   },
@@ -190,6 +199,12 @@
     },
     "duplicate_aux_switch": {
       "message": "Eco, mute and night mode must use distinct switches."
+    },
+    "winter_start_not_below_target": {
+      "message": "The winter start threshold must sit below the bedroom target, otherwise the compressor short-cycles. Use 0 to disable winter assist."
+    },
+    "winter_target_not_above_start": {
+      "message": "The winter bedroom target must sit above the start threshold, otherwise the compressor short-cycles. Use 0 to disable winter assist."
     }
   }
 }

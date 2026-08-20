@@ -178,6 +178,15 @@
       },
       "setpoint_offset": {
         "name": "Correzione setpoint"
+      },
+      "winter_room_start": {
+        "name": "Inverno: aiuta sotto"
+      },
+      "winter_room_target": {
+        "name": "Inverno: target camera"
+      },
+      "winter_house_ceiling": {
+        "name": "Inverno: tetto casa"
       }
     }
   },
@@ -190,6 +199,12 @@
     },
     "duplicate_aux_switch": {
       "message": "Eco, Muto e Modalità notte devono usare interruttori distinti."
+    },
+    "winter_start_not_below_target": {
+      "message": "La soglia di avvio invernale deve stare sotto il target della camera, altrimenti il compressore si accende e si spegne di continuo. Usa 0 per disattivare l'aiuto invernale."
+    },
+    "winter_target_not_above_start": {
+      "message": "Il target invernale della camera deve stare sopra la soglia di avvio, altrimenti il compressore si accende e si spegne di continuo. Usa 0 per disattivare l'aiuto invernale."
     }
   }
 }

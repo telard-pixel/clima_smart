@@ -24,6 +24,9 @@ from .const import (
     CONF_SUMMER_THRESHOLD,
     CONF_TARGET_HOME,
     CONF_TARGET_SLEEP,
+    CONF_WINTER_HOUSE_CEILING,
+    CONF_WINTER_ROOM_START,
+    CONF_WINTER_ROOM_TARGET,
     DATA_CONTROLLER,
     DEFAULT_ECO_BAND,
     DEFAULT_ECO_OUTDOOR_OFF,
@@ -33,6 +36,9 @@ from .const import (
     DEFAULT_SUMMER_THRESHOLD,
     DEFAULT_TARGET_HOME,
     DEFAULT_TARGET_SLEEP,
+    DEFAULT_WINTER_HOUSE_CEILING,
+    DEFAULT_WINTER_ROOM_START,
+    DEFAULT_WINTER_ROOM_TARGET,
     DOMAIN,
 )
 from .entity import ClimaSmartEntity
@@ -77,6 +83,21 @@ _NUMBERS: tuple[TuneNumber, ...] = (
     TuneNumber(key=CONF_OVERRIDE_MINUTES, default=DEFAULT_OVERRIDE_MINUTES,
                minimum=0, maximum=480, step=5, icon="mdi:hand-back-right",
                unit=UnitOfTime.MINUTES, device_class=NumberDeviceClass.DURATION),
+    # Le tre dell'inverno, accanto alle estive: `target_home` e `target_sleep`
+    # erano gia' manopole rapide, le loro corrispondenti invernali stavano
+    # sepolte in un modulo di trentaquattro campi. Stessa cosa, stesso posto.
+    TuneNumber(device_class=NumberDeviceClass.TEMPERATURE, key=CONF_WINTER_ROOM_START,
+               default=DEFAULT_WINTER_ROOM_START,
+               minimum=0, maximum=30, step=0.5, icon="mdi:radiator",
+               unit=UnitOfTemperature.CELSIUS),
+    TuneNumber(device_class=NumberDeviceClass.TEMPERATURE, key=CONF_WINTER_ROOM_TARGET,
+               default=DEFAULT_WINTER_ROOM_TARGET,
+               minimum=0, maximum=30, step=0.5, icon="mdi:thermometer-chevron-up",
+               unit=UnitOfTemperature.CELSIUS),
+    TuneNumber(device_class=NumberDeviceClass.TEMPERATURE, key=CONF_WINTER_HOUSE_CEILING,
+               default=DEFAULT_WINTER_HOUSE_CEILING,
+               minimum=0, maximum=30, step=0.5, icon="mdi:home-thermometer-outline",
+               unit=UnitOfTemperature.CELSIUS),
 )
 
 
@@ -113,6 +134,20 @@ class ClimaSmartNumber(ClimaSmartEntity, NumberEntity):
             return float(entry.options[self._desc.key])
         return float(entry.data.get(self._desc.key, self._desc.default))
 
+    def _winter_option(self, key: str, default: float) -> float:
+        """L'altra soglia della coppia invernale, come la legge il controller.
+
+        Non c'e' una proprieta' sul controller per queste due - le legge dalle
+        opzioni al momento di decidere - quindi qui si guarda nello stesso
+        posto, invece di aggiungere due proprieta' usate solo da questa guardia.
+        """
+        entry = self._controller.entry
+        grezzo = entry.options.get(key, entry.data.get(key, default))
+        try:
+            return float(grezzo)
+        except (TypeError, ValueError):
+            return float(default)
+
     async def async_set_native_value(self, value: float) -> None:
         entry = self._controller.entry
         if (
@@ -129,6 +164,26 @@ class ClimaSmartNumber(ClimaSmartEntity, NumberEntity):
             raise HomeAssistantError(
                 translation_domain=DOMAIN, translation_key="eco_off_not_above_on"
             )
+        # Stessa guardia della coppia eco, per la coppia invernale: soglie
+        # incrociate o uguali farebbero accendere e spegnere il compressore a
+        # ogni passata. Il controller si difende gia' da solo trattandole come
+        # "non configurate", ma dirlo qui e' onesto: chi gira la manopola vede
+        # perche' quel valore non va, invece di trovarsi la funzione muta.
+        # Lo zero resta libero in entrambe: e' il modo di disattivare.
+        if self._desc.key == CONF_WINTER_ROOM_START:
+            tetto = self._winter_option(CONF_WINTER_ROOM_TARGET, DEFAULT_WINTER_ROOM_TARGET)
+            if value > 0 and tetto > 0 and value >= tetto:
+                raise HomeAssistantError(
+                    translation_domain=DOMAIN,
+                    translation_key="winter_start_not_below_target",
+                )
+        if self._desc.key == CONF_WINTER_ROOM_TARGET:
+            avvio = self._winter_option(CONF_WINTER_ROOM_START, DEFAULT_WINTER_ROOM_START)
+            if value > 0 and avvio > 0 and value <= avvio:
+                raise HomeAssistantError(
+                    translation_domain=DOMAIN,
+                    translation_key="winter_target_not_above_start",
+                )
         options = dict(entry.options)
         options[self._desc.key] = value
         # Triggers the update listener -> controller re-evaluates.
