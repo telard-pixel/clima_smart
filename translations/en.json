@@ -88,7 +88,9 @@
           "night_start_outdoor": "Outdoor below which deep night lets the unit rest (0 = disabled)",
           "winter_room_start": "Winter: bedroom temperature below which to help the radiators (0 = disabled)",
           "winter_room_target": "Winter: bedroom temperature to reach, then stop",
-          "winter_house_ceiling": "Winter: do not heat if the other rooms are already this warm (0 = no limit)"
+          "winter_house_ceiling": "Winter: do not heat if the other rooms are already this warm (0 = no limit)",
+          "start_approval": "Ask for permission before starting (instead of starting by itself)",
+          "morning_off_enabled": "Switch off in the morning at the fixed time and wait for the day to begin"
         },
         "data_description": {
           "auto_start_sleep": "If the unit is off at that time, it is switched on once. Outside that moment the controller never starts it by itself.",

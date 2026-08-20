@@ -42,6 +42,7 @@ from .const import (
     CONF_MUTE_SWITCH,
     CONF_NIGHT_START,
     CONF_NIGHT_START_OUTDOOR,
+    CONF_START_APPROVAL,
     CONF_WINTER_ROOM_START,
     CONF_WINTER_ROOM_TARGET,
     CONF_WINTER_HOUSE_CEILING,
@@ -82,6 +83,7 @@ from .const import (
     DEFAULT_MORNING_OFF_START,
     DEFAULT_NIGHT_START,
     DEFAULT_NIGHT_START_OUTDOOR,
+    DEFAULT_START_APPROVAL,
     DEFAULT_WINTER_ROOM_START,
     DEFAULT_WINTER_ROOM_TARGET,
     DEFAULT_WINTER_HOUSE_CEILING,
@@ -378,6 +380,10 @@ class ClimaSmartOptionsFlow(OptionsFlow):
                 vol.Required(
                     CONF_AUTO_START_SLEEP,
                     default=_num(CONF_AUTO_START_SLEEP, DEFAULT_AUTO_START_SLEEP),
+                ): bool,
+                vol.Required(
+                    CONF_START_APPROVAL,
+                    default=_num(CONF_START_APPROVAL, DEFAULT_START_APPROVAL),
                 ): bool,
                 vol.Required(CONF_SLEEP_START, default=_num(CONF_SLEEP_START, DEFAULT_SLEEP_START)): selector.TimeSelector(),
                 vol.Required(CONF_SLEEP_END, default=_num(CONF_SLEEP_END, DEFAULT_SLEEP_END)): selector.TimeSelector(),

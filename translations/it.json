@@ -88,7 +88,9 @@
           "night_start_outdoor": "Esterna sotto cui la notte fonda lascia riposare la macchina (0 = disattivato)",
           "winter_room_start": "Inverno: temperatura camera sotto cui aiutare i caloriferi (0 = disattivato)",
           "winter_room_target": "Inverno: temperatura camera da raggiungere, poi si ferma",
-          "winter_house_ceiling": "Inverno: non scaldare se le altre stanze sono già a questa temperatura (0 = nessun limite)"
+          "winter_house_ceiling": "Inverno: non scaldare se le altre stanze sono già a questa temperatura (0 = nessun limite)",
+          "start_approval": "Chiedi il permesso prima di avviare (invece di partire da solo)",
+          "morning_off_enabled": "Spegni al mattino all'orario fisso e attendi l'inizio del giorno"
         },
         "data_description": {
           "auto_start_sleep": "Se il clima è spento all'orario di inizio, lo accende una volta sola. Fuori da quel momento il controller non accende mai da sé.",
