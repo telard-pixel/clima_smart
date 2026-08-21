@@ -134,3 +134,32 @@ misurare i **falsi allarmi**, che sono la metrica che conta. Gli script sono in
 questa cartella e si rigirano così com'è:
 
     python3 docs/studi/estrai.py && python3 docs/studi/studio3.py
+
+## Poscritto — e allora sfruttare l'inerzia? (`studio4.py`)
+
+Se la casa tiene il freddo 74 ore, verrebbe da raffreddare di notte — quando il
+compressore lavora contro 24 gradi invece che contro 33 — e lasciarla scorrere di
+giorno. Misurato, e il risultato è rovesciato:
+
+| | resa | esterna media | potenza media |
+|---|---|---|---|
+| notte (23-07) | **0.158** °C di casa per kWh | 24.1 | 494 W |
+| giorno (11-20) | **0.412** °C di casa per kWh | 33.2 | 629 W |
+
+Di notte la macchina rende un terzo, contro quel che direbbe la termodinamica.
+
+**Il motivo non è il rendimento, è la geometria: di notte la porta della camera
+è chiusa.** Il clima raffredda la camera e il freddo non raggiunge salotto e
+cucina, che sono i sensori con cui si misura «la casa». Prova diretta, notte del
+21 agosto: cinque ore di macchina accesa, comodino da 26.5 a 22.6, **media di
+casa ferma a 26.2**.
+
+Quindi l'accumulo notturno non è praticabile in questa casa — non per un rendimento
+scarso, ma perché quel freddo non può fisicamente arrivare dove servirebbe. Per
+farlo bisognerebbe dormire con la porta aperta, con la camera come sorgente di
+freddo e il rumore addosso.
+
+**Nota di onestà sui numeri qui sopra: sono confusi anche loro.** Non misurano il
+rendimento della macchina notte contro giorno; misurano quanto risponde la casa,
+e le due fasce hanno una topologia diversa. Il confronto pulito, in questa casa,
+non si può fare con i dati disponibili.
