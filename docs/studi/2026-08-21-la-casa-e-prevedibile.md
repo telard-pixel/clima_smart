@@ -129,11 +129,51 @@ Il dataset ha una lacuna precisa e sanabile: **nessuna giornata fresca**. Da ogg
 comincia la stagione che la riempie, e `sensor.clima_smart_media_di_casa` ha
 `state_class` dal 18 agosto, quindi accumula statistiche permanenti da solo.
 
-Si rifà lo studio quando ci saranno abbastanza giornate sotto soglia da poter
-misurare i **falsi allarmi**, che sono la metrica che conta. Gli script sono in
-questa cartella e si rigirano così com'è:
+Gli script sono in questa cartella e si rigirano così com'è:
 
     python3 docs/studi/estrai.py && python3 docs/studi/studio3.py
+
+## La questione è chiusa, non sospesa (`studio5.py`)
+
+La prima stesura di questo documento diceva di rifare lo studio quando lo storico
+avesse abbastanza **giornate fresche** per misurare i falsi allarmi. Obiezione
+dell'utente, e ha ragione: se con 76 giorni il predittivo perde contro le regole
+scritte a mano, perché dovrebbe vincere aggiungendo giorni freschi?
+
+Non serve aspettare l'autunno per rispondere: basta dividere i giorni già
+disponibili per quanto sono stati caldi.
+
+| giornate | modello | banale | guadagno |
+|---|---|---|---|
+| metà più fresca (est. max 29.8) | 0.34 | 0.36 | **+5%** |
+| metà più calda (est. max 36.4) | 0.39 | 0.33 | **−19%** |
+
+| fascia esterna | giorni | guadagno |
+|---|---|---|
+| sotto 30 | 11 | −1% |
+| 30–34 | 22 | +8% |
+| 34–37 | 27 | −13% |
+| **oltre 37** | 13 | **−27%** |
+
+Due conclusioni, e la prima è una correzione a chi scrive: si era previsto che sul
+fresco il modello andasse **peggio**, perché una casa che si muove meno rende più
+forte la previsione banale. **Misurato, va leggermente meglio.** Previsione
+sbagliata.
+
+Ma quel +5% è su un errore di 0.34 gradi: **due centesimi di grado**, cioè
+rumore. E soprattutto emerge la cosa che conta davvero: **il modello è peggiore
+proprio dove servirebbe.** Sotto i 30 pareggia; sopra i 37 — le giornate in cui
+una decisione sbagliata costa — perde del 27%.
+
+Quindi la questione non resta aperta in attesa di dati: **è chiusa.** Non esiste
+un regime in cui quel modello si guadagni il posto, e altri giorni degli stessi
+sensori non lo cambieranno. Non manca *quantità* di dati, manca una **variabile**:
+finestre, porte, presenza. Cose più grandi di tutto ciò che il modello vede.
+
+Se un giorno si volesse riaprire, il punto di partenza non è più storico: è un
+ingresso nuovo. Il sensore della portafinestra della camera esiste già
+(`binary_sensor.porta_finestra_camera_da_letto`); mancherebbero gli altri
+serramenti.
 
 ## Poscritto — e allora sfruttare l'inerzia? (`studio4.py`)
 
