@@ -1167,8 +1167,13 @@ class ControllerRegressionTests(unittest.TestCase):
         self.assertIsNone(ctrl._trim_floor_today)
 
     def test_floor_still_set_when_the_house_is_flat(self):
-        """Se la casa e' ferma - non sale ne' scende - il passo davvero non rende e
-        il livello si blocca, come prima."""
+        """Se la casa e' ferma il passo non rende - ma serve il SECONDO fallimento.
+
+        Misurato il 23 agosto 2026 su 22 passi veri: la prova riconosce il
+        guadagno solo nel 64% dei casi. Una prova che sbaglia piu' di un terzo
+        delle volte non puo' bloccare un livello per l'intera giornata al primo
+        colpo; con due fallimenti indipendenti l'errore scende al 13%.
+        """
         ctrl = self._con_anello()
         ctrl._trim_probe_casa = 26.5
         ctrl._trim_probe_level = 24.0
@@ -1177,7 +1182,39 @@ class ControllerRegressionTests(unittest.TestCase):
             seconds=controller_module.HOUSE_TRIM_DWELL_SECONDS + 60
         )
         self.assertFalse(ctrl._last_step_paid(26.5, 1.0, dopo))   # casa ferma
+        self.assertIsNone(ctrl._trim_floor_today, "il primo fallimento non blocca")
+        self.assertEqual(ctrl._trim_strike_level, 24.0)
+        # Secondo tentativo sullo stesso livello, stesso esito: ora si blocca.
+        ctrl._trim_probe_casa = 26.5
+        ctrl._trim_probe_level = 24.0
+        ctrl._trim_probe_started_at = dopo
+        ancora = dopo + timedelta(
+            seconds=controller_module.HOUSE_TRIM_DWELL_SECONDS + 60
+        )
+        self.assertFalse(ctrl._last_step_paid(26.5, 1.0, ancora))
         self.assertEqual(ctrl._trim_floor_today, 25.0)            # 24 + passo 1
+
+    def test_a_level_that_pays_on_the_retry_clears_its_strike(self):
+        """Il sospetto decade se il livello si riscatta: e' il caso che il secondo
+        strike esiste per non perdere - una prova sbagliata su tre."""
+        ctrl = self._con_anello()
+        ctrl._trim_probe_casa = 26.5
+        ctrl._trim_probe_level = 24.0
+        ctrl._trim_probe_started_at = GIORNO
+        dopo = GIORNO + timedelta(
+            seconds=controller_module.HOUSE_TRIM_DWELL_SECONDS + 60
+        )
+        self.assertFalse(ctrl._last_step_paid(26.5, 1.0, dopo))
+        self.assertEqual(ctrl._trim_strike_level, 24.0)
+        ctrl._trim_probe_casa = 26.5
+        ctrl._trim_probe_level = 24.0
+        ctrl._trim_probe_started_at = dopo
+        ancora = dopo + timedelta(
+            seconds=controller_module.HOUSE_TRIM_DWELL_SECONDS + 60
+        )
+        self.assertTrue(ctrl._last_step_paid(26.2, 1.0, ancora))   # stavolta rende
+        self.assertIsNone(ctrl._trim_strike_level)
+        self.assertIsNone(ctrl._trim_floor_today)
 
     def test_a_previous_day_probe_expires_without_learning(self):
         """Una baseline di ieri non deve creare il pavimento di oggi."""
@@ -1245,7 +1282,10 @@ class ControllerRegressionTests(unittest.TestCase):
         ctrl._trim_probe_level = 24.0
         ctrl._trim_probe_started_at = started
         self.assertFalse(ctrl._last_step_paid(28.0, 1.0, due))
-        self.assertEqual(ctrl._trim_floor_today, 25.0)
+        # Quel che conta qui e' che il verdetto sia stato dato (eta' calcolata
+        # bene): al primo fallimento si segna lo strike, il pavimento arriva al
+        # secondo.
+        self.assertEqual(ctrl._trim_strike_level, 24.0)
 
     def test_a_failed_level_is_not_retried_for_the_rest_of_the_day(self):
         """Senza il pavimento della giornata l'anello ritenterebbe lo stesso passo
@@ -1261,7 +1301,9 @@ class ControllerRegressionTests(unittest.TestCase):
                 seconds=controller_module.HOUSE_TRIM_DWELL_SECONDS + 60
             )
             visti.append(ctrl._compute(t).setpoint)
-        self.assertEqual(visti, [24.0, 25.0, 25.0, 25.0, 25.0])
+        # Il 24 compare due volte: il primo fallimento restituisce il passo ma
+        # lascia il livello riprovabile, il secondo lo blocca.
+        self.assertEqual(visti, [24.0, 25.0, 24.0, 25.0, 25.0])
 
     def test_a_step_that_pays_earns_the_next_one(self):
         """Se la casa risponde, l'anello ha diritto di continuare: il freno non e'
@@ -1318,7 +1360,7 @@ class ControllerRegressionTests(unittest.TestCase):
             seconds=controller_module.HOUSE_TRIM_DWELL_SECONDS + 60
         )
         self.assertEqual(ctrl._compute(second).setpoint, 25.0)
-        self.assertEqual(ctrl._trim_floor_today, 25.0)
+        self.assertEqual(ctrl._trim_strike_level, 24.0)
 
     def test_a_paid_probe_is_closed_inside_the_deadband(self):
         """Entrare in banda grazie al passo chiude la prova e tiene il target."""
@@ -1351,7 +1393,7 @@ class ControllerRegressionTests(unittest.TestCase):
             seconds=controller_module.HOUSE_TRIM_DWELL_SECONDS + 60
         )
         self.assertEqual(ctrl._compute(second).setpoint, 25.0)
-        self.assertEqual(ctrl._trim_floor_today, 25.0)
+        self.assertEqual(ctrl._trim_strike_level, 24.0)
         self.assertIsNone(ctrl._trim_probe_casa)
 
     def test_probe_verdict_is_consumed_only_once(self):
@@ -1376,7 +1418,9 @@ class ControllerRegressionTests(unittest.TestCase):
         self._casa(ctrl, 28.0)
         ctrl._compute(GIORNO)
         t = GIORNO
-        for _ in range(3):
+        # Quattro giri e non tre: il pavimento arriva al SECONDO fallimento sullo
+        # stesso livello, non al primo.
+        for _ in range(4):
             t += timedelta(
                 seconds=controller_module.HOUSE_TRIM_DWELL_SECONDS + 60
             )
@@ -1399,7 +1443,9 @@ class ControllerRegressionTests(unittest.TestCase):
         self._casa(ctrl, 28.0)
         ctrl._compute(GIORNO)
         t = GIORNO
-        for _ in range(3):
+        # Quattro giri e non tre: il pavimento arriva al SECONDO fallimento sullo
+        # stesso livello, non al primo.
+        for _ in range(4):
             t += timedelta(
                 seconds=controller_module.HOUSE_TRIM_DWELL_SECONDS + 60
             )
@@ -1899,6 +1945,54 @@ class ControllerRegressionTests(unittest.TestCase):
         desired = ctrl._compute(NOW.replace(hour=12, minute=0))
         self.assertNotEqual(desired.setpoint, 23.0)
         self.assertFalse(ctrl._night_mild)
+
+    def test_the_approved_start_does_not_hand_control_straight_back(self):
+        """Chi accende dopo un si' e' un'automazione, non una mano.
+
+        Il comando arriva senza `context.user_id`, e finiva letto come intervento
+        umano: il controller cedeva il comando per un'ora **proprio dopo un
+        consenso**, restando fermo per la prima ora di notte fonda - niente
+        setpoint, niente spinta iniziale, niente alette. Il documento della
+        1.18.0 lo elencava fra le cose da verificare, e non era stato fatto.
+        """
+        ctrl = self._smart_controller(room=27.0)
+        ctrl._approval_waiting_on = NOW.date()
+        ctrl.hass.states.values["climate.test"].state = "off"
+        ctrl._maybe_flag_manual(
+            Event(
+                State("off", {}),
+                State("cool", {"temperature": 25.0}),
+            )
+        )
+        self.assertFalse(ctrl.override_active, "il si' non e' un intervento")
+        self.assertIsNone(ctrl._approval_waiting_on, "vale una volta sola")
+        # Da qui in poi un intervento torna a essere un intervento.
+        ctrl._maybe_flag_manual(
+            Event(
+                State("cool", {"temperature": 25.0}),
+                State("cool", {"temperature": 20.0}),
+            )
+        )
+        self.assertTrue(ctrl.override_active)
+
+    def test_winter_help_stays_off_when_the_outdoor_is_unreadable(self):
+        """Non sapere che stagione e' non e' una ragione per scaldare.
+
+        La rete «fail closed» proteggeva il raffrescamento ma non il
+        riscaldamento: con l'esterna illeggibile e l'unita' spenta `summer`
+        diventa False subito, saltando anche la conferma dei 900 secondi, e da
+        li' si arrivava ad accendere la pompa di calore in agosto. E' l'unico
+        ramo in cui il controller accende senza contrassegno giornaliero.
+        """
+        ctrl = self._smart_controller(room=18.0, outdoor=30.0)
+        ctrl.hass.states.values["climate.test"].state = "off"
+        ctrl.hass.states.values["sensor.outdoor"] = State("unavailable", {})
+        ctrl.entry.options = dict(
+            ctrl.entry.options, winter_room_start=19.0, winter_room_target=21.0
+        )
+        desired = ctrl._compute(GIORNO)
+        self.assertIsNone(desired.hvac, "non deve accendere niente")
+        self.assertIn("illeggibile", desired.reason)
 
     def test_mild_night_holds_through_a_missing_outdoor_reading(self):
         """Una lettura che manca non e' la prova che la notte sia calda.

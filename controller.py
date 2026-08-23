@@ -375,6 +375,17 @@ class ClimaSmartController:
         self._trim_probe_level: float | None = None
         self._trim_probe_started_at: datetime | None = None
         self._trim_floor_today: float | None = None
+        # Il livello che ha gia' fallito una prova oggi. Serve il **secondo**
+        # fallimento sullo stesso livello per bloccarlo: misurato il 23 agosto
+        # 2026 su 22 passi veri, la prova riconosce il guadagno solo nel 64% dei
+        # casi (mediana -0.163 gradi in 45 minuti contro un rumore di +0.007
+        # appaiato per ora del giorno). Una prova che sbaglia piu' di un terzo
+        # delle volte non puo' prendere una decisione irreversibile per l'intera
+        # giornata: con due fallimenti indipendenti l'errore scende dal 36% al
+        # 13%, al prezzo di un ciclo in piu'. Allungare l'attesa invece non
+        # serviva: a 90 e 180 minuti la quota resta 64-68%, perche' la
+        # dispersione e' fra un giorno e l'altro, non nel tempo.
+        self._trim_strike_level: float | None = None
         self._trim_floor_day: date | None = None
         # Cio' che non deve morire con il processo: i contrassegni "gia' fatto
         # oggi" e la resa manuale. Senza, un riavvio dopo che l'utente ha spento
@@ -394,6 +405,13 @@ class ClimaSmartController:
         # c'e' nessun comando da mandare all'unita', quindi non dipende
         # dall'esito di `_apply`.
         self._approval_armed: dict | None = None
+        # Quando abbiamo chiesto il permesso e stiamo aspettando la risposta.
+        # L'accensione che segue un si' arriva da un'automazione, quindi **senza**
+        # context.user_id, e finiva letta come intervento umano: il controller
+        # cedeva il comando per un'ora proprio dopo un consenso, cioe' l'opposto
+        # di quel che serve. Il documento di progetto della 1.18.0 lo elencava fra
+        # le cose da verificare in fase di realizzazione, e non era stato fatto.
+        self._approval_waiting_on: date | None = None
         self._day_start_done_on = None
         # E per lo spegnimento di una mattina fresca: come lo spegnimento del
         # mattino, un tentativo al giorno, cosi' un riavvio non lo ritenta
@@ -736,6 +754,19 @@ class ClimaSmartController:
             self._settle_setpoint_until is not None
             and now < self._settle_setpoint_until
         )
+        if (
+            hvac_changed
+            and self._approval_waiting_on == now.date()
+            and old_state.state == HVAC_OFF
+            and new_state.state in (HVAC_COOL, HVAC_DRY)
+        ):
+            # Il si' al permesso, non una mano: si prende il comando subito
+            # invece di cedere per un'ora. Vale una volta sola, per la giornata
+            # in cui si e' chiesto: da qui in poi un intervento e' un intervento.
+            self._approval_waiting_on = None
+            self.last_reason = "permesso accordato: prendo in mano io"
+            self._notify_entities()
+            return
         if hvac_changed:
             hvac_echo = (
                 self._last_hvac_cmd is not None
@@ -1006,6 +1037,7 @@ class ClimaSmartController:
             "trim_probe_level": self._trim_probe_level,
             "trim_probe_started_at": giorno(self._trim_probe_started_at),
             "trim_floor_today": self._trim_floor_today,
+            "trim_strike_level": self._trim_strike_level,
             "trim_floor_day": giorno(self._trim_floor_day),
             "trim_changed_at": giorno(self._trim_changed_at),
             "adaptive_changed_at": giorno(self._adaptive_changed_at),
@@ -1141,6 +1173,7 @@ class ClimaSmartController:
         self._trim_probe_level = livello_trim_di("trim_probe_level")
         self._trim_probe_started_at = istante_di("trim_probe_started_at")
         self._trim_floor_today = livello_trim_di("trim_floor_today")
+        self._trim_strike_level = livello_trim_di("trim_strike_level")
         if (
             self._trim_probe_casa is None
             or self._trim_probe_level is None
@@ -1553,6 +1586,7 @@ class ClimaSmartController:
         if self._trim_floor_day != now.date():
             self._trim_floor_day = now.date()
             self._trim_floor_today = None
+            self._trim_strike_level = None
 
     def _clear_trim_probe(self) -> None:
         """Discard every part of the current measurement as one atomic state."""
@@ -1621,12 +1655,21 @@ class ClimaSmartController:
             # raffreddare proprio prima del picco. Segnalato il 12 agosto 2026:
             # l'anello e' rimasto inchiodato a 25 tutto il giorno perche' il
             # pavimento era scattato la mattina mentre la casa saliva col sole.
-            passo = passo if passo and passo > 0 else 1.0
-            candidato = livello + passo
-            self._trim_floor_today = (
-                candidato if self._trim_floor_today is None
-                else max(self._trim_floor_today, candidato)
-            )
+            if self._trim_strike_level != livello:
+                # Primo fallimento su questo livello: si restituisce il passo ma
+                # il livello resta riprovabile. Se non rendeva davvero, fallira'
+                # anche la prossima volta.
+                self._trim_strike_level = livello
+            else:
+                passo = passo if passo and passo > 0 else 1.0
+                candidato = livello + passo
+                self._trim_floor_today = (
+                    candidato if self._trim_floor_today is None
+                    else max(self._trim_floor_today, candidato)
+                )
+        elif reso:
+            # Ha reso: il sospetto su questo livello decade.
+            self._trim_strike_level = None
         return reso
 
     def _house_trim(
@@ -2151,6 +2194,20 @@ class ClimaSmartController:
                 return Desired(
                     hvac=HVAC_OFF, reason="fuori stagione: spengo raffrescamento"
                 )
+            if not outdoor_valid:
+                # La rete «fail closed» di sopra protegge il raffrescamento ma non
+                # il riscaldamento: con i sensori esterni illeggibili e l'unita'
+                # spenta, `summer` diventa False **subito**, saltando anche la
+                # conferma di _season_confirmed, e da li' si finirebbe qui dentro.
+                # Con l'aiuto invernale configurato basterebbe una ripresa sotto
+                # la soglia d'avvio per accendere la pompa di calore in agosto.
+                # Non sapere che stagione e' non e' una ragione per scaldare: e'
+                # una ragione per non fare niente. Ed e' l'unico ramo in cui il
+                # controller **accende** l'unita' senza passare dal contrassegno
+                # giornaliero ne' da start_approval.
+                self.active_target = None
+                self._winter_heating = False
+                return Desired(reason="esterna illeggibile: non tocco il riscaldamento")
             soglia_avvio = float(
                 self._cfg(CONF_WINTER_ROOM_START, DEFAULT_WINTER_ROOM_START) or 0.0
             )
@@ -2431,7 +2488,15 @@ class ClimaSmartController:
                     now,
                     climate.attributes.get("fan_modes"),
                     FAN_BANDS_SLEEP if notte_fonda else FAN_BANDS,
-                    self._fan_hysteresis(phase),
+                    # Le due righe devono guardare la STESSA condizione. Prima le
+                    # bande seguivano `notte_fonda` e l'isteresi `phase`, cosi' che
+                    # in fascia sleep a casa vuota si usavano le bande diurne
+                    # (bordi 1.0 e 3.0) con l'isteresi notturna (0.5 in entrambi i
+                    # versi): la banda del `high` diventava larga 1.0, **pari esatto
+                    # al guadagno dell'anello**, cioe' la condizione che questo
+                    # progetto ha gia' pagato il 4 agosto. Ciclo limite su/giu' ogni
+                    # mezz'ora, e `high` costa il doppio di `medium`.
+                    self._fan_hysteresis(PHASE_SLEEP if notte_fonda else PHASE_DAY),
                 )
         if phase == PHASE_SLEEP:
             # Alette FISSE anche di notte, nella stessa posizione del giorno. Prima
@@ -2560,6 +2625,7 @@ class ClimaSmartController:
                         self._day_start_done_on = now.date()
                     else:
                         self._sleep_start_done_on = now.date()
+                    self._approval_waiting_on = now.date()
                     self.hass.bus.async_fire(
                         EVENT_APPROVAL_NEEDED,
                         {"entity_id": self.climate_entity, **self._approval_armed},
