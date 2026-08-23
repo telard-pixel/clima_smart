@@ -510,6 +510,69 @@ class ControllerRegressionTests(unittest.TestCase):
         dopo = self._riavvia(ctrl)
         self.assertTrue(dopo.override_active, "la resa manuale deve sopravvivere")
 
+    def test_the_override_survives_an_unload_that_stops_the_pending_pass(self):
+        """Il caso del 23 agosto 2026, ore 00:08.
+
+        `_start_override` scrive solo in memoria e lascia il salvataggio alla
+        passata accodata subito dopo. Allo scarico dell'entry quella passata non
+        arriva mai: o viene cancellata coi task di background, o trova `_stopped`
+        e torna prima del salvataggio. La resa spariva e il controller ripartiva
+        come se l'utente non avesse toccato niente.
+        """
+        ctrl = self._smart_controller(room=27.0)
+        ctrl._start_override("prova")
+        self.assertTrue(ctrl.override_active)
+        # Nessun salvataggio esplicito: e' proprio quello che mancava.
+        asyncio.run(ctrl.async_pause())
+        asyncio.run(ctrl.async_stop())
+        dopo = self._riavvia(ctrl)
+        self.assertTrue(
+            dopo.override_active,
+            "la resa manuale deve sopravvivere anche se la passata non gira",
+        )
+
+    def test_a_refused_fan_is_not_a_person(self):
+        """L'unita' che rimette `auto` subito dopo il nostro comando.
+
+        Misurato il 23 agosto 2026 due volte di fila, a 74 e 66 secondi dal
+        comando: veniva letto come intervento umano e costava un'ora di comando
+        ogni volta. In 11 giorni: 12.8 ore di controllo perso, quasi tutte cosi'.
+        """
+        ctrl = self._smart_controller(room=27.0)
+        ctrl._last_fan_cmd = "medium"
+        ctrl._arm_settle("_settle_fan_until")
+        ctrl._maybe_flag_manual(
+            Event(
+                State("cool", {"fan_mode": "medium"}),    # cio' che avevamo chiesto
+                State("cool", {"fan_mode": "auto"}),      # cio' che l'unita' rimette
+            )
+        )
+        self.assertFalse(ctrl.override_active, "un rifiuto non e' una persona")
+        self.assertIsNotNone(ctrl._fan_refused_at)
+
+    def test_a_fan_reset_after_our_setpoint_is_collateral_not_a_person(self):
+        """Il caso peggiore misurato: 20 agosto 2026, 16:37.
+
+        Il controller manda un passo di trim (`set_temperature`), e 72 secondi
+        dopo l'unita' azzera la ventola. La finestra della ventola non e' aperta -
+        non avevamo comandato la ventola - quindi la difesa sui rifiuti non basta.
+        Un'ora di comando persa con la casa a 29.1 e l'esterna a 30.
+        """
+        ctrl = self._smart_controller(room=27.0)
+        ctrl._last_setpoint_cmd = 23.0
+        ctrl._arm_settle("_settle_setpoint_until")
+        ctrl._maybe_flag_manual(
+            Event(
+                State("cool", {"temperature": 23.0, "fan_mode": "medium"}),
+                State("cool", {"temperature": 23.0, "fan_mode": "auto"}),
+            )
+        )
+        self.assertFalse(ctrl.override_active)
+        self.assertIsNone(
+            ctrl._fan_refused_at,
+            "qui non si litiga con l'unita': la ventola si rimette alla passata dopo",
+        )
+
     def test_a_real_manual_event_persists_override_before_early_return(self):
         """Evento e valutazione reali devono salvare senza aiuto dal test."""
         ctrl = self._smart_controller(room=27.0)

@@ -328,6 +328,12 @@ class ClimaSmartController:
         self._last_aux_cmd: dict[str, bool] = {}
         # Quando l'unita' ha rifiutato un nostro comando su uno switch ausiliario.
         self._aux_refused_at: dict[str, datetime] = {}
+        # Stesso meccanismo per la ventola dell'entita' clima, che ne era priva:
+        # vedi _maybe_flag_manual. Misurato il 23 agosto 2026, due volte di fila:
+        # comandata `medium`, l'unita' e' tornata ad `auto` dopo 74 e 66 secondi,
+        # senza contesto, e ogni volta il controller ha ceduto il comando per
+        # un'ora. In 11 giorni sono 12.8 ore di controllo perso, quasi tutte cosi'.
+        self._fan_refused_at: datetime | None = None
         # MODE_SMART: the fan step we last decided and when, so a downgrade has to
         # wait out MIN_FAN_DWELL_SECONDS instead of chasing every tenth of a degree.
         self._last_fan_band: str | None = None
@@ -572,6 +578,15 @@ class ClimaSmartController:
 
     async def async_stop(self) -> None:
         self._stopped = True
+        # Salvataggio finale, prima di smontare tutto. `_start_override` scrive la
+        # resa **solo in memoria** e lascia la persistenza alla passata che
+        # `_on_state_event` accoda subito dopo; ma allo scarico dell'entry quella
+        # passata o viene cancellata con i task di background, o trova `_stopped`
+        # / `not enabled` e torna prima di arrivare al salvataggio in fondo a
+        # `async_evaluate`. Risultato osservato il 23 agosto 2026 alle 00:08: la
+        # resa manuale delle 00:08 sparita al riavvio, e il controller ripartito
+        # come se l'utente non avesse toccato niente.
+        await self._async_save_memoria()
         if self._override_cancel is not None:
             self._override_cancel()
             self._override_cancel = None
@@ -590,6 +605,9 @@ class ClimaSmartController:
         self.enabled = False
         async with self._lock:
             pass
+        # Stesso motivo di `async_stop`: da qui in poi nessuna passata salvera'
+        # piu' niente, perche' tutte tornano subito sul controllo di `enabled`.
+        await self._async_save_memoria()
 
     # --------------------------------------------------------- entity wiring
     @callback
@@ -707,6 +725,17 @@ class ClimaSmartController:
             self._settle_mode_change_until is not None
             and now < self._settle_mode_change_until
         )
+        # Questa unita' rimette la ventola su `auto` anche dopo un semplice
+        # set_temperature, non solo dopo un cambio di modo: misurato il 20 agosto
+        # 2026 alle 16:37, 72 secondi dopo un passo di trim, ed e' costato un'ora
+        # di comando con la casa a 29.1 e l'esterna a 30. E' un effetto collaterale
+        # del nostro comando, non una mano - e a differenza del rifiuto vero e
+        # proprio qui la ventola si **rimette** alla passata dopo, senza pausa:
+        # non stiamo litigando con l'unita', l'ha solo dimenticata.
+        setpoint_settling_now = (
+            self._settle_setpoint_until is not None
+            and now < self._settle_setpoint_until
+        )
         if hvac_changed:
             hvac_echo = (
                 self._last_hvac_cmd is not None
@@ -740,8 +769,27 @@ class ClimaSmartController:
             fan_settling = (
                 self._settle_fan_until is not None and now < self._settle_fan_until
             )
-            mode_driven_fan = hvac_echo or mode_change_settling
-            if not mode_driven_fan and not (fan_settling and fan_echo):
+            mode_driven_fan = (
+                hvac_echo or mode_change_settling or setpoint_settling_now
+            )
+            if fan_settling and not fan_echo and not mode_driven_fan:
+                # Il contrario di quello che abbiamo appena chiesto, subito dopo
+                # averlo chiesto: l'unita' ha rifiutato. E' lo stesso caso che gli
+                # interruttori ausiliari gestiscono da tempo, e che qui mancava.
+                # Leggerlo come intervento umano costava un'ora di comando ogni
+                # volta; reimporre la velocita' alla passata dopo ripeterebbe la
+                # giostra, quindi la ventola si lascia stare per un po'.
+                self._fan_refused_at = now
+                self.last_reason = "ventola: comando rifiutato dall'unita'"
+                _LOGGER.info(
+                    "Clima Smart: l'unita' ha rifiutato la ventola %s (riporta %s), "
+                    "non insisto per %d minuti",
+                    self._last_fan_cmd,
+                    new_fan,
+                    AUX_REFUSAL_BACKOFF_SECONDS // 60,
+                )
+                self._notify_entities()
+            elif not mode_driven_fan and not (fan_settling and fan_echo):
                 manual = True
 
         if manual:
@@ -2669,6 +2717,11 @@ class ClimaSmartController:
                 and (not fan_modes or desired.fan in fan_modes)
                 and cur_fan != desired.fan
                 and not (fan_settle_active and desired.fan == self._last_fan_cmd)
+                and not (
+                    self._fan_refused_at is not None
+                    and (now - self._fan_refused_at).total_seconds()
+                    < AUX_REFUSAL_BACKOFF_SECONDS
+                )
             ):
                 if self._stopped or not self.enabled:
                     return
