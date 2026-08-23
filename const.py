@@ -397,11 +397,39 @@ FAN_ORDER: tuple[str, ...] = ("low", "medium", "high")
 # +0.23 e +0.34). Piu' portata d'aria alza il tetto del compressore, e la potenza
 # media e' passata da ~600 a 691 W: novanta watt, di cui la ventola ne vale otto.
 #
-# Con 1.0 in salita e 0.5 in discesa: si entra sempre a 2.0, ma si esce a **0.5**,
-# cioe' quando la stanza e' tornata a mezzo grado dall'obiettivo. La banda resta
-# larga 1.5, quindi ancora piu' del guadagno dell'anello misurato (1.0): il ciclo
-# limite non torna.
-FAN_HYSTERESIS_UP = 1.0
+# Con 1.0 in salita e 0.5 in discesa si entrava a 2.0 e si usciva a 0.5: banda
+# larga 1.5, piu' del guadagno dell'anello misurato (1.0), quindi niente ciclo
+# limite.
+#
+# **Spostata il 23 agosto 2026, su richiesta dell'utente**, che con lo scarto a
+# +1.5 e la ventola ferma su `low` ha giudicato la macchina troppo pigra. Fra 0.5
+# e 2.0 la ventola restava bassa e non ne usciva: un punto fisso ampio mezzo
+# grado piu' del guadagno, in cui la casa puo' stare a lungo.
+#
+# **Solo la salita**, da 1.0 a 0.5: si entra a **1.5** e si continua a uscire a
+# **0.5**. La banda passa da 1.5 a 1.0.
+#
+# La scelta e' fra due lezioni gia' pagate, e le si e' pesate cosi'. Spostare
+# tutta la banda (salita 0.5, discesa 1.0) avrebbe tenuto la larghezza a 1.5 ma
+# portato l'uscita a 0.0 - **esattamente la condizione del 5 agosto**, quando
+# `medium` rimase otto ore e costo' 0.70 kWh in piu' a pari esterna consegnando
+# meno raffrescamento. Quella e' una misura, non un rischio. Stringere la banda a
+# 1.0 la porta invece **pari** al guadagno dell'anello, che e' la condizione
+# limite dell'oscillazione del 4 agosto - ma quell'oscillazione fu misurata con
+# `MIN_FAN_DWELL_SECONDS` a **dieci minuti**, e rigiocando la traccia con la
+# permanenza a mezz'ora gli scatti scesero da 14 a 4. La permanenza, non la
+# larghezza, e' oggi la difesa vera: e frena le discese, cioe' proprio il verso
+# in cui il ciclo si chiuderebbe.
+#
+# Quindi si accetta la banda pari al guadagno e **si sorveglia il numero di
+# cambi di ventola al giorno**: erano 36 in 11 giorni in fascia diurna, uno solo
+# sotto la mezz'ora. Se risalgono, la banda va riallargata e la richiesta
+# rinegoziata.
+#
+# Effetto collaterale nella stessa direzione: anche `high` diventa piu' facile,
+# si entra a 3.5 invece che a 4.0. Ma `high` costa il doppio di `medium`: se il
+# consumo dei pomeriggi caldi peggiora, il primo indiziato e' questo.
+FAN_HYSTERESIS_UP = 0.5
 FAN_HYSTERESIS_DOWN = 0.5
 # Di notte no, e per un motivo che non e' tecnico: `low` e' il silenzio in camera,
 # ed e' la ragione per cui il muto e' scollegato. Con 1.5 la discesa avrebbe

@@ -1608,6 +1608,22 @@ class ControllerRegressionTests(unittest.TestCase):
         dopo = GIORNO + timedelta(seconds=controller_module.MIN_FAN_DWELL_SECONDS + 60)
         self.assertEqual(ctrl._compute(dopo).fan, "low")
 
+    def test_medium_enters_at_one_and_a_half_not_at_two(self):
+        """Richiesta dell'utente del 23 agosto 2026, con la macchina sotto gli occhi.
+
+        Con lo scarto a +1.5 la ventola restava `low`, perche' per salire serviva
+        2.0 e per scendere bastava 0.5: fra i due valori c'era un punto fisso
+        largo un grado e mezzo, in cui la casa puo' stare a lungo. Abbassata la
+        sola salita a 0.5 si entra a 1.5; l'uscita resta a 0.5, perche' portarla
+        a 0.0 ricreerebbe il pomeriggio del 5 agosto (otto ore di `medium`,
+        +0.70 kWh a pari esterna).
+        """
+        ctrl = self._smart_controller(room=26.5, fan="low")   # scarto +1.5
+        self.assertEqual(ctrl._compute(GIORNO).fan, "medium")
+        # Un decimo sotto la soglia: resta bassa, la banda esiste ancora.
+        altro = self._smart_controller(room=26.4, fan="low")  # scarto +1.4
+        self.assertEqual(altro._compute(GIORNO).fan, "low")
+
     def test_medium_leaves_when_the_room_comes_back_not_only_at_target(self):
         """Il pomeriggio del 5 agosto: `medium` e' entrata a scarto 2.0 e per uscirne
         pretendeva 0.0, cioe' la stanza esattamente sul target. E' rimasta otto ore,
