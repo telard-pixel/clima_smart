@@ -461,9 +461,17 @@ class ClimaSmartController:
         mite = float(
             self._cfg(CONF_TARGET_SLEEP_MILD, DEFAULT_TARGET_SLEEP_MILD) or 0.0
         )
-        if soglia <= 0 or mite <= pieno or outdoor is None:
+        if soglia <= 0 or mite <= pieno:
             self._night_mild = False
             return pieno
+        if outdoor is None:
+            # Una lettura che manca non e' la prova che la notte sia diventata
+            # calda: si tiene il regime in corso. Senza questo, un buco della
+            # stazione riportava il target da mite a pieno - tre gradi di
+            # setpoint - e la macchina ripartiva a inseguire i 22, cioe' i
+            # 460-580 W che questa funzione esiste per evitare. E' la stessa
+            # difesa che hanno gia' _saturation_brake e _adaptive_extra.
+            return mite if self._night_mild else pieno
         if self._night_mild:
             self._night_mild = outdoor < soglia + NIGHT_MILD_HYSTERESIS
         else:
@@ -1363,7 +1371,12 @@ class ClimaSmartController:
         self.adaptive_extra = nuovo
         return nuovo
 
-    def _cold_night_off(self, outdoor: float | None, comodino: float | None) -> bool:
+    def _cold_night_off(
+        self,
+        outdoor: float | None,
+        comodino: float | None,
+        obiettivo: float | None = None,
+    ) -> bool:
         """Se la notte fonda deve riposare perche' fuori sta gia' facendo il lavoro.
 
         Sotto `night_start_outdoor` l'aria di ripresa non basta piu' a dire se in
@@ -1375,6 +1388,12 @@ class ClimaSmartController:
 
         Con isteresi sulla stessa media, per lo stesso motivo di sempre: le
         letture ballano sulla soglia.
+
+        `obiettivo` e' il target di notte fonda **effettivo** di questa passata,
+        che dalla 1.19.0 puo' essere quello pieno o quello mite. Misurare sempre
+        contro il pieno faceva lavorare la macchina per un traguardo che l'aria
+        di fuori aveva gia' superato. Assente, si torna al pieno: serve alle
+        prove che chiamano questa funzione da sola.
         """
         soglia = float(
             self._cfg(CONF_NIGHT_START_OUTDOOR, DEFAULT_NIGHT_START_OUTDOOR) or 0.0
@@ -1383,7 +1402,7 @@ class ClimaSmartController:
             self._cold_night = False
             return False
         riferimento = (outdoor + comodino) / 2
-        obiettivo = self.target_sleep
+        obiettivo = self.target_sleep if obiettivo is None else obiettivo
         if self._cold_night:
             self._cold_night = riferimento <= obiettivo + COLD_NIGHT_HYSTERESIS
         else:
@@ -1980,6 +1999,21 @@ class ClimaSmartController:
 
         cur_mode = climate.state
         cooling_active = cur_mode in (HVAC_COOL, HVAC_DRY)
+        # Il giudizio sulla deumidificazione rispecchia la macchina, non si
+        # accumula. `_program_for` e' l'unico posto che azzerava `_dry_active`, e
+        # non viene raggiunto quando l'unita' e' spenta, in `gap`, in `wind_down`,
+        # fuori stagione o a riposo: il flag restava acceso per ore e alla
+        # riaccensione faceva usare la soglia d'USCITA (55) al posto di quella
+        # d'INGRESSO (60). Osservato il 22 agosto 2026: rientro in `dry` con
+        # umidita' al 56%. Le due soglie servono a non ballare **dentro** un ciclo
+        # continuo, non a portarsi dietro la decisione di dodici ore prima.
+        #
+        # Si azzera a macchina **ferma**, non "quando non e' gia' in dry": fra il
+        # comando e il momento in cui l'unita' lo esegue passano delle passate in
+        # cui lo stato riportato e' ancora `cool`, e azzerare li' impedirebbe alla
+        # deumidificazione di entrare del tutto. Le prove lo hanno dimostrato.
+        if not cooling_active:
+            self._dry_active = False
         climate_unit = self._system_temperature_unit
         ripresa = _convert_temperature(
             _to_float(climate.attributes.get("current_temperature")),
@@ -2197,7 +2231,7 @@ class ClimaSmartController:
         # ripresa legge ancora caldo. In quel caso la macchina riposa - non e'
         # un'eccezione alla regola "non spengo mai mio conto": e' la stessa
         # regola letta al contrario di quella della mattina fresca qui sopra.
-        freddo = notte_fonda and self._cold_night_off(outdoor, comodino)
+        freddo = notte_fonda and self._cold_night_off(outdoor, comodino, target)
         if not notte_fonda:
             self._cold_night_resting = False
         if freddo and cur_mode in (HVAC_COOL, HVAC_DRY):

@@ -1837,6 +1837,67 @@ class ControllerRegressionTests(unittest.TestCase):
         self.assertNotEqual(desired.setpoint, 23.0)
         self.assertFalse(ctrl._night_mild)
 
+    def test_mild_night_holds_through_a_missing_outdoor_reading(self):
+        """Una lettura che manca non e' la prova che la notte sia calda.
+
+        Prima di questa correzione un buco della stazione riportava il target da
+        mite a pieno - tre gradi di setpoint - e la macchina ripartiva a
+        inseguire i 22, cioe' i 460-580 W che la notte mite esiste per evitare.
+        """
+        ctrl = self._smart_controller(room=26.0, outdoor=19.0)
+        self._notte_mite(ctrl, soglia=21.0, mite=25.0, pieno=22.0)
+        self.assertEqual(ctrl._compute(NOW.replace(hour=2, minute=0)).setpoint, 25.0)
+        ctrl.hass.states.values["sensor.outdoor"] = State("unavailable", {})
+        self.assertEqual(
+            ctrl._compute(NOW.replace(hour=2, minute=10)).setpoint,
+            25.0,
+            "il buco della stazione non deve riportare il target al pieno",
+        )
+        self.assertTrue(ctrl._night_mild)
+
+    def test_dry_verdict_does_not_survive_the_machine_being_off(self):
+        """`_dry_active` rispecchia la macchina, non si accumula.
+
+        Osservato il 22 agosto 2026: dopo una notte in deumidificazione il flag
+        restava acceso per tutto il giorno a macchina spenta, e alla riaccensione
+        faceva usare la soglia d'uscita (55) invece di quella d'ingresso (60) -
+        rientro in `dry` con l'umidita' al 56%.
+        """
+        ctrl = self._smart_controller(room=25.2, humidity=65)
+        self.assertEqual(ctrl._compute(GIORNO).hvac, "dry")
+        self.assertTrue(ctrl._dry_active)
+        ctrl.hass.states.values["climate.test"].state = "off"
+        ctrl._compute(GIORNO)
+        self.assertFalse(ctrl._dry_active, "a macchina ferma il giudizio decade")
+        ctrl.hass.states.values["climate.test"].state = "cool"
+        ctrl.hass.states.values["sensor.humidity"] = State("56")
+        self.assertEqual(
+            ctrl._compute(GIORNO).hvac,
+            "cool",
+            "al 56% si entra in dry solo se il ciclo era gia' in corso",
+        )
+
+    def test_cold_night_rest_measures_against_the_mild_target(self):
+        """La pausa si misura sul target di notte **effettivo**, non sul pieno.
+
+        Con la notte mite attiva il traguardo e' quello mite: misurare contro il
+        pieno faceva lavorare la macchina per un obiettivo che l'aria di fuori
+        aveva gia' superato.
+        """
+        ctrl = self._smart_controller(room=26.0, outdoor=19.0)
+        self._orari(ctrl, target_sleep=22.0)
+        ctrl.entry.options = dict(
+            ctrl.entry.options,
+            night_mild_outdoor=21.0,
+            target_sleep_mild=25.0,
+            night_start_outdoor=20.0,
+            summer_threshold=5.0,
+        )
+        self._comodino(ctrl, 26.0)          # media (19+26)/2 = 22.5
+        desired = ctrl._compute(NOW.replace(hour=2, minute=0))
+        self.assertEqual(desired.hvac, "off", "22.5 e' gia' sotto il target mite 25")
+        self.assertIn("riposa", desired.reason)
+
     # ------------------------------------------------------------ notte fredda
     def _comodino(self, ctrl, valore):
         ctrl.hass.states.values["sensor.comodino"] = State(str(valore), {})
