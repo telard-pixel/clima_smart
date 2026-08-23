@@ -1246,8 +1246,23 @@ class ClimaSmartController:
 
         Errore commesso il 6 agosto e corretto lo stesso giorno: era stato messo al
         posto della temperatura di ripresa in tutto il calcolo, e siccome legge
-        3.1-3.5 gradi meno - sta al comodino, in basso, mentre la ripresa e' in alto
-        e in un getto d'aria - lo scarto diventava sempre piccolo. Con uno scarto
+        meno - sta al comodino, in basso, mentre la ripresa e' in alto e in un
+        getto d'aria - lo scarto diventava sempre piccolo.
+
+        **Quanto meno, misurato il 23 agosto 2026 su campioni contemporanei** (le
+        due letture entro sei minuti l'una dall'altra, 11 giorni). Il divario NON
+        dipende dal compressore, dipende dalla porta della camera:
+
+            cool, giorno (porta aperta)   ripresa - comodino  +1.9 / +2.8
+            cool, notte  (porta chiusa)                       +0.9 / +1.1
+            spento, giorno                                    +1.5
+            spento, notte                                     +0.75
+
+        Il vecchio «3.1-3.5» di questo commento era **troppo grande** e misurato
+        di giorno: di notte fonda - la fascia in cui `_cold_night_off` e i target
+        notturni lo usano implicitamente - il divario reale e' circa un grado. E
+        il rapporto **non si inverte mai**: su 362 campioni la ripresa e' piu'
+        fredda del comodino nel 4.4% dei casi, sempre per uno o due decimi. Con uno scarto
         piccolo la ventola non saliva mai, e con la ventola bassa il compressore
         resta inchiodato: il setpoint e' stato abbassato di due gradi e per due ore
         la macchina non si e' mossa da 46 Hz, la ripresa da 27.0 e la casa da 26.9.
