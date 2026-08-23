@@ -1946,6 +1946,30 @@ class ControllerRegressionTests(unittest.TestCase):
         self.assertNotEqual(desired.setpoint, 23.0)
         self.assertFalse(ctrl._night_mild)
 
+    def test_the_sleep_boost_does_not_come_back_once_released(self):
+        """La spinta iniziale non deve rientrare quando lo scarto risale.
+
+        `SLEEP_BOOST_MIN_DELTA` e' una soglia nuda su un'unita' che riporta a
+        passi di mezzo grado: la notte del 14 agosto 2026 sono usciti quattro
+        comandi di ventola in dieci minuti - high, medium, high, medium - perche'
+        ogni mezzo grado la riattraversava. Degli 11 cambi di ventola sotto la
+        mezz'ora registrati in 11 giorni, tutti erano nella finestra della spinta.
+        """
+        ctrl = self._smart_controller(room=27.0)
+        self._orari(ctrl)
+        avvio = NOW.replace(hour=23, minute=35)
+        self.assertTrue(ctrl._sleep_boost_active(avvio))
+        self.assertEqual(ctrl._boost_fan(4.0, ["high", "medium", "low"], avvio), "high")
+        # La camera arriva: la spinta si rilascia.
+        dopo = avvio + timedelta(minutes=4)
+        self.assertIsNone(ctrl._boost_fan(0.0, ["high", "medium", "low"], dopo))
+        # Lo scarto risale dentro la stessa finestra: prima qui tornava `high`.
+        ancora = avvio + timedelta(minutes=6)
+        self.assertFalse(
+            ctrl._sleep_boost_active(ancora),
+            "una volta rilasciata la spinta non rientra",
+        )
+
     def test_the_approved_start_does_not_hand_control_straight_back(self):
         """Chi accende dopo un si' e' un'automazione, non una mano.
 

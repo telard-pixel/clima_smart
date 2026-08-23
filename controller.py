@@ -339,6 +339,7 @@ class ClimaSmartController:
         self._last_fan_band: str | None = None
         self._last_fan_band_at: datetime | None = None
         self._dry_active = False
+        self._sleep_boost_released_at: datetime | None = None
         # Da quando la condizione "non e' piu' stagione calda" e' vera senza
         # interruzioni: None finche' siamo in stagione.
         self._not_summer_since: datetime | None = None
@@ -1935,6 +1936,18 @@ class ClimaSmartController:
         """
         if SLEEP_BOOST_MINUTES <= 0:
             return False
+        if self._sleep_boost_released_at is not None and (
+            (now - self._sleep_boost_released_at).total_seconds() < 3600
+        ):
+            # Gia' rilasciata stanotte: non rientra. `SLEEP_BOOST_MIN_DELTA` e' una
+            # soglia nuda su un'unita' che riporta a passi di mezzo grado, quindi
+            # ogni mezzo grado la riattraversava: la notte del 14 agosto 2026 sono
+            # usciti quattro comandi di ventola in dieci minuti (high, medium,
+            # high, medium), e MIN_FAN_DWELL_SECONDS non frena qui perche'
+            # `_boost_fan` scavalca `_fan_for` e al rientro `high` non e' nemmeno
+            # un passo della tabella notturna. Un'ora basta e avanza: la finestra
+            # della spinta ne dura quindici minuti.
+            return False
         start = _parse_time(
             self._cfg(CONF_SLEEP_START, DEFAULT_SLEEP_START), DEFAULT_SLEEP_START
         )
@@ -1947,6 +1960,8 @@ class ClimaSmartController:
     def _boost_fan(self, delta: float | None, fan_modes: list | None, now: datetime) -> str | None:
         """`high` while the boost lasts, or None to leave the decision to the bands."""
         if delta is None or delta < SLEEP_BOOST_MIN_DELTA:
+            if delta is not None:
+                self._sleep_boost_released_at = now
             return None
         if fan_modes and "high" not in fan_modes:
             return None
