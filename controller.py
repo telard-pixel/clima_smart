@@ -2550,9 +2550,11 @@ class ClimaSmartController:
         # viva non e' un'alternativa: la costringerebbe a raffreddare una stanza
         # gia' fredda. Mezzo grado di banda per non ballare fra i due modi, e
         # solo di giorno: di notte `low` e' il silenzio, e il target sta comunque
-        # sotto la ripresa.
+        # sotto la ripresa. Solo da `cool`: se `_program_for` ha gia' scelto `dry`
+        # per l'umidita' alta, quella scelta vince - ventilare invece di
+        # deumidificare lascerebbe l'aria umida. Segnalato il 25 agosto 2026.
         if (
-            program in (HVAC_COOL, HVAC_DRY)
+            program == HVAC_COOL
             and ripresa is not None
             and phase not in (PHASE_SLEEP, PHASE_WIND_DOWN)
             and (not hvac_modes or HVAC_FAN_ONLY in hvac_modes)

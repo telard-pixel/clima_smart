@@ -1599,6 +1599,25 @@ class ControllerRegressionTests(unittest.TestCase):
         ctrl.hass.states.values["climate.test"].attributes["current_temperature"] = 25.2
         self.assertEqual(ctrl._compute(GIORNO).hvac, "cool")
 
+    def test_dry_wins_over_ventilation_when_humidity_is_high(self):
+        """L'umidita' alta ha la precedenza sulla sola ventilazione: fermarsi a
+        ventilare mentre l'aria e' ancora umida vanificherebbe la
+        deumidificazione. Segnalato il 25 agosto 2026."""
+        ctrl = self._smart_controller(room=24.5, humidity=65)   # ripresa sul confine fan_only
+        ctrl.hass.states.values["climate.test"].attributes["hvac_modes"] = [
+            "off", "cool", "dry", "fan_only"]
+        self.assertEqual(ctrl._compute(GIORNO).hvac, "dry")
+
+    def test_rising_humidity_pulls_fan_only_back_to_dry(self):
+        """Se l'umidita' sale mentre si sta gia' ventilando, il fan_only si toglie
+        e si passa a deumidificare."""
+        ctrl = self._smart_controller(room=24.5, humidity=50)
+        ctrl.hass.states.values["climate.test"].attributes["hvac_modes"] = [
+            "off", "cool", "dry", "fan_only"]
+        self.assertEqual(ctrl._compute(GIORNO).hvac, "fan_only")
+        ctrl.hass.states.values["sensor.humidity"] = State("65")
+        self.assertEqual(ctrl._compute(GIORNO).hvac, "dry")
+
     def test_deep_night_never_ventilates(self):
         """Di notte `low` e' il silenzio, e il target sta comunque sotto la ripresa."""
         ctrl = self._smart_controller(room=21.0)
