@@ -3496,6 +3496,20 @@ class ControllerRegressionTests(unittest.TestCase):
         )
         self.assertTrue(ctrl.override_active)
 
+    def test_our_own_aux_command_echoing_with_a_user_id_is_not_an_override(self):
+        """Il comando che mandiamo noi puo' tornare con un context.user_id
+        valorizzato: misurato sulle alette il 25 agosto 2026, ha zittito un
+        "permesso accordato" un attimo dopo averlo riconosciuto. Se lo stato
+        coincide con quello richiesto e' un'eco, non una mano - qualunque sia
+        il context."""
+        ctrl = self._con_eco()
+        ctrl._last_aux_cmd["eco_switch"] = True
+        ctrl._settle_aux_until["eco_switch"] = NOW + timedelta(seconds=120)
+        ctrl._maybe_flag_manual_switch(
+            "eco_switch", Event(State("off"), State("on", user_id="qualcuno"))
+        )
+        self.assertFalse(ctrl.override_active)
+
     def test_an_aux_change_outside_the_window_is_still_manual(self):
         ctrl = self._con_eco()
         ctrl._last_aux_cmd["eco_switch"] = True

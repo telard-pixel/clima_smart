@@ -839,9 +839,6 @@ class ClimaSmartController:
             return
 
         now = dt_util.now()
-        if new_state.context.user_id is not None:
-            self._start_override(f"comando manuale su {conf_key}")
-            return
         if (
             self._settle_mode_change_until is not None
             and now < self._settle_mode_change_until
@@ -854,14 +851,24 @@ class ClimaSmartController:
         # option string: compare like with like.
         atteso = self._last_aux_cmd.get(conf_key)
         want = new_state.state == "on" if isinstance(atteso, bool) else new_state.state
-        if settle_until is not None and now < settle_until:
-            if atteso == want:
-                return
-            # The opposite of what we just asked, right after asking it: the unit
-            # refused the command. Measured twice, about 60-70 s later and always
-            # without user context. Reading it as a manual action cost an hour of
-            # control each time; re-sending it at the next pass would just repeat
-            # the whole dance, so the switch is left alone for a while.
+        settling_now = settle_until is not None and now < settle_until
+        if settling_now and atteso == want:
+            # Eco del nostro comando: vince anche se il context porta uno
+            # user_id. Misurato sulle alette il 25 agosto 2026, subito dopo un
+            # "permesso accordato" - il comando l'avevamo mandato noi, ma
+            # l'unita' l'ha restituito con un context che ha zittito il
+            # riconoscimento del consenso.
+            return
+        if new_state.context.user_id is not None:
+            self._start_override(f"comando manuale su {conf_key}")
+            return
+        if settling_now:
+            # atteso != want qui, e il context e' gia' escluso sopra: e' un
+            # rifiuto dell'unita', non una mano. Misurato due volte, circa
+            # 60-70 s dopo, sempre senza contesto utente. Leggerlo come
+            # intervento manuale costava un'ora di controllo ceduta; re-inviarlo
+            # alla prossima passata ripeterebbe solo la stessa danza, quindi lo
+            # switch resta in pausa per un po'.
             self._aux_refused_at[conf_key] = now
             self.last_reason = f"{conf_key}: comando rifiutato dall'unita'"
             _LOGGER.info(
