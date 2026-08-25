@@ -954,7 +954,7 @@ class ControllerRegressionTests(unittest.TestCase):
         # Il pavimento caldo lo tira subito a 23.0, poi il freno lo porta al
         # target di giorno e li' si ferma.
         visti = []
-        for _ in range(4):
+        for _ in range(3):
             visti.append(ctrl._compute(t).setpoint)
             t += timedelta(
                 seconds=controller_module.HOUSE_TRIM_DWELL_SECONDS + 60
@@ -1016,7 +1016,7 @@ class ControllerRegressionTests(unittest.TestCase):
         ctrl.entry.options = dict(ctrl.entry.options, trim_max=25.0)
         ctrl._compute(GIORNO)
         t = GIORNO
-        for _ in range(4):
+        for _ in range(3):
             t += timedelta(seconds=controller_module.HOUSE_TRIM_DWELL_SECONDS + 60)
             ctrl._compute(t)
         self.assertEqual(ctrl.house_trim, 25.0)
@@ -1182,39 +1182,8 @@ class ControllerRegressionTests(unittest.TestCase):
             seconds=controller_module.HOUSE_TRIM_DWELL_SECONDS + 60
         )
         self.assertFalse(ctrl._last_step_paid(26.5, 1.0, dopo))   # casa ferma
-        self.assertIsNone(ctrl._trim_floor_today, "il primo fallimento non blocca")
-        self.assertEqual(ctrl._trim_strike_level, 24.0)
-        # Secondo tentativo sullo stesso livello, stesso esito: ora si blocca.
-        ctrl._trim_probe_casa = 26.5
-        ctrl._trim_probe_level = 24.0
-        ctrl._trim_probe_started_at = dopo
-        ancora = dopo + timedelta(
-            seconds=controller_module.HOUSE_TRIM_DWELL_SECONDS + 60
-        )
-        self.assertFalse(ctrl._last_step_paid(26.5, 1.0, ancora))
+        self.assertEqual(ctrl._trim_floor_today, 25.0)
         self.assertEqual(ctrl._trim_floor_today, 25.0)            # 24 + passo 1
-
-    def test_a_level_that_pays_on_the_retry_clears_its_strike(self):
-        """Il sospetto decade se il livello si riscatta: e' il caso che il secondo
-        strike esiste per non perdere - una prova sbagliata su tre."""
-        ctrl = self._con_anello()
-        ctrl._trim_probe_casa = 26.5
-        ctrl._trim_probe_level = 24.0
-        ctrl._trim_probe_started_at = GIORNO
-        dopo = GIORNO + timedelta(
-            seconds=controller_module.HOUSE_TRIM_DWELL_SECONDS + 60
-        )
-        self.assertFalse(ctrl._last_step_paid(26.5, 1.0, dopo))
-        self.assertEqual(ctrl._trim_strike_level, 24.0)
-        ctrl._trim_probe_casa = 26.5
-        ctrl._trim_probe_level = 24.0
-        ctrl._trim_probe_started_at = dopo
-        ancora = dopo + timedelta(
-            seconds=controller_module.HOUSE_TRIM_DWELL_SECONDS + 60
-        )
-        self.assertTrue(ctrl._last_step_paid(26.2, 1.0, ancora))   # stavolta rende
-        self.assertIsNone(ctrl._trim_strike_level)
-        self.assertIsNone(ctrl._trim_floor_today)
 
     def test_a_previous_day_probe_expires_without_learning(self):
         """Una baseline di ieri non deve creare il pavimento di oggi."""
@@ -1282,10 +1251,7 @@ class ControllerRegressionTests(unittest.TestCase):
         ctrl._trim_probe_level = 24.0
         ctrl._trim_probe_started_at = started
         self.assertFalse(ctrl._last_step_paid(28.0, 1.0, due))
-        # Quel che conta qui e' che il verdetto sia stato dato (eta' calcolata
-        # bene): al primo fallimento si segna lo strike, il pavimento arriva al
-        # secondo.
-        self.assertEqual(ctrl._trim_strike_level, 24.0)
+        self.assertEqual(ctrl._trim_floor_today, 25.0)
 
     def test_a_failed_level_is_not_retried_for_the_rest_of_the_day(self):
         """Senza il pavimento della giornata l'anello ritenterebbe lo stesso passo
@@ -1301,9 +1267,7 @@ class ControllerRegressionTests(unittest.TestCase):
                 seconds=controller_module.HOUSE_TRIM_DWELL_SECONDS + 60
             )
             visti.append(ctrl._compute(t).setpoint)
-        # Il 24 compare due volte: il primo fallimento restituisce il passo ma
-        # lascia il livello riprovabile, il secondo lo blocca.
-        self.assertEqual(visti, [24.0, 25.0, 24.0, 25.0, 25.0])
+        self.assertEqual(visti, [24.0, 25.0, 25.0, 25.0, 25.0])
 
     def test_a_step_that_pays_earns_the_next_one(self):
         """Se la casa risponde, l'anello ha diritto di continuare: il freno non e'
@@ -1360,7 +1324,7 @@ class ControllerRegressionTests(unittest.TestCase):
             seconds=controller_module.HOUSE_TRIM_DWELL_SECONDS + 60
         )
         self.assertEqual(ctrl._compute(second).setpoint, 25.0)
-        self.assertEqual(ctrl._trim_strike_level, 24.0)
+        self.assertEqual(ctrl._trim_floor_today, 25.0)
 
     def test_a_paid_probe_is_closed_inside_the_deadband(self):
         """Entrare in banda grazie al passo chiude la prova e tiene il target."""
@@ -1393,7 +1357,7 @@ class ControllerRegressionTests(unittest.TestCase):
             seconds=controller_module.HOUSE_TRIM_DWELL_SECONDS + 60
         )
         self.assertEqual(ctrl._compute(second).setpoint, 25.0)
-        self.assertEqual(ctrl._trim_strike_level, 24.0)
+        self.assertEqual(ctrl._trim_floor_today, 25.0)
         self.assertIsNone(ctrl._trim_probe_casa)
 
     def test_probe_verdict_is_consumed_only_once(self):
@@ -1418,9 +1382,7 @@ class ControllerRegressionTests(unittest.TestCase):
         self._casa(ctrl, 28.0)
         ctrl._compute(GIORNO)
         t = GIORNO
-        # Quattro giri e non tre: il pavimento arriva al SECONDO fallimento sullo
-        # stesso livello, non al primo.
-        for _ in range(4):
+        for _ in range(3):
             t += timedelta(
                 seconds=controller_module.HOUSE_TRIM_DWELL_SECONDS + 60
             )
@@ -1443,9 +1405,7 @@ class ControllerRegressionTests(unittest.TestCase):
         self._casa(ctrl, 28.0)
         ctrl._compute(GIORNO)
         t = GIORNO
-        # Quattro giri e non tre: il pavimento arriva al SECONDO fallimento sullo
-        # stesso livello, non al primo.
-        for _ in range(4):
+        for _ in range(3):
             t += timedelta(
                 seconds=controller_module.HOUSE_TRIM_DWELL_SECONDS + 60
             )

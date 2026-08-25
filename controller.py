@@ -376,17 +376,6 @@ class ClimaSmartController:
         self._trim_probe_level: float | None = None
         self._trim_probe_started_at: datetime | None = None
         self._trim_floor_today: float | None = None
-        # Il livello che ha gia' fallito una prova oggi. Serve il **secondo**
-        # fallimento sullo stesso livello per bloccarlo: misurato il 23 agosto
-        # 2026 su 22 passi veri, la prova riconosce il guadagno solo nel 64% dei
-        # casi (mediana -0.163 gradi in 45 minuti contro un rumore di +0.007
-        # appaiato per ora del giorno). Una prova che sbaglia piu' di un terzo
-        # delle volte non puo' prendere una decisione irreversibile per l'intera
-        # giornata: con due fallimenti indipendenti l'errore scende dal 36% al
-        # 13%, al prezzo di un ciclo in piu'. Allungare l'attesa invece non
-        # serviva: a 90 e 180 minuti la quota resta 64-68%, perche' la
-        # dispersione e' fra un giorno e l'altro, non nel tempo.
-        self._trim_strike_level: float | None = None
         self._trim_floor_day: date | None = None
         # Cio' che non deve morire con il processo: i contrassegni "gia' fatto
         # oggi" e la resa manuale. Senza, un riavvio dopo che l'utente ha spento
@@ -1038,7 +1027,6 @@ class ClimaSmartController:
             "trim_probe_level": self._trim_probe_level,
             "trim_probe_started_at": giorno(self._trim_probe_started_at),
             "trim_floor_today": self._trim_floor_today,
-            "trim_strike_level": self._trim_strike_level,
             "trim_floor_day": giorno(self._trim_floor_day),
             "trim_changed_at": giorno(self._trim_changed_at),
             "adaptive_changed_at": giorno(self._adaptive_changed_at),
@@ -1174,7 +1162,6 @@ class ClimaSmartController:
         self._trim_probe_level = livello_trim_di("trim_probe_level")
         self._trim_probe_started_at = istante_di("trim_probe_started_at")
         self._trim_floor_today = livello_trim_di("trim_floor_today")
-        self._trim_strike_level = livello_trim_di("trim_strike_level")
         if (
             self._trim_probe_casa is None
             or self._trim_probe_level is None
@@ -1602,7 +1589,6 @@ class ClimaSmartController:
         if self._trim_floor_day != now.date():
             self._trim_floor_day = now.date()
             self._trim_floor_today = None
-            self._trim_strike_level = None
 
     def _clear_trim_probe(self) -> None:
         """Discard every part of the current measurement as one atomic state."""
@@ -1671,21 +1657,12 @@ class ClimaSmartController:
             # raffreddare proprio prima del picco. Segnalato il 12 agosto 2026:
             # l'anello e' rimasto inchiodato a 25 tutto il giorno perche' il
             # pavimento era scattato la mattina mentre la casa saliva col sole.
-            if self._trim_strike_level != livello:
-                # Primo fallimento su questo livello: si restituisce il passo ma
-                # il livello resta riprovabile. Se non rendeva davvero, fallira'
-                # anche la prossima volta.
-                self._trim_strike_level = livello
-            else:
-                passo = passo if passo and passo > 0 else 1.0
-                candidato = livello + passo
-                self._trim_floor_today = (
-                    candidato if self._trim_floor_today is None
-                    else max(self._trim_floor_today, candidato)
-                )
-        elif reso:
-            # Ha reso: il sospetto su questo livello decade.
-            self._trim_strike_level = None
+            passo = passo if passo and passo > 0 else 1.0
+            candidato = livello + passo
+            self._trim_floor_today = (
+                candidato if self._trim_floor_today is None
+                else max(self._trim_floor_today, candidato)
+            )
         return reso
 
     def _house_trim(
