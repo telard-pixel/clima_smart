@@ -2561,6 +2561,13 @@ class ClimaSmartController:
             self._fan_only_active = ripresa <= limite
             if self._fan_only_active:
                 program = HVAC_FAN_ONLY
+                # In sola ventilazione la ventola non e' piu' un compromesso fra
+                # portata e consumo: il compressore e' fermo e restano una decina
+                # di watt, quindi `low` non fa risparmiare niente - fa solo girare
+                # meno aria. Richiesta dell'utente il 25 agosto 2026.
+                modi = climate.attributes.get("fan_modes")
+                if (not modi or "medium" in modi) and fan in (None, "low"):
+                    fan = "medium"
         else:
             self._fan_only_active = False
         return Desired(

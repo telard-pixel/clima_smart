@@ -1581,7 +1581,10 @@ class ControllerRegressionTests(unittest.TestCase):
             "off", "cool", "dry", "fan_only"]
         d = ctrl._compute(GIORNO)
         self.assertEqual(d.hvac, "fan_only")
-        self.assertIsNotNone(d.fan, "in ventilazione la ventola si comanda lo stesso")
+        self.assertEqual(
+            d.fan, "medium",
+            "in ventilazione `low` non risparmia niente: fa solo girare meno aria",
+        )
 
     def test_ventilation_gives_way_to_cooling_with_hysteresis(self):
         """Mezzo grado di banda, per non ballare fra i due modi."""
