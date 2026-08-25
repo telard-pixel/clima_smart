@@ -1568,6 +1568,41 @@ class ControllerRegressionTests(unittest.TestCase):
         dopo = GIORNO + timedelta(seconds=controller_module.MIN_FAN_DWELL_SECONDS + 60)
         self.assertEqual(ctrl._compute(dopo).fan, "low")
 
+    def test_nothing_to_cool_means_ventilate_not_stop(self):
+        """Con la ripresa sotto il target l'unita' stacca tutto e va a 8 W.
+
+        Segnalato il 25 agosto 2026: «e' inutile avere un clima acceso a 9 W, a
+        sto punto meglio spegnerlo». Abbassare il setpoint per tenere viva la
+        ventola non e' un'alternativa - costringerebbe a raffreddare una stanza
+        gia' fredda - quindi si passa a sola ventilazione.
+        """
+        ctrl = self._smart_controller(room=24.0)     # ripresa 1.0 sotto il target 25
+        ctrl.hass.states.values["climate.test"].attributes["hvac_modes"] = [
+            "off", "cool", "dry", "fan_only"]
+        d = ctrl._compute(GIORNO)
+        self.assertEqual(d.hvac, "fan_only")
+        self.assertIsNotNone(d.fan, "in ventilazione la ventola si comanda lo stesso")
+
+    def test_ventilation_gives_way_to_cooling_with_hysteresis(self):
+        """Mezzo grado di banda, per non ballare fra i due modi."""
+        ctrl = self._smart_controller(room=24.0)
+        ctrl.hass.states.values["climate.test"].attributes["hvac_modes"] = [
+            "off", "cool", "dry", "fan_only"]
+        self.assertEqual(ctrl._compute(GIORNO).hvac, "fan_only")
+        # 24.8: risalita dentro la banda, si ventila ancora
+        ctrl.hass.states.values["climate.test"].attributes["current_temperature"] = 24.8
+        self.assertEqual(ctrl._compute(GIORNO).hvac, "fan_only")
+        # 25.2: sopra il target, si torna a raffreddare
+        ctrl.hass.states.values["climate.test"].attributes["current_temperature"] = 25.2
+        self.assertEqual(ctrl._compute(GIORNO).hvac, "cool")
+
+    def test_deep_night_never_ventilates(self):
+        """Di notte `low` e' il silenzio, e il target sta comunque sotto la ripresa."""
+        ctrl = self._smart_controller(room=21.0)
+        self._orari(ctrl, target_sleep=22.0)
+        d = ctrl._compute(NOW.replace(hour=2, minute=0))
+        self.assertNotEqual(d.hvac, "fan_only")
+
     def test_medium_enters_at_one_and_a_half_not_at_two(self):
         """Richiesta dell'utente del 23 agosto 2026, con la macchina sotto gli occhi.
 

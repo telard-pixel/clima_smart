@@ -122,6 +122,7 @@ from .const import (
     DRY_HUMIDITY_OFF,
     DRY_HUMIDITY_ON,
     DRY_MAX_DELTA,
+    FAN_ONLY_MARGIN,
     COLD_NIGHT_HYSTERESIS,
     NIGHT_MILD_HYSTERESIS,
     EVENT_APPROVAL_NEEDED,
@@ -138,6 +139,7 @@ from .const import (
     HOUSE_TRIM_DWELL_SECONDS,
     HVAC_COOL,
     HVAC_DRY,
+    HVAC_FAN_ONLY,
     HVAC_HEAT,
     HVAC_OFF,
     MIN_FAN_DWELL_SECONDS,
@@ -339,6 +341,7 @@ class ClimaSmartController:
         self._last_fan_band: str | None = None
         self._last_fan_band_at: datetime | None = None
         self._dry_active = False
+        self._fan_only_active = False
         self._sleep_boost_released_at: datetime | None = None
         # Da quando la condizione "non e' piu' stagione calda" e' vera senza
         # interruzioni: None finche' siamo in stagione.
@@ -2541,6 +2544,25 @@ class ClimaSmartController:
             detail += f", ventola su {scarto_ventola:+.1f}"
         if humidity is not None:
             detail += f", umidità {humidity:.0f}%"
+        # Niente da raffreddare: si ventila invece di stare fermi. Con la ripresa
+        # sotto il target l'unita' stacca compressore e ventola e scende a 8 W,
+        # e l'aria in casa smette di circolare. Abbassare il setpoint per tenerla
+        # viva non e' un'alternativa: la costringerebbe a raffreddare una stanza
+        # gia' fredda. Mezzo grado di banda per non ballare fra i due modi, e
+        # solo di giorno: di notte `low` e' il silenzio, e il target sta comunque
+        # sotto la ripresa.
+        if (
+            program in (HVAC_COOL, HVAC_DRY)
+            and ripresa is not None
+            and phase not in (PHASE_SLEEP, PHASE_WIND_DOWN)
+            and (not hvac_modes or HVAC_FAN_ONLY in hvac_modes)
+        ):
+            limite = target if self._fan_only_active else target - FAN_ONLY_MARGIN
+            self._fan_only_active = ripresa <= limite
+            if self._fan_only_active:
+                program = HVAC_FAN_ONLY
+        else:
+            self._fan_only_active = False
         return Desired(
             hvac=program,
             setpoint=target,
@@ -2777,7 +2799,7 @@ class ClimaSmartController:
         # Fan / eco only make sense while we intend the unit to cool or
         # dehumidify (MODE_SMART's `dry` still takes a fan step); the winter
         # heat-assist cycle above stops at the setpoint.
-        if not hvac_blocked and desired.hvac in (HVAC_COOL, HVAC_DRY):
+        if not hvac_blocked and desired.hvac in (HVAC_COOL, HVAC_DRY, HVAC_FAN_ONLY):
             # 3) Fan, unless the unit is in quiet mode. Measured on the real unit:
             # with `muto` on it puts the fan back to `auto` about a minute after our
             # command, and that contextless divergence is exactly what

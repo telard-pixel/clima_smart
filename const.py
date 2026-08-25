@@ -515,6 +515,15 @@ HVAC_COOL = "cool"
 HVAC_HEAT = "heat"
 HVAC_OFF = "off"
 HVAC_DRY = "dry"
+HVAC_FAN_ONLY = "fan_only"
+# Sotto quanto la ripresa deve stare sotto il target perche' non ci sia piu'
+# niente da raffreddare. Li' l'unita' stacca tutto - compressore E ventola - e
+# scende a 8 W: in casa l'aria smette di circolare, ed e' il motivo per cui
+# l'utente il 25 agosto 2026 ha detto «e' inutile avere un clima acceso a 9 W».
+# Invece di restare ferma in `cool` la macchina passa a sola ventilazione, che
+# muove l'aria a una decina di watt. Si torna a raffreddare appena la ripresa
+# risale al target: mezzo grado di banda, per non ballare fra i due modi.
+FAN_ONLY_MARGIN = 0.5
 
 # hass.data storage key
 DATA_CONTROLLER = "controller"
