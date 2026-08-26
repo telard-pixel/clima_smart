@@ -2560,10 +2560,23 @@ class ClimaSmartController:
         # sotto la ripresa. Solo da `cool`: se `_program_for` ha gia' scelto `dry`
         # per l'umidita' alta, quella scelta vince - ventilare invece di
         # deumidificare lascerebbe l'aria umida. Segnalato il 25 agosto 2026.
+        #
+        # Ma di giorno il target della camera e' un proxy della casa (vedi
+        # sopra, "la camera e' lo strumento"): se l'anello e' attivo e la casa
+        # e' ancora sopra la linea di comfort, la camera che tocca il SUO
+        # target non e' un motivo per fermare il compressore - la casa non ha
+        # ancora finito. Misurato dal vivo il 26 agosto 2026: la casa e'
+        # risalita da 25.9 a 26.7 in due ore mentre l'unita' restava in
+        # fan_only, perche' la ventilazione non muove piu' aria fredda verso il
+        # resto della casa. Nessun effetto quando l'anello e' spento o senza
+        # sensori casa (`casa is None`): li' non c'e' una casa da aspettare.
+        linea = float(self._cfg(CONF_HOUSE_TARGET, DEFAULT_HOUSE_TARGET) or 0.0)
+        casa_soddisfatta = casa is None or linea <= 0 or casa <= linea
         if (
             program == HVAC_COOL
             and ripresa is not None
             and phase not in (PHASE_SLEEP, PHASE_WIND_DOWN)
+            and casa_soddisfatta
             and (not hvac_modes or HVAC_FAN_ONLY in hvac_modes)
         ):
             limite = target if self._fan_only_active else target - FAN_ONLY_MARGIN

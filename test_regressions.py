@@ -847,6 +847,28 @@ class ControllerRegressionTests(unittest.TestCase):
         )
         self.assertEqual(ctrl._compute(dopo).setpoint, 26.0)
 
+    def test_fan_only_does_not_stop_the_house_still_above_the_comfort_line(self):
+        """Rivisto il 26 agosto 2026: la camera raggiungeva il suo target e si
+        fermava (fan_only) anche se il resto della casa era ancora sopra la
+        linea di comfort - proprio il meccanismo per cui la camera raffredda
+        tutta la casa si bloccava mentre serviva di piu'. Misurato dal vivo la
+        sera del 26 agosto: casa salita da 25.9 a 26.7 in due ore mentre
+        l'unita' restava in fan_only."""
+        ctrl = self._con_anello(ripresa=24.0, altre=(27.3, 27.1, 26.3), linea=26.5)
+        ctrl.hass.states.values["climate.test"].attributes["hvac_modes"] = [
+            "off", "cool", "dry", "fan_only"]
+        # target_home 25.0 al primo giro: ripresa 24.0 sarebbe sotto margine, ma
+        # la casa (media 26.9) e' ancora sopra la linea 26.5 - niente fan_only.
+        self.assertEqual(ctrl._compute(GIORNO).hvac, "cool")
+
+    def test_fan_only_still_works_once_the_house_is_satisfied(self):
+        """La stessa camera, con la casa gia' sotto la linea: il fan_only resta
+        valido, perche' li' e' la camera stessa a non aver piu' nulla da fare."""
+        ctrl = self._con_anello(ripresa=24.0, altre=(25.6, 25.5, 25.4), linea=26.5)
+        ctrl.hass.states.values["climate.test"].attributes["hvac_modes"] = [
+            "off", "cool", "dry", "fan_only"]
+        self.assertEqual(ctrl._compute(GIORNO).hvac, "fan_only")
+
     def test_the_loop_gives_back_when_the_bedroom_is_already_far_below(self):
         """Casa sopra la linea, ma la camera e' gia' molto piu' fredda: da li' in
         poi il setpoint compra frequenza, non gradi in casa, e l'anello deve
