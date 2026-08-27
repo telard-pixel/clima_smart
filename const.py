@@ -221,15 +221,17 @@ STORAGE_VERSION = 1
 # del passo del climatizzatore non arriva mai come lo si e' pensato. Misurato:
 # con questo mezzo grado il comando 24.5 diventava 25.0, un grado pieno.
 ADAPTIVE_QUANTUM = 0.5
-# Due difese contro il ballo, le stesse della ventola. Salire e' immediato: se
-# fuori si alza sul serio, il target deve seguire. Scendere richiede un quanto
-# intero di margine, cioe' che l'esterna torni sotto la soglia che aveva fatto
-# salire. E fra un cambio e l'altro passa comunque questo tempo, cosi' una
-# stazione che oscilla fra 33 e 35 non produce un comando ogni cinque minuti.
-# Un'ora e non venti minuti: col vecchio valore l'attesa non frenava nulla, si
-# limitava a dettare il ritmo dell'oscillazione, che infatti il 4 agosto e' stata
-# di venti-venticinque minuti esatti. L'esterna si muove piano, ridecidere spesso
-# non aggiunge informazione.
+# Due difese contro il ballo, le stesse della ventola, e valgono SOLO sulla
+# discesa: salire e' immediato, se fuori si alza sul serio il target deve
+# seguire. Scendere richiede un quanto intero di margine, cioe' che l'esterna
+# torni sotto la soglia che aveva fatto salire, e in piu' questa attesa, cosi'
+# una stazione che oscilla fra 33 e 35 non produce un comando ogni cinque
+# minuti tornando giu'. Un'ora e non venti minuti: col vecchio valore l'attesa
+# non frenava nulla, si limitava a dettare il ritmo dell'oscillazione, che
+# infatti il 4 agosto e' stata di venti-venticinque minuti esatti. L'esterna si
+# muove piano, ridecidere spesso in discesa non aggiunge informazione.
+# (Fino al 27 agosto 2026 il codice applicava l'attesa anche in salita,
+# contraddicendo questo stesso commento: corretto dalla revisione a tre.)
 ADAPTIVE_MIN_DWELL_SECONDS = 3600
 
 # --- Anello esterno: quanto piano correggere ---

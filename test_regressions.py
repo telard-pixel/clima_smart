@@ -984,6 +984,23 @@ class ControllerRegressionTests(unittest.TestCase):
         self.assertEqual(visti[-1], 24.0)
         self.assertTrue(all(v >= 23.0 for v in visti), visti)
 
+    def test_the_hot_outdoor_floor_never_exceeds_the_ceiling(self):
+        """Trovato dalla revisione a tre del 27 agosto 2026: il pavimento
+        imposto dall'esterna calda (trim_min_hot) non era mai confrontato col
+        tetto configurato (trim_max), a differenza di trim_min/trim_max che
+        sono guardati fra loro. Con le due soglie incrociate (trim_max sotto
+        trim_min_hot) il pavimento vinceva e superava il tetto che l'utente
+        aveva impostato."""
+        ctrl = self._con_anello()
+        ctrl.entry.options = dict(
+            ctrl.entry.options, trim_max=22.0, hot_outdoor=30.0, trim_min_hot=23.0,
+        )
+        ctrl.house_trim = 20.0   # sotto il pavimento che l'esterna calda impone
+        esito = ctrl._house_trim(
+            GIORNO, casa=None, passo=1.0, comodino=None, outdoor=40.0
+        )
+        self.assertLessEqual(esito, 22.0)
+
     def test_the_brake_never_fires_at_night(self):
         """Di notte la porta e' chiusa, la casa esce dal quadro e comanda la camera
         col suo target: il freno non c'entra e non deve toccare niente."""
@@ -1021,6 +1038,21 @@ class ControllerRegressionTests(unittest.TestCase):
         d2 = ctrl._compute(GIORNO + timedelta(minutes=5))
         # Non deve esplodere ne' produrre una decisione basata sul NaN.
         self.assertIsNotNone(d2)
+
+    def test_an_implausible_return_air_does_not_trigger_fan_only(self):
+        """Trovato dalla revisione a tre del 27 agosto 2026: il ramo fan_only
+        controllava `ripresa` grezza invece di `room` filtrata da
+        `_plausible()`, quindi un glitch numerico finito ma assurdo (es.
+        -99, un cloud che risponde con un numero invece di `unavailable`)
+        finiva sempre sotto il target e fermava il compressore proprio
+        quando la vera temperatura era sconosciuta, non "raggiunta"."""
+        ctrl = self._smart_controller(room=27.0)
+        ctrl.hass.states.values["climate.test"].attributes["hvac_modes"] = [
+            "off", "cool", "dry", "fan_only"]
+        ctrl._compute(GIORNO)
+        ctrl.hass.states.values["climate.test"].attributes["current_temperature"] = -99.0
+        d = ctrl._compute(GIORNO + timedelta(minutes=5))
+        self.assertNotEqual(d.hvac, "fan_only")
 
     def test_the_brake_survives_a_restart(self):
         """Il freno viaggia insieme al target che ha prodotto: se il target si
@@ -1621,6 +1653,23 @@ class ControllerRegressionTests(unittest.TestCase):
         ctrl.hass.states.values["climate.test"].attributes["current_temperature"] = 25.2
         self.assertEqual(ctrl._compute(GIORNO).hvac, "cool")
 
+    def test_fan_only_active_survives_a_restart(self):
+        """Trovato dalla revisione a tre del 27 agosto 2026: un riavvio nel
+        mezzo di un ciclo fan_only in corso perdeva `_fan_only_active`, quindi
+        la prima valutazione dopo il riavvio usava la banda stretta
+        (target - margine) invece di quella larga di ritenzione e tornava a
+        raffreddare una stanza che era gia' dentro la banda morta."""
+        ctrl = self._smart_controller(room=24.0)   # ripresa un grado sotto: fan_only scatta
+        ctrl.hass.states.values["climate.test"].attributes["hvac_modes"] = [
+            "off", "cool", "dry", "fan_only"]
+        self.assertEqual(ctrl._compute(GIORNO).hvac, "fan_only")
+        asyncio.run(ctrl._async_save_memoria())
+        dopo = self._riavvia(ctrl)
+        # 24.7: dentro la banda morta (target-0.5, target], resta ventilazione
+        # solo se il ciclo era gia' riconosciuto come in corso.
+        dopo.hass.states.values["climate.test"].attributes["current_temperature"] = 24.7
+        self.assertEqual(dopo._compute(GIORNO).hvac, "fan_only")
+
     def test_dry_wins_over_ventilation_when_humidity_is_high(self):
         """L'umidita' alta ha la precedenza sulla sola ventilazione: fermarsi a
         ventilare mentre l'aria e' ancora umida vanificherebbe la
@@ -2025,6 +2074,28 @@ class ControllerRegressionTests(unittest.TestCase):
             "una volta rilasciata la spinta non rientra",
         )
 
+    def test_sleep_boost_release_survives_a_restart(self):
+        """Trovato dalla revisione a tre del 27 agosto 2026:
+        `_sleep_boost_released_at` non sopravviveva a un riavvio. Un riavvio
+        nella finestra dei 15 minuti dopo l'avvio della notte fonda, dopo che
+        la spinta era gia' stata rilasciata, faceva ripartire la spinta da
+        capo - la stessa oscillazione ventola misurata il 14 agosto 2026 che
+        questo flag esiste per evitare."""
+        ctrl = self._smart_controller(room=27.0)
+        self._orari(ctrl)
+        avvio = NOW.replace(hour=23, minute=35)
+        self.assertTrue(ctrl._sleep_boost_active(avvio))
+        ctrl._boost_fan(4.0, ["high", "medium", "low"], avvio)
+        rilascio = avvio + timedelta(minutes=4)
+        ctrl._boost_fan(0.0, ["high", "medium", "low"], rilascio)   # si rilascia
+        asyncio.run(ctrl._async_save_memoria())
+        dopo = self._riavvia(ctrl)
+        ancora = avvio + timedelta(minutes=6)
+        self.assertFalse(
+            dopo._sleep_boost_active(ancora),
+            "senza la memoria del rilascio, il riavvio la fa rientrare",
+        )
+
     def test_the_approved_start_does_not_hand_control_straight_back(self):
         """Chi accende dopo un si' e' un'automazione, non una mano.
 
@@ -2111,6 +2182,22 @@ class ControllerRegressionTests(unittest.TestCase):
             ctrl._compute(GIORNO).hvac,
             "cool",
             "al 56% si entra in dry solo se il ciclo era gia' in corso",
+        )
+
+    def test_dry_active_survives_a_restart(self):
+        """Trovato dalla revisione a tre del 27 agosto 2026: un riavvio nel
+        mezzo di un ciclo dry in corso perdeva `_dry_active`, quindi la prima
+        valutazione dopo il riavvio usava la soglia d'INGRESSO (60) al posto
+        di quella d'USCITA (55) e usciva da dry a torto - stesso incidente
+        del 22 agosto, ma per un riavvio invece che per la macchina spenta."""
+        ctrl = self._smart_controller(room=25.2, humidity=65)
+        self.assertEqual(ctrl._compute(GIORNO).hvac, "dry")
+        asyncio.run(ctrl._async_save_memoria())
+        dopo = self._riavvia(ctrl)
+        dopo.hass.states.values["sensor.humidity"] = State("56")
+        self.assertEqual(
+            dopo._compute(GIORNO).hvac, "dry",
+            "il ciclo era gia' in corso: al 56% deve restare in dry",
         )
 
     def test_cold_night_rest_measures_against_the_mild_target(self):
@@ -2430,6 +2517,29 @@ class ControllerRegressionTests(unittest.TestCase):
         asyncio.run(ctrl._async_save_memoria())
         dopo = self._riavvia(ctrl)
         self.assertEqual(dopo._day_start_done_on, GIORNO.date())
+
+    def test_approval_pending_survives_a_restart(self):
+        """Trovato dalla revisione a tre del 27 agosto 2026: `_day_start_done_on`
+        sopravvive al riavvio ma `_approval_waiting_on` no, quindi un riavvio
+        mentre si aspetta il "si'" su Telegram faceva scattare l'override
+        manuale (un'ora) proprio quando l'utente aveva appena acconsentito."""
+        ctrl = self._con_approvazione()
+        self._pronto_a_valutare(ctrl)
+        asyncio.run(ctrl.async_evaluate("prima"))
+        self.assertEqual(ctrl._approval_waiting_on, GIORNO.date())
+        asyncio.run(ctrl._async_save_memoria())
+        dopo = self._riavvia(ctrl)
+        self.assertEqual(
+            dopo._approval_waiting_on, GIORNO.date(),
+            "senza, il 'si'' arrivato dopo il riavvio viene letto come una mano",
+        )
+        dopo._maybe_flag_manual(
+            Event(
+                State("off", {}),
+                State("cool", {"temperature": 25.0}),
+            )
+        )
+        self.assertFalse(dopo.override_active, "il si' non e' un intervento")
 
     def test_approval_blocks_the_evening_start_too(self):
         """Anche l'avvio della notte fonda chiede il permesso, e se nessuno
@@ -3160,6 +3270,25 @@ class ControllerRegressionTests(unittest.TestCase):
                 cambi += 1
                 prec = valore
         self.assertLessEqual(cambi, 1, "il setpoint non deve rincorrere la stazione")
+
+    def test_adaptive_target_follows_a_second_rise_within_the_hour(self):
+        """Trovato dalla revisione a tre del 27 agosto 2026, confermato da due
+        revisori indipendenti: il docstring dice "going up is immediate" ma il
+        dwell di un'ora si applicava a qualunque cambiamento, anche in salita.
+        Durante un'ondata di caldo con due salti nella stessa ora il secondo
+        restava bloccato al valore vecchio fino alla scadenza dell'attesa del
+        primo, invece di seguire subito un peggioramento vero."""
+        ctrl = self._con_adattivo(33.0)
+        ctrl.entry.options = dict(
+            ctrl.entry.options, adaptive_slope=0.5, adaptive_max=3.0
+        )
+        t0 = GIORNO
+        self.assertEqual(ctrl._adaptive_extra(34.0, t0, 1.0), 1.0)
+        # Dieci minuti dopo l'esterna sale ancora, un vero peggioramento: deve
+        # seguirlo subito, non aspettare l'ora del primo cambiamento.
+        self.assertEqual(
+            ctrl._adaptive_extra(39.0, t0 + timedelta(minutes=10), 1.0), 3.0
+        )
 
     def test_adaptive_target_off_by_default(self):
         ctrl = self._smart_controller(room=28.0, outdoor=40.0)

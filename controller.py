@@ -1010,6 +1010,12 @@ class ClimaSmartController:
             "day_start_done_on": giorno(self._day_start_done_on),
             "morning_cool_off_done_on": giorno(self._morning_cool_off_done_on),
             "vane_restored_on": giorno(self._vane_restored_on),
+            # Senza questo, un riavvio mentre si aspetta il "si'" su Telegram
+            # perdeva il contrassegno: il consenso arrivava letto come una mano
+            # e il controller cedeva il comando per un'ora subito dopo che
+            # l'utente aveva appena acconsentito. Trovato dalla revisione a tre
+            # del 27 agosto 2026.
+            "approval_waiting_on": giorno(self._approval_waiting_on),
             "override_until": giorno(self._override_until),
             "adaptive_extra": self.adaptive_extra,
             "house_trim": self.house_trim,
@@ -1045,6 +1051,13 @@ class ClimaSmartController:
             # MIN_FAN_DWELL. Salvato insieme alla banda che lo ha aperto.
             "last_fan_band": self._last_fan_band,
             "last_fan_band_at": giorno(self._last_fan_band_at),
+            # Gli stessi fratelli di `_saturated`/`_hot_outdoor`/`_cold_night`:
+            # senza, un riavvio a meta' di un ciclo dry o fan_only in corso
+            # perdeva il giudizio e usava la soglia d'ingresso invece di
+            # quella d'uscita. Trovato dalla revisione a tre del 27 agosto 2026.
+            "dry_active": self._dry_active,
+            "fan_only_active": self._fan_only_active,
+            "sleep_boost_released_at": giorno(self._sleep_boost_released_at),
         }
 
     async def _async_load_memoria(self) -> None:
@@ -1094,6 +1107,7 @@ class ClimaSmartController:
         self._day_start_done_on = data_di("day_start_done_on")
         self._morning_cool_off_done_on = data_di("morning_cool_off_done_on")
         self._vane_restored_on = data_di("vane_restored_on")
+        self._approval_waiting_on = data_di("approval_waiting_on")
         self._override_until = istante_di("override_until")
         self._adaptive_changed_at = istante_di("adaptive_changed_at")
         self._trim_changed_at = istante_di("trim_changed_at")
@@ -1167,6 +1181,16 @@ class ClimaSmartController:
         )
         caldo_esterno = dati.get("hot_outdoor", False)
         self._hot_outdoor = caldo_esterno if isinstance(caldo_esterno, bool) else False
+        dry_attivo = dati.get("dry_active", False)
+        self._dry_active = dry_attivo if isinstance(dry_attivo, bool) else False
+        ventola_sola = dati.get("fan_only_active", False)
+        self._fan_only_active = ventola_sola if isinstance(ventola_sola, bool) else False
+        # Niente guardia sul futuro come per last_fan_band_at: un timestamp
+        # apparentemente nel futuro darebbe una differenza negativa, che resta
+        # comunque sotto l'ora e quindi tiene la spinta rilasciata - il verso
+        # sicuro, a differenza del dwell della ventola che bloccherebbe per
+        # sempre.
+        self._sleep_boost_released_at = istante_di("sleep_boost_released_at")
 
         self._trim_probe_casa = temperatura_di("trim_probe_casa")
         self._trim_probe_level = livello_trim_di("trim_probe_level")
@@ -1414,8 +1438,11 @@ class ClimaSmartController:
         and every flip was a setpoint command to the unit - beep included. Going up
         is immediate, because if it really is getting hotter the target must
         follow; coming down needs a whole quantum of margin, meaning the outdoor
-        has to fall back below the value that raised it; and either way a change
-        waits out ADAPTIVE_MIN_DWELL_SECONDS.
+        has to fall back below the value that raised it, and a change waits out
+        ADAPTIVE_MIN_DWELL_SECONDS on top of that margin. Only coming down waits:
+        the docstring said this from the first version that added the wait, but
+        the code never actually split the two directions until the three-reviewer
+        pass of 27 August 2026 caught it.
 
         One single path, on purpose: the early return for "below the threshold"
         used to bypass both defences, so at exactly the threshold the compensation
@@ -1453,14 +1480,21 @@ class ClimaSmartController:
         corrente = self.adaptive_extra
         if nuovo == corrente:
             return corrente
-        if nuovo < corrente and grezzo > corrente - quanto:
-            return corrente
-        if (
-            self._adaptive_changed_at is not None
-            and (now - self._adaptive_changed_at).total_seconds()
-            < ADAPTIVE_MIN_DWELL_SECONDS
-        ):
-            return corrente
+        if nuovo < corrente:
+            # Solo la discesa deve essere guadagnata: il margine di isteresi
+            # e, in piu', l'attesa minima - salire resta libero di seguire un
+            # peggioramento vero non appena supera la quantizzazione. Trovato
+            # dalla revisione a tre del 27 agosto 2026: il docstring lo diceva
+            # gia' ("going up is immediate") fin dal primo commit che ha
+            # introdotto l'attesa, ma il codice non l'ha mai distinto.
+            if grezzo > corrente - quanto:
+                return corrente
+            if (
+                self._adaptive_changed_at is not None
+                and (now - self._adaptive_changed_at).total_seconds()
+                < ADAPTIVE_MIN_DWELL_SECONDS
+            ):
+                return corrente
         self._adaptive_changed_at = now
         self.adaptive_extra = nuovo
         return nuovo
@@ -1715,8 +1749,11 @@ class ClimaSmartController:
             self._trim_changed_at = now
         if self.house_trim < minimo:
             # Il vincolo si e' appena acceso e siamo gia' sotto: si risale subito.
-            # Chiedere meno e' la direzione sicura, non ha senso aspettare.
-            self.house_trim = minimo
+            # Chiedere meno e' la direzione sicura, non ha senso aspettare. Il
+            # tetto vince comunque: un pavimento (trim_min_hot) impostato sopra
+            # trim_max per errore non deve scavalcarlo, come al primo
+            # assegnamento qui sopra.
+            self.house_trim = min(minimo, massimo)
             self._trim_changed_at = now
         if casa is None:
             return self.house_trim           # nessuna media: si tiene quello che c'e'
@@ -2574,13 +2611,13 @@ class ClimaSmartController:
         casa_soddisfatta = casa is None or linea <= 0 or casa <= linea
         if (
             program == HVAC_COOL
-            and ripresa is not None
+            and room is not None
             and phase not in (PHASE_SLEEP, PHASE_WIND_DOWN)
             and casa_soddisfatta
             and (not hvac_modes or HVAC_FAN_ONLY in hvac_modes)
         ):
             limite = target if self._fan_only_active else target - FAN_ONLY_MARGIN
-            self._fan_only_active = ripresa <= limite
+            self._fan_only_active = room <= limite
             if self._fan_only_active:
                 program = HVAC_FAN_ONLY
                 # In sola ventilazione la ventola non e' piu' un compromesso fra
