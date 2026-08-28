@@ -455,6 +455,18 @@ DRY_HUMIDITY_OFF = 55.0
 # forth while the reported temperature sits on the threshold.
 DRY_MAX_DELTA = 1.0
 DRY_DELTA_HYSTERESIS = 0.5
+# Il giudizio dry/cool guarda un target che segue la stanza al massimo a
+# questa velocita', invece del target vero che l'anello di casa sposta di un
+# grado pieno in un colpo solo ogni HOUSE_TRIM_DWELL_SECONDS. Senza questo, un
+# passo dell'anello faceva saltare lo scarto giudicato istantaneamente e
+# attraversava il bordo di uscita (DRY_MAX_DELTA + DRY_DELTA_HYSTERESIS) senza
+# che fosse cambiato nulla di reale nella stanza - misurato dal vivo il 28
+# agosto 2026, due volte, sempre un passo di un grado con l'umidita' sopra
+# soglia. Il setpoint vero che va alla macchina resta a scatto: solo il
+# giudizio dry/cool guarda questo target rallentato. Tarato su un solo
+# episodio reale (~10 minuti perche' la camera recuperasse il grado perso):
+# da riverificare su altri episodi prima di considerarlo definitivo.
+DRY_TARGET_SLEW_SECONDS_PER_DEGREE = 600
 
 # --- Day phases (only meaningful in MODE_AUTO / MODE_SMART) ---
 PHASE_DAY = "day"

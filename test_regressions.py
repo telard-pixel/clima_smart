@@ -1001,6 +1001,35 @@ class ControllerRegressionTests(unittest.TestCase):
         )
         self.assertLessEqual(esito, 22.0)
 
+    def test_dry_survives_a_house_trim_step(self):
+        """Misurato dal vivo due volte il 28 agosto 2026 (08:58 e 09:47): un
+        passo di un grado pieno dell'anello di casa fa saltare istantaneamente
+        lo scarto che `_program_for` giudica, attraversando il bordo di
+        uscita da dry (1.5) senza che sia cambiato nulla di reale nella
+        stanza - solo il traguardo. Quattro cambi di modo hvac (= quattro
+        beep fisici, e il display che lampeggia: questa Haier lo azzera a
+        ogni cambio di modo) in 15 minuti la prima volta.
+
+        La camera resta ferma a 25.5 (nessun vero cambiamento) mentre
+        l'anello, valutato ogni UPDATE_INTERVAL_SECONDS come nella realta',
+        porta il target da 25.0 a 24.0 dopo l'attesa piena."""
+        ctrl = self._con_anello(ripresa=25.5, altre=(27.3, 27.1, 26.3), linea=26.5)
+        ctrl.hass.states.values["sensor.humidity"] = State("65")
+        ctrl.entry.data = dict(ctrl.entry.data, humidity_sensor="sensor.humidity")
+        t = GIORNO
+        passo = timedelta(seconds=controller_module.UPDATE_INTERVAL_SECONDS)
+        giri = int(controller_module.HOUSE_TRIM_DWELL_SECONDS
+                    / controller_module.UPDATE_INTERVAL_SECONDS) + 1
+        desired = None
+        for _ in range(giri):
+            desired = ctrl._compute(t)
+            t += passo
+        self.assertEqual(desired.setpoint, 24.0, "l'anello si e' mosso di un passo")
+        self.assertEqual(
+            desired.hvac, "dry",
+            "il passo del trim non deve far uscire da dry nello stesso giro",
+        )
+
     def test_the_brake_never_fires_at_night(self):
         """Di notte la porta e' chiusa, la casa esce dal quadro e comanda la camera
         col suo target: il freno non c'entra e non deve toccare niente."""

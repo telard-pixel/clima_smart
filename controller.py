@@ -122,6 +122,7 @@ from .const import (
     DRY_HUMIDITY_OFF,
     DRY_HUMIDITY_ON,
     DRY_MAX_DELTA,
+    DRY_TARGET_SLEW_SECONDS_PER_DEGREE,
     FAN_ONLY_MARGIN,
     COLD_NIGHT_HYSTERESIS,
     NIGHT_MILD_HYSTERESIS,
@@ -342,6 +343,12 @@ class ClimaSmartController:
         self._last_fan_band_at: datetime | None = None
         self._dry_active = False
         self._fan_only_active = False
+        # Il target che _program_for guarda per dry/cool, rallentato rispetto
+        # al target vero che l'anello di casa sposta a scatti: vedi
+        # DRY_TARGET_SLEW_SECONDS_PER_DEGREE. Non persistito: un riavvio
+        # riparte allineato al target corrente, lag zero, innocuo.
+        self._dry_target: float | None = None
+        self._dry_target_updated_at: datetime | None = None
         self._sleep_boost_released_at: datetime | None = None
         # Da quando la condizione "non e' piu' stagione calda" e' vera senza
         # interruzioni: None finche' siamo in stagione.
@@ -2086,6 +2093,30 @@ class ClimaSmartController:
             self._last_fan_band_at = now
         return wanted
 
+    def _dry_reference_target(self, target: float, now: datetime) -> float:
+        """Target per il giudizio dry/cool, rallentato rispetto a quello vero.
+
+        L'anello di casa sposta il target vero di un grado pieno in un colpo
+        solo ogni HOUSE_TRIM_DWELL_SECONDS: la macchina lo riceve subito
+        (setpoint e ventola devono restare a scatto), ma `_program_for` no,
+        altrimenti quel salto attraversa il bordo di uscita/ingresso da dry
+        senza che sia cambiato nulla di reale nella stanza. Misurato dal vivo
+        due volte il 28 agosto 2026.
+        """
+        if self._dry_target is None:
+            self._dry_target = target
+            self._dry_target_updated_at = now
+            return target
+        trascorso = max(0.0, (now - self._dry_target_updated_at).total_seconds())
+        self._dry_target_updated_at = now
+        passo_massimo = trascorso / DRY_TARGET_SLEW_SECONDS_PER_DEGREE
+        differenza = target - self._dry_target
+        if abs(differenza) <= passo_massimo:
+            self._dry_target = target
+        else:
+            self._dry_target += math.copysign(passo_massimo, differenza)
+        return self._dry_target
+
     def _program_for(
         self, delta: float | None, humidity: float | None, hvac_modes: list | None
     ) -> str:
@@ -2524,7 +2555,11 @@ class ClimaSmartController:
             program = HVAC_COOL
             fan = "auto"
         else:
-            program = self._program_for(delta, humidity, hvac_modes)
+            delta_dry = (
+                None if room is None
+                else room - self._dry_reference_target(target, now)
+            )
+            program = self._program_for(delta_dry, humidity, hvac_modes)
             scarto_ventola = self._fan_delta(phase, room, target, compensazione)
             spinta = notte_fonda and self._sleep_boost_active(now)
             fan = (
