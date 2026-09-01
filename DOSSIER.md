@@ -1,12 +1,18 @@
 # Clima Smart — dossier tecnico dell'impianto
 
-**Ultimo aggiornamento: 6 agosto 2026, ore 08:30 (Europe/Rome).**
-**Versione in funzione: 1.7.0.**
+**Ultimo aggiornamento: 1 settembre 2026, ore 23:45 (Europe/Rome).**
+**Versione in funzione: 1.23.0.**
 
 Questo documento è scritto perché possa essere letto da un'altra intelligenza
 artificiale, o da un tecnico, senza avere accesso alla conversazione che l'ha
 prodotto. Contiene solo misure fatte sull'impianto reale e la loro fonte. Dove
 un numero è una stima e non una misura, **è scritto esplicitamente**.
+
+**Come leggere le date.** Fra la stesura originale (6 agosto, versione 1.7.0) e
+oggi sono passate sedici versioni. Le misure di agosto non sono state rifatte e
+**restano etichettate con la loro data**: valgono per l'assetto di allora, che
+non è quello di adesso. Dove una misura è stata rifatta il 1 settembre, i due
+numeri stanno accanto. Nessun numero di agosto è stato aggiornato "a occhio".
 
 ---
 
@@ -26,6 +32,10 @@ tramite chiamate di servizio. Ogni installazione richiede il **riavvio di Home
 Assistant Core** (il reload della entry non reimporta i moduli già caricati).
 
 ### Curva potenza–frequenza, misurata
+
+**Misurata in luglio-agosto 2026, quando il sensore di frequenza funzionava
+ancora. Oggi non è più rifacibile** (§2): resta l'unica fonte sugli Hz di questa
+macchina, e va trattata come tale.
 
 **Attenzione: la retta vale solo sopra i 28 Hz.** Sotto, la macchina ha uno
 zoccolo fisso — ventole interna ed esterna, elettronica, minimo del compressore —
@@ -68,50 +78,67 @@ campo di modulazione osservato: 12 → 81 Hz
 
 ## 2. I sensori, e i loro difetti
 
-| grandezza | entità | difetto noto |
+**Aggiornato il 1 settembre 2026.** Rispetto ad agosto la strumentazione è
+cambiata in due punti che contano: **il termometro di camera esiste** (era
+l'unico acquisto giustificato del §12) e **il sensore di frequenza del
+compressore non c'è più**.
+
+| grandezza | entità collegata oggi | difetto noto |
 |---|---|---|
-| temperatura camera | `climate.clima_camera` attributo `current_temperature` | **è l'aria di ripresa, non la stanza.** Un passo di ventola la sposta di **1.0 °C** in due minuti, verificato su ~40 transizioni indipendenti |
-| valvola camera | `sensor.camera_da_letto_temperatura` (Tado) | sta **dentro il getto d'aria**: legge 20.3 mentre la ripresa legge 26.0. Inutilizzabile |
+| temperatura camera (anello di controllo) | `climate.clima_camera` attributo `current_temperature` | **è l'aria di ripresa, non la stanza.** Un passo di ventola la sposta di **1.0 °C** in due minuti, verificato su ~40 transizioni indipendenti. Resta il riferimento del controllo perché è ciò che la macchina stessa insegue |
+| temperatura camera (limite) | `sensor.bthome_sensor_89af_temperatura` | il termometro al comodino, **fuori dal getto**. Serve da limite, non da riferimento: messo al posto della ripresa il 6 agosto rendeva lo scarto sempre piccolo, la ventola non saliva mai e il compressore restava inchiodato a 46 Hz. Divario ripresa − comodino misurato il 23 agosto su 362 campioni contemporanei: **+1.9/+2.8 di giorno a porta aperta, +0.9/+1.1 di notte a porta chiusa**; dipende dalla porta, non dal compressore |
+| esterna | `sensor.esterna_filtrata` (primaria), `sensor.meteo_montichiari_temperatura_precisa` (riserva) | la stazione Bresser dell'utente è installata al ristorante, **4.2 km da casa**. La catena filtrata/precisa è stata introdotta dopo la stesura originale |
+| umidità | `sensor.umidita_media_casa` | non più il solo sensore d'ingresso: è una media di casa |
+| media delle altre stanze | `sensor.salotto_temperatura`, `sensor.cucina_temperatura`, `sensor.temperatura_studio` | sono le tre collegate oggi all'anello di casa. Nascondono uno scarto da −0.5 a +1.6 secondo la stanza |
+| **frequenza compressore** | `sensor.clima_camera_frequenza_compressore` — **DISABILITATO** | **non è affidabile**: smetteva di aggiornare e per farlo ripartire serviva a volte **staccare l'unità dalla rete elettrica**. Disabilitato dall'utente di proposito. Detto il 1 settembre 2026. **Non progettare verifiche che dipendano dagli Hz**: si ricavano semmai dalla potenza dello Shelly letta al contrario sulla curva del §1, sapendo che oltre gli 81 Hz osservati è estrapolazione |
 | falso termometro | `sensor.camera_da_letto_temperatura_2` / `cucina_temperatura_2` | è la **temperatura interna della scheda** di uno Shelly 1 Gen4. Media settimanale 32.3 °C. Da ignorare |
-| media di casa | `sensor.clima_smart_media_di_casa` | media di salotto, cucina, ingresso (tre valvole Tado). Costruita bene, ma **nasconde uno scarto da −0.5 a +1.6 secondo la stanza** |
-| esterna | `sensor.meteo_montichiari_temperatura` | stazione Bresser **dell'utente**, ma installata al ristorante dove lavora, **4.2 km da casa**. Riporta **gradi interi**, aggiorna ogni 5 minuti |
-| umidità | `sensor.ingresso_umidita` | 38-53% nella settimana, sempre sotto la soglia `dry` di 60 |
 
-**Non esiste un termometro ambiente in camera fuori dal getto d'aria.** È il buco
-principale della strumentazione, e la ragione della domanda aperta n. 2.
+**Conseguenza del termometro di camera:** la correzione setpoint, che ad agosto
+valeva −1.0 ed era "la pezza che il sensore di stanza esiste per togliere", **oggi
+è a 0.0**. La pezza è stata effettivamente tolta.
 
----
+## 3. Assetto in funzione (1.23.0)
 
-## 3. Assetto in funzione (1.7.0)
+**Letto il 1 settembre 2026 dalla memoria della config entry**, non dai
+predefiniti del codice: sono i 37 valori realmente in funzione.
 
 ### Ciclo giornaliero
 
 | ora | comportamento |
 |---|---|
-| 23:00 → 07:30 | notte fonda, target **22.5** (comandati 22.0), ventola per bande notturne, alette in `swing`. Primi 15 minuti a ventola `high` («spinta iniziale») se lo scarto supera 0.3 |
-| 07:30 → 08:30 | `cool` con ventola `auto`. Provato `dry`, misurato peggiore a pari deriva della camera: 0.396 kWh in `dry` contro 0.364 in `cool`, e 0.333 contro 0.293 il giorno dopo |
-| 08:30 | spegnimento, **una volta sola** |
-| dalle 09:00 | riaccensione automatica se **esterna ≥ 29** *e* (**camera ≥ 27** *oppure* **media di casa ≥ 26.5**). Nessuna attesa a orologio: l'attesa fissa fino alle 10:00 era un valore predefinito mai scelto |
-| giorno | target **25.0** più compensazione adattiva |
+| 23:00 → 08:00 | notte fonda (`sleep_start` 23:00, `sleep_end` 08:00), target **22.5** — che la macchina riceve come **23.0**, vedi §6.2 |
+| dalle 22:00 | fascia notte (`night_start`) |
+| 08:30 | spegnimento del mattino **disattivato** (`morning_off_enabled = False`, dal 12 agosto: di giorno il clima deve restare acceso) |
+| dalle 10:00 | fascia giorno (`day_start`) |
+| giorno | target dato dall'**anello di casa**, non più fisso: `house_target` 26.3 come linea, target camera fra `trim_min` 24.0 e `trim_max` 27.0 |
 
-### Parametri, con la loro origine
+### I parametri, con la loro origine
 
 | parametro | valore | origine |
 |---|---|---|
-| `target_home` | 25.0 | scelta utente (predefinito 26.0) |
-| `target_sleep` | 22.5 | scelta utente (predefinito 23.0) |
-| `setpoint_offset` | −1.0 | misurato, **ma non è documentato a quale velocità di ventola** - ed e' la pezza che il sensore di stanza (opzione `room_sensor`, aggiunta nella 1.6.0) esiste per togliere |
-| soglie avvio | 27.0 / 26.5 / 29.0 | attivate dall'utente (predefinite: disattivate) |
-| bande ventola giorno | 2.0 `high` / 1.0 `medium` / 0.0 `low` | misurate |
-| isteresi ventola giorno | **1.0 in salita, 0.5 in discesa** | misurata. Simmetrica a 1.5 la ventola non saliva mai (serviva scarto 2.5, il massimo osservato e' 2.5); simmetrica a 1.0 entrava in `medium` a 2.0 e non ne usciva piu' perche' pretendeva 0.0, costando 0.70 kWh in un pomeriggio senza consegnare freddo. Asimmetrica: entra a 2.0, esce a 0.5 |
-| isteresi ventola notte | **0.5** | scelta: con 1.5 `low` sarebbe irraggiungibile, e `low` è il silenzio |
-| permanenza minima ventola | 1800 s | misurata: fra i passi ci sono 8 W, non valgono un comando ogni 10 minuti |
-| adattivo | partenza 33, pendenza 0.25, tetto 1.5, attesa 3600 s | misto. **Il tetto dichiarato 1.5 vale in realta' 1.0**: viene portato a un multiplo del passo macchina prima di arrotondare |
-| spinta iniziale notte | 15 min, soglia 0.3 | misurata sull'episodio del 4-5 agosto |
+| `target_home` | **24.0** | scelta utente (era 25.0 ad agosto) |
+| `target_sleep` | 22.5 | scelta utente |
+| `setpoint_offset` | **0.0** | era −1.0: tolto quando è arrivato il termometro di camera |
+| `summer_threshold` | 19.0 | scelta utente |
+| anello di casa | linea 26.3, trim 24.0–27.0, `trim_min_hot` 23.0 sopra `hot_outdoor` 36.0, `room_floor` 21.0 | introdotto dopo la stesura originale; una correzione ogni 45 minuti, un passo macchina alla volta |
+| soglie avvio diurno | stanza **27.0**, casa **27.5**, esterna **26.0** | erano 27.0 / 26.5 / 29.0 ad agosto |
+| `start_approval` | **True** | il controller non parte più da solo: lancia un evento e aspetta un sì su Telegram. **Nessun timeout: nessuna risposta significa spento** |
+| `auto_start_sleep` | True | avvio automatico all'apertura del sonno |
+| notte mite | `night_mild_outdoor` 22.0, `target_sleep_mild` 23.0 | se fuori è mite la notte fonda si accontenta |
+| aiuto invernale | parte sotto 18.0, target camera 19.0, tetto casa 20.0 | fuori stagione aiuta i caloriferi |
+| eco | banda 2.0, ON sotto 33.0, OFF sopra 34.0 | |
+| adattivo sull'esterna | **disattivato** (`adaptive_outdoor_start = 0.0`) | ad agosto era attivo con partenza 33; misurato allora un effetto ≈ 0 |
+| override manuale | 60 minuti | |
+| alette | giorno `position_0` / `position_5`, **fisse anche di notte** | dal 13 agosto: oscillando mescolavano l'aria e il freddo non restava in basso |
 
----
+**Non più esistente:** l'opzione `vane_sleep_position`, rimossa nella 1.23.0
+perché dal 13 agosto non la leggeva più nessuno. Un valore orfano può restare
+nella memoria della entry: è inerte.
 
 ## 4. Il bilancio energetico, misurato
+
+### 4.1 Agosto 2026 (versione 1.7.0) — **misura storica, non più l'assetto attuale**
+
 
 Media dei tre giorni pieni (2, 3, 4 agosto), giornata definita 23:00 → 23:00.
 Fonte: statistiche a 5 minuti dello Shelly, coincidenti al grammo con
@@ -138,7 +165,57 @@ kWh dichiarati per l'intera abitazione.**
 
 ---
 
+### 4.2 Dieci giorni fino al 1 settembre 2026 (versioni 1.19 → 1.23)
+
+Stesse fonti (statistiche orarie dello Shelly, giornata 23:00 → 23:00), lette il
+1 settembre.
+
+| giornata | kWh | esterna media 12–18 |
+|---|---|---|
+| 22/08 | 3.00 | 28.2 |
+| 23/08 | 2.40 | 29.2 |
+| 24/08 | 3.34 | 24.6 |
+| 25/08 | 4.27 | 29.1 |
+| 26/08 | 9.98 | 29.8 |
+| 27/08 | 6.26 | 28.9 |
+| 28/08 | 5.84 | 29.5 |
+| 29/08 | 7.19 | 29.8 |
+| 30/08 | 6.16 | 31.0 |
+| 31/08 | 7.40 | 29.7 |
+| **media** | **5.58** | **29.0** |
+
+**Da 12.16 a 5.58 kWh al giorno: il 46% di prima**, con esterne pomeridiane
+confrontabili (29.0 di media contro i 30.8–32.3 delle giornate di agosto usate
+nel confronto del §6.3: oggi fa un po' meno caldo, non la metà).
+
+**Da dove viene il dimezzamento, misurato.** Le due cause si separano:
+
+| | agosto (1.7.0) | fine agosto (1.19→1.23) |
+|---|---|---|
+| ore in cui la macchina assorbe | **24** (girava praticamente sempre) | **16.1** |
+| watt medi mentre lavora | **507** (media sulle 24 h) | **335** |
+
+0.67 × 0.66 = 0.44, contro lo 0.46 misurato: **la decomposizione torna**. Circa
+metà del risparmio viene dal fatto che la macchina sta ferma più a lungo, l'altra
+metà dal fatto che quando lavora tira meno.
+
+**Attenzione a non attribuirlo al software.** Le ore in meno hanno una causa
+dichiarata e non software: `start_approval` è acceso, quindi molte mattine la
+macchina **non parte finché una persona non dice di sì** (il 31 agosto il
+permesso è arrivato alle 11:29). I watt in meno sono compatibili con l'anello di
+casa, che di giorno chiede alla camera un target spesso più alto del vecchio 25.0
+fisso — ma **non è isolato sperimentalmente**, e la stagione nel frattempo è
+girata. *Quanto sopra è una decomposizione misurata; l'attribuzione delle cause è
+un'inferenza plausibile, non una misura.*
+
 ## 5. Il listino prezzi delle leve, misurato
+
+**Misure di inizio agosto 2026, assetto 1.7.0. Non rifatte.** Due voci sono oggi
+fuori contesto: il "+1 °C di target diurno" era misurato su un target **fisso**,
+mentre oggi il target di giorno lo decide l'anello di casa e si muove da solo fra
+24.0 e 27.0; la pausa mattutina 08:30-10:00 non esiste più (spegnimento del
+mattino disattivato). Restano valide come ordini di grandezza del **costo di un
+grado**, non come previsione di risparmio su questo assetto.
 
 | leva | valore | qualità del dato |
 |---|---|---|
@@ -227,51 +304,76 @@ quattro giorni: l'umidità è rimasta fra 38 e 53% contro una soglia di 60.
 
 ## 7. Difetti aperti, in ordine di gravità
 
-### 7.1 Il silenzio notturno non viene consegnato — **comfort, non energia**
+**Rivisto il 1 settembre 2026.** Dei cinque difetti dell'elenco originale ne
+restano aperti due, e nessuno dei due è quello che sembrava più grave.
 
-`FAN_BANDS_SLEEP` scende a `low` sotto scarto −0.5; con isteresi 0.5 serve
-**−1.0**, cioè camera **≤ 20.5** (target 22.5, correzione −1.0). La camera si
-assesta a 23.0 e il minimo mai registrato è 21.5. Risultato misurato: la ventola
-notturna è **`medium` per il 97% del tempo** (393 campioni su 404).
+### 7.1 Il silenzio notturno arriva, ma poco — **comfort, non energia. APERTO**
 
-L'utente ha scollegato il muto proprio perché «il silenzio si fa con la ventola
-bassa». **Quel silenzio, per costruzione, non gli arriva mai.**
+Misurato sui dieci giorni fino al 1 settembre, distribuzione della ventola in
+notte fonda (23:00–08:00, 299 campioni):
 
-### 7.2 La ventola non modula più, in nessuna delle due fasi
+| passo | quota |
+|---|---|
+| `medium` | **77%** |
+| `high` | 11% |
+| `low` | **5%** |
+| `auto` | 5% |
 
-Con isteresi 1.5, salire da `low` a `medium` di giorno richiede uno scarto **≥ 2.5**
-(banda 1.0 + isteresi 1.5), cioè camera ≥ 27.5 con target 25. Il massimo mai
-osservato in fase `day` è **+2.5**, presente lo **0.6%** del tempo; `high`
-(serve ≥ 3.5) **0.0%**. Quindi oggi la ventola è **`low` fisso di giorno e
-`medium` fisso di notte**, e le bande diurne sono decorative.
+Ad agosto `medium` valeva il 97% e `low` il 3%: è migliorato, ma **`low` — che
+per l'utente è il silenzio — resta un'eccezione**. Il vincolo §9.3 non è ancora
+onorato davvero.
 
-Questo ha chiuso il disastro del 5 agosto, ma se l'intenzione era avere una
-ventola che modula, **oggi non modula**. Costo energetico dell'immobilità: 8 W,
-irrilevante. Costo di comfort: da valutare.
+### 7.2 La ventola non modula — **RISOLTO, misurato**
 
-### 7.3 Il tetto dell'adattivo dichiara 1.5 e vale 1.0
+Era il difetto peggiore di agosto: `low` fisso di giorno, `medium` fisso di
+notte, bande diurne decorative. Stessa misura, fascia 10:00–22:00, 343 campioni:
+**`medium` 37%, `low` 37%, `auto` 21%, `high` 3%.** La ventola modula.
 
-Il codice porta il tetto su un multiplo del quanto **prima** di arrotondare:
-`floor(1.5 / 1.0) × 1.0 = 1.0`. Confermato dallo storico, dove il target attivo
-assume **solo 25.0 o 26.0**, mai 25.5 o 26.5. Il valore mostrato nelle opzioni
-non è quello ottenuto.
+### 7.3 Il tetto dell'adattivo dichiarava 1.5 e valeva 1.0 — **SOSPESO**
 
-### 7.4 Tre chiavi di configurazione morte
+Non riverificato, ma senza effetto pratico: l'adattivo sull'esterna è
+**disattivato** (`adaptive_outdoor_start = 0.0`). Se un giorno lo si riaccende,
+questo è il primo punto da ricontrollare.
 
-`presence_entity`, `presence_home_state`, `target_away` non sono più referenziate
-da nessuna parte nella 1.4.0.
+### 7.4 Le chiavi di configurazione morte — **RISOLTO**
 
-### 7.5 La correzione −1.0 è tarata su una velocità di ventola ignota
+`presence_home_state` e `target_away` non esistono più nel codice.
+`presence_entity` invece è **viva** (la usa `_fuori_casa`) e dal 1 settembre è
+**scegliibile dal flusso di configurazione**: fino a quel giorno non compariva in
+nessuna schermata e il suo predefinito era cablato su `person.rob`, l'entità di
+una sola installazione. Su qualunque altra la guardia "non accendo la notte fonda
+se sono fuori" restava spenta in silenzio.
 
-Poiché un passo di ventola sposta la lettura di un grado pieno, la correzione è
-giusta a una velocità e sbagliata di un grado a un'altra. Indizio nei dati: lo
-scarto camera‑target è **positivo di giorno** (+0.5/+1.0, il grado sopra target
-che l'utente accetta) ma **negativo alle 04‑05** (−0.53/−0.56). *Inferenza
-plausibile, non isolata sperimentalmente.*
+### 7.5 La correzione −1.0 tarata su una velocità di ventola ignota — **RISOLTO**
 
----
+`setpoint_offset` oggi vale **0.0**: con il termometro di camera collegato la
+pezza non serve più.
+
+### 7.6 Due cose note e deliberatamente lasciate così
+
+- **La soglia "assorbimento anomalo" del guardiano (1250 W) sta sotto il tetto
+  fisico della macchina.** Il 30 agosto ha segnalato 1304 W durante un'accensione
+  **manuale** con camera a 28.5, esterna a 33 e setpoint 22: estrapolando il
+  rapporto W/Hz della curva del §1 agli 81 Hz osservati si ottiene ~1296 W, cioè
+  la macchina al massimo, non un guasto. L'utente ha scelto di **lasciare 1250**:
+  meglio un falso allarme che perdere un evento fuori inviluppo. *L'estrapolazione
+  non è una misura, e non è verificabile: vedi il sensore Hz nel §2.*
+- **`DRY_TARGET_SLEW_SECONDS_PER_DEGREE` (600 s/grado) è verificato funzionare,
+  non riverificato come numero.** È tarato su un solo episodio reale (28 agosto,
+  08:58: 601 secondi esatti fra il salto dell'anello e il rientro in `dry`). La
+  ricerca del 1 settembre su 90 giorni di cronologia **non ha trovato nessun altro
+  episodio con la stessa firma**: la combinazione umidità sopra soglia + `dry`
+  attivo + passo dell'anello proprio sul bordo è rara. Due inneschi post-correzione
+  (29 agosto, 10:03 e 10:48, umidità 62%) sono passati **senza capovolgimenti**: il
+  meccanismo tiene, ma una seconda misura indipendente della costante non esiste.
 
 ## 8. Comfort consegnato, misurato su 71 ore stabili
+
+**Misura di inizio agosto 2026, assetto 1.7.0. Non rifatta.** Da allora è nato
+l'anello di casa, che punta esattamente al problema descritto qui sotto: le
+stanze diverse dalla camera. Una misura nuova, con lo stesso metodo, direbbe se
+l'anello ha consegnato — ed è la prima cosa da rifare quando servirà un giudizio
+sul comfort e non sull'energia.
 
 Percentuale di tempo entro **1 °C** dal target realmente attivo:
 
@@ -313,7 +415,11 @@ target.
 3. L'entità di aggiornamento di HACS riporta la versione **dell'ultima release
    GitHub**, non quella dei file installati: un'installazione manuale senza tag
    lascia HACS convinto di avere la versione vecchia, e prima o poi la
-   sovrascrive.
+   sovrascrive. **Verificato che era successo davvero:** il 1 settembre 2026
+   l'ultimo tag sul repo era `1.20.1` mentre sul disco girava la **1.22.1** — le
+   1.21.x e 1.22.x non erano mai state taggate, e la trappola è rimasta armata per
+   una settimana. Regola: **ogni installazione va accompagnata dal tag**, anche
+   quando i file si copiano a mano.
 4. I timestamp restituiti dall'API storica di Home Assistant sono **UTC**. Tre
    revisori indipendenti hanno tratto conclusioni sbagliate ignorandolo.
 
@@ -321,42 +427,44 @@ target.
 
 ## 11. Domande aperte, e la misura che le chiuderebbe
 
-| # | domanda | misura necessaria |
-|---|---|---|
-| 1 | Il `cool` al posto del `dry` fra 07:30 e 08:30 conviene sull'energia dell'**ora intera**? | primo confronto utile: 6 agosto contro 5 agosto. *Previsione: +0.1/0.2 kWh, cioè non conviene* |
-| 2 | A quale velocità di ventola è tarata la correzione −1.0? | **richiede un termometro ambiente in camera**, fuori dal getto |
-| 3 | Quanto vale un grado di target notturno? | 8‑10 notti alternate 22.5 / **23.5** (non 23.0, che è identico), confrontando i kWh 23:00‑07:30 normalizzati sull'esterna |
-| 4 | Ripartire alle 09:00 conviene? | 6 giorni alternati 09:00 / 10:00, confrontando i kWh 09:00‑13:00 a esterna appaiata |
+**Rivisto il 1 settembre 2026.**
 
----
+| # | domanda | stato |
+|---|---|---|
+| 1 | Il `cool` al posto del `dry` fra 07:30 e 08:30 conviene sull'ora intera? | **superata**: la coda mattutina non esiste più con questo assetto (`sleep_end` 08:00, spegnimento del mattino disattivato) |
+| 2 | A quale velocità di ventola è tarata la correzione −1.0? | **chiusa**: la correzione è 0.0, il termometro di camera è arrivato |
+| 3 | Quanto vale un grado di target notturno? | **aperta**. Servono 8-10 notti alternate 22.5 / **23.5** (non 23.0, che la macchina riceve identico: §6.2), confrontando i kWh 23:00–08:00 normalizzati sull'esterna |
+| 4 | Ripartire alle 09:00 conviene? | **superata da `start_approval`**: oggi l'ora di partenza la decide una persona rispondendo su Telegram, non una soglia |
+| 5 | **Perché `low` di notte arriva solo il 5% del tempo?** | **nuova, aperta.** È il difetto §7.1. La misura che la chiude: distribuzione della ventola notturna dopo aver spostato il bordo delle bande notturne, a parità di target |
+| 6 | **Il dimezzamento dei consumi quanto deve all'anello di casa e quanto alle ore in meno?** | **nuova, aperta.** La decomposizione ore/watt del §4.2 è misurata, l'attribuzione no. La chiuderebbe una settimana con `start_approval` spento e l'anello attivo, confrontata con una a parti invertite |
 
 ## 12. Acquisti giustificati
 
-**Uno solo: un termometro ambiente in camera, fuori dal getto d'aria.**
+**Aggiornato il 1 settembre 2026: l'unico acquisto giustificato è stato fatto.**
 
-- **Decisione oggi presa male senza di lui:** la correzione −1.0 è un numero fisso
-  che non sa quale velocità di ventola stia distorcendo la lettura, e non c'è modo
-  di verificare se il target notturno venga davvero consegnato.
-- **Come si vedrebbe la differenza:** confrontandolo per qualche notte con la
-  ripresa a `low` e a `medium`. Se la differenza fra i due non è costante, la
-  correzione fissa è formalmente sbagliata e si vede a colpo d'occhio.
-- **Strada compatibile con la rete isolata:** in camera c'è già uno **Shelly 1
-  Gen4 alimentato a rete**, che supporta il ruolo di gateway BLE per i dispositivi
-  Shelly BLU. *Verificato:* il Gen4 fa da gateway BLU. *Non verificato:* che il
-  dato di un BLU H&T arrivi a Home Assistant per quella via — l'integrazione
-  Shelly non supporta i BLU H&T, che passano da **BTHome**. **Questo anello va
-  accertato prima dell'acquisto.**
-- Alternativa già valutata: **Shelly H&T Gen3** Wi‑Fi, da alimentare via USB‑C
-  (a batteria trasmette solo a scatti di 0.5 °C, troppo grossolano per un anello
-  di controllo).
+Il termometro ambiente in camera, fuori dal getto d'aria, **c'è**:
+`sensor.bthome_sensor_89af_temperatura`, un BTHome. Ha prodotto esattamente i due
+risultati per cui era stato chiesto:
 
-**Nessun altro sensore è giustificato**, e per il criterio richiesto: non
-cambierebbe nessuna decisione. Le altre stanze hanno già le valvole Tado e il
-loro problema è fisico, non di misura; una stazione meteo locale non sposterebbe
-nessuna giornata estiva, perché le soglie che usano l'esterna sono superate per
-ampio margine tutti i giorni.
+1. la correzione setpoint fissa **è stata tolta** (da −1.0 a 0.0);
+2. il divario ripresa − comodino è stato **misurato** invece che supposto, e si è
+   scoperto che dipende dalla **porta della camera**, non dal compressore: +1.9/+2.8
+   di giorno a porta aperta, +0.9/+1.1 di notte a porta chiusa (362 campioni
+   contemporanei, 23 agosto). Il vecchio "3.1-3.5" era troppo grande e misurato
+   solo di giorno.
 
----
+Va ricordato però che **il termometro di camera non è diventato il riferimento
+del controllo, e non deve diventarlo**: provato il 6 agosto al posto della
+ripresa, rendeva lo scarto sempre piccolo, la ventola non saliva mai e il
+compressore restava inchiodato (setpoint abbassato di due gradi, due ore ferme a
+46 Hz). Serve da **limite**, per dire quando la camera ha dato abbastanza.
+
+**Nessun altro acquisto è giustificato**, e per il criterio richiesto: non
+cambierebbe nessuna decisione. Un'eccezione la merita il **sensore di frequenza
+del compressore**, che non è un acquisto ma un ripristino: oggi è disabilitato
+perché inaffidabile (§2), e la sua assenza rende non verificabili gli eventi di
+assorbimento anomalo (§7.6). Non vale però lo staccare la corrente all'unità per
+farlo ripartire.
 
 ## 13. Storia delle modifiche, per non ripetere gli errori
 
@@ -367,6 +475,36 @@ ampio margine tutti i giorni.
 | 1.2.0 | ventola diurna sulla media di casa; stato persistente ai riavvii; limiti di plausibilità; `cool` invece di `dry` nella coda | **la ventola sulla media di casa è costata il 50%, ritirata in giornata.** Il resto è rimasto |
 | 1.3.0 | tolta l'attesa fissa 08:30‑10:00 | funziona; costa 1‑3 cent/giorno e compra ~0.25 K di casa |
 | **1.4.0** | ventola diurna di nuovo sulla ripresa, isteresi 1.5 di giorno e 0.5 di notte | ha chiuso il problema, **ma ha reso la ventola inerte in entrambe le fasi** |
+
+### Da 1.7.0 a 1.23.0 (7 agosto → 1 settembre 2026)
+
+Sedici versioni. Le svolte, non l'elenco completo:
+
+| versione | cambiamento | esito |
+|---|---|---|
+| **1.8.0** | di giorno comanda la casa, la camera è lo strumento: nasce l'anello di casa | è l'assetto tuttora in funzione |
+| 1.9.x | l'esterna torna a contare ma **sui limiti**; il comodino torna a essere solo un limite | corregge l'errore del 6 agosto |
+| 1.10.0 | esterna filtrata, banda più stretta | |
+| 1.11.1 → 1.12.2 | l'anello riconosce la saturazione; **il passo si giudica dal risultato** e la lezione si salva su disco | chiude l'oscillazione dell'8 agosto |
+| 1.13.0 | lo spegnimento del mattino diventa disattivabile | poi disattivato il 12 agosto |
+| 1.14.2 | **alette fisse anche di notte** | il freddo resta in basso dove si dorme |
+| 1.15.0 | la notte fonda non parte se sono fuori | usa `presence_entity` |
+| 1.16.0 | riposo per notte fredda, spegnimento per mattina fresca | |
+| 1.17.0 | aiuto invernale ai caloriferi | |
+| **1.18.0** | **il clima chiede il permesso prima di partire** (`start_approval`) | cambia il profilo dei consumi più di qualunque taratura: vedi §4.2 |
+| 1.19.0 | la notte mite si accontenta | |
+| 1.20.x | spinta notturna, soglia ventola media a 1.5 | la ventola torna a modulare: §7.2 |
+| **1.21.0** | niente da raffreddare significa **ventilare**, non fermarsi (`fan_only`) | introduce anche il buco chiuso nella 1.23.0 |
+| 1.21.3 | l'eco del nostro comando vince sul context | niente più falsi override da comandi nostri |
+| 1.22.0 | cinque bug dalla revisione a tre del 27 agosto | |
+| 1.22.1 | il giudizio dry/cool non insegue più i passi dell'anello | §7.6, secondo punto |
+| **1.23.0** | cinque bug dalla revisione a tre del 1 settembre | il più grave: `fan_only` non era riconosciuto come ciclo nostro, e un'unità in sola ventilazione a fine stagione **non veniva più spenta da nessuno** |
+
+**Il metodo che ha prodotto di più:** la *revisione a tre*. Tre revisori
+indipendenti, ognuno su un angolo diverso (macchina a stati e persistenza; soglie
+e isteresi numeriche; integrazione con l'hardware reale), che non si vedono fra
+loro, e ogni segnalazione riverificata a mano prima di toccare il codice. Tre
+sessioni su tre hanno prodotto bug veri: 1.13.1, 1.22.0, 1.23.0.
 
 **Errori metodologici commessi e da non ripetere:**
 - cambiare il **segnale** di un anello lasciando le **soglie** tarate sull'altro;
