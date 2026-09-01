@@ -48,6 +48,7 @@ from .const import (
     CONF_WINTER_ROOM_TARGET,
     CONF_WINTER_HOUSE_CEILING,
     CONF_NIGHT_SWITCH,
+    CONF_PRESENCE_ENTITY,
     CONF_OUTDOOR,
     CONF_OUTDOOR_FALLBACK,
     CONF_ROOM_SENSOR,
@@ -62,7 +63,6 @@ from .const import (
     CONF_VANE_DAY_H,
     CONF_VANE_DAY_V,
     CONF_VANE_H,
-    CONF_VANE_SLEEP,
     CONF_VANE_V,
     DEFAULT_ADAPTIVE_MAX,
     DEFAULT_HOT_OUTDOOR,
@@ -99,7 +99,6 @@ from .const import (
     DEFAULT_TARGET_SLEEP,
     DEFAULT_TARGET_SLEEP_MILD,
     DEFAULT_VANE_DAY,
-    DEFAULT_VANE_SLEEP,
     DOMAIN,
 )
 
@@ -152,6 +151,10 @@ def _setup_schema(defaults: dict[str, Any]) -> vol.Schema:
             _optional(CONF_ECO_SWITCH, defaults): _entity("switch"),
             _optional(CONF_MUTE_SWITCH, defaults): _entity("switch"),
             _optional(CONF_NIGHT_SWITCH, defaults): _entity("switch"),
+            # Vuoto vale "sempre a casa": la notte fonda parte comunque.
+            _optional(CONF_PRESENCE_ENTITY, defaults): _entity(
+                ["person", "device_tracker"]
+            ),
         }
     )
 
@@ -298,9 +301,6 @@ class ClimaSmartOptionsFlow(OptionsFlow):
                     CONF_SETPOINT_OFFSET,
                     default=_num(CONF_SETPOINT_OFFSET, DEFAULT_SETPOINT_OFFSET),
                 ): vol.All(vol.Coerce(float), vol.Range(min=-3, max=3)),
-                vol.Required(
-                    CONF_VANE_SLEEP, default=_num(CONF_VANE_SLEEP, DEFAULT_VANE_SLEEP)
-                ): str,
                 vol.Optional(
                     CONF_VANE_DAY_H,
                     description={"suggested_value": _num(CONF_VANE_DAY_H, DEFAULT_VANE_DAY)},
@@ -368,7 +368,11 @@ class ClimaSmartOptionsFlow(OptionsFlow):
                     default=_num(
                         CONF_NIGHT_MILD_OUTDOOR, DEFAULT_NIGHT_MILD_OUTDOOR
                     ),
-                ): vol.All(vol.Coerce(float), vol.Range(min=0, max=45)),
+                    # 30 e non 45: la manopola rapida in number.py si ferma li',
+                    # e l'invariante dichiarata sopra e' che le due superfici
+                    # coincidano. Con 45 dalle opzioni si poteva mettere un
+                    # valore che il `number` non avrebbe mai potuto reimpostare.
+                ): vol.All(vol.Coerce(float), vol.Range(min=0, max=30)),
                 vol.Required(
                     CONF_TARGET_SLEEP_MILD,
                     default=_num(

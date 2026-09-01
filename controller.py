@@ -77,7 +77,6 @@ from .const import (
     CONF_VANE_DAY_H,
     CONF_VANE_DAY_V,
     CONF_VANE_H,
-    CONF_VANE_SLEEP,
     CONF_VANE_V,
     CONF_START_APPROVAL,
     DEFAULT_ADAPTIVE_MAX,
@@ -116,12 +115,12 @@ from .const import (
     DEFAULT_TARGET_SLEEP,
     DEFAULT_TARGET_SLEEP_MILD,
     DEFAULT_VANE_DAY,
-    DEFAULT_VANE_SLEEP,
     DOMAIN,
     DRY_DELTA_HYSTERESIS,
     DRY_HUMIDITY_OFF,
     DRY_HUMIDITY_ON,
     DRY_MAX_DELTA,
+    DRY_TARGET_MAX_STEP_PER_PASS,
     DRY_TARGET_SLEW_SECONDS_PER_DEGREE,
     FAN_ONLY_MARGIN,
     COLD_NIGHT_HYSTERESIS,
@@ -2109,7 +2108,10 @@ class ClimaSmartController:
             return target
         trascorso = max(0.0, (now - self._dry_target_updated_at).total_seconds())
         self._dry_target_updated_at = now
-        passo_massimo = trascorso / DRY_TARGET_SLEW_SECONDS_PER_DEGREE
+        passo_massimo = min(
+            trascorso / DRY_TARGET_SLEW_SECONDS_PER_DEGREE,
+            DRY_TARGET_MAX_STEP_PER_PASS,
+        )
         differenza = target - self._dry_target
         if abs(differenza) <= passo_massimo:
             self._dry_target = target
@@ -2175,6 +2177,16 @@ class ClimaSmartController:
 
         cur_mode = climate.state
         cooling_active = cur_mode in (HVAC_COOL, HVAC_DRY)
+        # Due domande diverse, rimaste la stessa per sbaglio dalla 1.21.0 in poi.
+        # `cooling_active` significa «il compressore sta girando»: serve al
+        # giudizio dry, che va azzerato a macchina ferma. `nostro_ciclo`
+        # significa «questa unita' e' accesa per opera nostra», e la sola
+        # ventilazione lo e' quanto il raffrescamento - da quando la 1.21.0 ha
+        # dato al controller il diritto di comandare `fan_only`. Ogni
+        # spegnimento deve guardare il secondo: guardando il primo, un'unita'
+        # in `fan_only` non veniva riconosciuta come nostra e nessuno la
+        # fermava piu' (vedi la guardia di fine stagione qui sotto).
+        nostro_ciclo = cur_mode in (HVAC_COOL, HVAC_DRY, HVAC_FAN_ONLY)
         # Il giudizio sulla deumidificazione rispecchia la macchina, non si
         # accumula. `_program_for` e' l'unico posto che azzerava `_dry_active`, e
         # non viene raggiunto quando l'unita' e' spenta, in `gap`, in `wind_down`,
@@ -2211,7 +2223,7 @@ class ClimaSmartController:
             summer = (
                 outdoor > self.summer_threshold
                 or (
-                    cooling_active
+                    nostro_ciclo
                     and outdoor > self.summer_threshold - SUMMER_HYSTERESIS
                 )
             )
@@ -2220,7 +2232,7 @@ class ClimaSmartController:
             # Outdoor sensors unavailable: fail closed. We may maintain a cooling
             # cycle already in progress, but never start one from an indoor-only
             # reading that could actually be caused by winter heating.
-            summer = cooling_active
+            summer = nostro_ciclo
 
         if self.mode == MODE_OFF:
             self.current_phase = None
@@ -2241,7 +2253,7 @@ class ClimaSmartController:
             # Only what we drive gets switched off: `!= HVAC_OFF` also covered `heat`
             # and would have shut down a running heating cycle every winter morning,
             # the one thing the rest of this file promises never to do.
-            if self._morning_off_due(now) and cur_mode in (HVAC_COOL, HVAC_DRY):
+            if self._morning_off_due(now) and nostro_ciclo:
                 # Marked only once the command has actually gone through, in
                 # async_evaluate: marking here meant a failed turn_off was never
                 # retried and the unit cooled all day.
@@ -2261,10 +2273,7 @@ class ClimaSmartController:
         # giustificare l'anello di giorno, si spegne; _day_start_due la fara'
         # ripartire da sola piu' tardi lo stesso giorno se l'esterna sale sopra
         # soglia, perche' questo ramo non tocca il suo contrassegno.
-        if (
-            cur_mode in (HVAC_COOL, HVAC_DRY)
-            and self._morning_cool_off_due(now, outdoor)
-        ):
+        if nostro_ciclo and self._morning_cool_off_due(now, outdoor):
             # Marcato solo quando lo spegnimento e' andato a segno davvero, in
             # async_evaluate: stessa cautela dello spegnimento del mattino.
             self._morning_cool_off_armed = True
@@ -2274,7 +2283,7 @@ class ClimaSmartController:
             )
 
         if not summer:
-            if cooling_active:
+            if nostro_ciclo:
                 self.active_target = None
                 return Desired(
                     hvac=HVAC_OFF, reason="fuori stagione: spengo raffrescamento"
@@ -2589,10 +2598,13 @@ class ClimaSmartController:
                 )
         if phase == PHASE_SLEEP:
             # Alette FISSE anche di notte, nella stessa posizione del giorno. Prima
-            # era `swing` (vane_sleep_position): ma oscillando mescolavano l'aria e
-            # il freddo non restava in basso dove si dorme, la camera risaliva e la
-            # macchina faticava a riprendere i gradi dopo la spinta iniziale.
-            # Tolto il 13 agosto 2026 su segnalazione dell'utente.
+            # era `swing`, da un'opzione dedicata: ma oscillando mescolavano l'aria
+            # e il freddo non restava in basso dove si dorme, la camera risaliva e
+            # la macchina faticava a riprendere i gradi dopo la spinta iniziale.
+            # Tolto il 13 agosto 2026 su segnalazione dell'utente; l'opzione
+            # `vane_sleep_position` e' rimasta pero' nel flusso opzioni fino al 1
+            # settembre, quando una revisione l'ha trovata: si poteva impostare e
+            # non faceva piu' niente. Ora non c'e' piu' nemmeno quella.
             alette_h = self._cfg(CONF_VANE_DAY_H, DEFAULT_VANE_DAY) or None
             alette_v = self._cfg(CONF_VANE_DAY_V, DEFAULT_VANE_DAY) or None
         elif phase in (PHASE_WIND_DOWN, PHASE_DAY) and self._vane_day_due(now):

@@ -1030,6 +1030,39 @@ class ControllerRegressionTests(unittest.TestCase):
             "il passo del trim non deve far uscire da dry nello stesso giro",
         )
 
+    def test_a_single_pass_cannot_eat_the_whole_dry_hysteresis(self):
+        """Il rallentamento della 1.22.1 e' una velocita', e da sola lasciava
+        un buco: fra due valutazioni puo' passare un intervallo intero del
+        timer periodico, e 300/600 fa 0.5, cioe' tutta DRY_DELTA_HYSTERESIS.
+        Con la stanza ferma a scarto 1.0 - lo stato normale in `dry` - un solo
+        passo dell'anello su un tick silenzioso portava il giudizio a 1.5 e
+        faceva uscire da `dry` nello stesso identico giro, che e' il
+        capovolgimento senza causa reale che la 1.22.1 doveva impedire.
+
+        Qui la stanza sta ferma a 25.5, il riferimento e' assestato a 24.5
+        (scarto 1.0) e l'anello porta il target vero a 23.5."""
+        ctrl = self._smart_controller(room=25.5, humidity=65)
+        ctrl._dry_active = True
+        ctrl._dry_target = 24.5
+        ctrl._dry_target_updated_at = GIORNO
+        dopo = GIORNO + timedelta(
+            seconds=controller_module.UPDATE_INTERVAL_SECONDS
+        )
+        riferimento = ctrl._dry_reference_target(23.5, dopo)
+        scarto = 25.5 - riferimento
+        uscita = (
+            controller_module.DRY_MAX_DELTA
+            + controller_module.DRY_DELTA_HYSTERESIS
+        )
+        self.assertLess(
+            scarto, uscita,
+            "una sola passata non deve consumare tutto il margine di isteresi",
+        )
+        self.assertEqual(
+            ctrl._program_for(scarto, 65.0, ["cool", "dry"]), "dry",
+            "il passo dell'anello non deve far uscire da dry in una passata",
+        )
+
     def test_the_brake_never_fires_at_night(self):
         """Di notte la porta e' chiusa, la casa esce dal quadro e comanda la camera
         col suo target: il freno non c'entra e non deve toccare niente."""
@@ -1949,6 +1982,19 @@ class ControllerRegressionTests(unittest.TestCase):
         """Collega un'entita' di presenza al controller e le da uno stato."""
         ctrl.entry.options = dict(ctrl.entry.options, presence_entity="person.test")
         ctrl.hass.states.values["person.test"] = State(stato)
+
+    def test_no_presence_entity_means_always_at_home(self):
+        """Il default era cablato su `person.rob`, l'entita' di una sola
+        installazione, e il campo non compariva in nessuna schermata: altrove
+        quel nome non esiste e la guardia restava spenta di nascosto. Ora il
+        default e' vuoto e il campo si sceglie dal flusso: vuoto deve
+        significare 'sempre a casa', cioe' la notte fonda parte come sempre."""
+        ctrl = self._smart_controller(room=26.0)
+        self._orari(ctrl, target_sleep=23.0)
+        self.assertEqual(ctrl._presence_entity(), None)
+        self.assertFalse(ctrl._fuori_casa())
+        desired = ctrl._compute(NOW.replace(hour=2, minute=0))
+        self.assertEqual(desired.setpoint, 23.0)   # notte fonda vera
 
     def test_away_skips_the_deep_night_target(self):
         """Fuori casa la notte fonda non crolla a target_sleep: la camera resta sul
@@ -2948,6 +2994,58 @@ class ControllerRegressionTests(unittest.TestCase):
         )
         desired = ctrl._compute(GIORNO)
         self.assertNotEqual(desired.hvac, "off")
+
+    # ------------------------------- la sola ventilazione e' un ciclo nostro
+    def test_out_of_season_turns_off_fan_only_too(self):
+        """Il buco aperto dalla 1.21.0: `fan_only` lo comanda il controller
+        stesso quando la camera e' a target, ma le guardie di spegnimento
+        cercavano solo `cool` e `dry`. Un'unita' in sola ventilazione al
+        momento in cui finisce la stagione calda non veniva piu' riconosciuta
+        come nostra, e nessun ramo la spegneva: restava a ventilare a tempo
+        indeterminato, perche' il codice che ricalcola `fan_only` sta dopo la
+        guardia di stagione e non veniva piu' raggiunto."""
+        ctrl = self._smart_controller(room=23.0, outdoor=8.0)
+        ctrl.hass.states.values["climate.test"].state = "fan_only"
+        ctrl._not_summer_since = GIORNO - timedelta(
+            seconds=controller_module.SEASON_EXIT_CONFIRM_SECONDS
+        )
+        desired = ctrl._compute(GIORNO)
+        self.assertEqual(desired.hvac, "off")
+
+    def test_fan_only_keeps_the_same_season_hysteresis_as_cool(self):
+        """Dentro l'isteresi di stagione la sola ventilazione non si spegne:
+        e' lo stesso ciclo, nella sua coda."""
+        ctrl = self._smart_controller(room=25.0, outdoor=20.0)
+        ctrl.hass.states.values["climate.test"].state = "fan_only"
+        ctrl._not_summer_since = GIORNO - timedelta(
+            seconds=controller_module.SEASON_EXIT_CONFIRM_SECONDS
+        )
+        desired = ctrl._compute(GIORNO)
+        self.assertNotEqual(desired.hvac, "off")
+
+    def test_missing_outdoor_keeps_an_existing_fan_only_cycle_running(self):
+        """Esterna illeggibile: un `fan_only` in corso vale come un `cool` in
+        corso - e' comunque roba nostra, non un ciclo invernale."""
+        ctrl = self._smart_controller(room=25.0, outdoor=20.0)
+        ctrl.hass.states.values["climate.test"].state = "fan_only"
+        ctrl.hass.states.values.pop("sensor.outdoor")
+        ctrl._not_summer_since = GIORNO - timedelta(
+            seconds=controller_module.SEASON_EXIT_CONFIRM_SECONDS
+        )
+        desired = ctrl._compute(GIORNO)
+        self.assertNotEqual(desired.hvac, "off")
+
+    def test_cool_morning_stops_a_unit_left_in_fan_only(self):
+        """Anche lo spegnimento della mattina fresca cercava solo `cool` e
+        `dry`: una mattina fredda trovata con l'unita' in sola ventilazione la
+        lasciava accesa, e il tentativo e' uno solo al giorno."""
+        ctrl = self._smart_controller(room=25.0, outdoor=22.0)
+        self._orari(ctrl, morning_off_enabled=False)
+        ctrl.entry.options = dict(ctrl.entry.options, auto_start_outdoor=26.0)
+        ctrl.hass.states.values["climate.test"].state = "fan_only"
+        desired = ctrl._compute(NOW.replace(hour=8, minute=0))
+        self.assertEqual(desired.hvac, "off")
+        self.assertIn("mattina fresca", desired.reason)
 
     def test_morning_switch_off_retries_when_the_command_fails(self):
         ctrl = self._smart_controller(room=24.0)

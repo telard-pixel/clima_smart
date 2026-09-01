@@ -15,10 +15,12 @@
           "humidity_sensor": "Indoor humidity sensor (optional)",
           "house_sensors": "Thermometers in the other rooms",
           "vane_horizontal": "Horizontal vane",
-          "vane_vertical": "Vertical vane"
+          "vane_vertical": "Vertical vane",
+          "presence_entity": "Presence sensor (whoever sleeps here)"
         },
         "data_description": {
-          "house_sensors": "The rest of the house warms up before the bedroom: their average is the signal that allows starting before the peak."
+          "house_sensors": "The rest of the house warms up before the bedroom: their average is the signal that allows starting before the peak.",
+          "presence_entity": "If this entity says you are away, the deep night never starts on its own. Empty: it always does. A broken state counts as home."
         }
       },
       "reconfigure": {
@@ -35,10 +37,12 @@
           "humidity_sensor": "Indoor humidity sensor (optional)",
           "house_sensors": "Thermometers in the other rooms",
           "vane_horizontal": "Horizontal vane",
-          "vane_vertical": "Vertical vane"
+          "vane_vertical": "Vertical vane",
+          "presence_entity": "Presence sensor (whoever sleeps here)"
         },
         "data_description": {
-          "house_sensors": "The rest of the house warms up before the bedroom: their average is the signal that allows starting before the peak."
+          "house_sensors": "The rest of the house warms up before the bedroom: their average is the signal that allows starting before the peak.",
+          "presence_entity": "If this entity says you are away, the deep night never starts on its own. Empty: it always does. A broken state counts as home."
         }
       }
     },
@@ -73,7 +77,6 @@
           "auto_start_room": "Start by itself when the room goes above (°C)",
           "auto_start_house": "...or when the other rooms average goes above (°C)",
           "auto_start_outdoor": "Only if it is at least this warm outside (°C)",
-          "vane_sleep_position": "Vane position during the deep night",
           "vane_day_horizontal": "Horizontal vane during the day",
           "vane_day_vertical": "Vertical vane during the day",
           "adaptive_outdoor_start": "Adapt the target above this outdoor temperature (°C)",
@@ -99,7 +102,6 @@
           "auto_start_room": "Daytime start: if the unit is off and the room goes above this, it is switched on once a day. 0 disables it.",
           "auto_start_house": "Second condition for the daytime start, independent of the room threshold. 0 disables it.",
           "auto_start_outdoor": "No daytime start below this outdoor temperature. 0 removes the guard.",
-          "vane_sleep_position": "Usually `swing`: keeps the air moving instead of pointing it at the bed. Outside the deep night the vanes are left alone.",
           "vane_day_horizontal": "Position restored when the deep night ends, once. Empty: the vanes are left where they are.",
           "vane_day_vertical": "Position restored when the deep night ends, once. Empty: the vanes are left where they are.",
           "adaptive_outdoor_start": "0 disables it. Below this the target stays as configured.",

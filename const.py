@@ -56,7 +56,6 @@ CONF_SETPOINT_OFFSET = "setpoint_offset"
 # Position asked of both vanes during the sleep window. `swing` keeps the air
 # moving instead of pointing it at the bed, and is offered by both selects on this
 # unit; any other value the selects accept works too.
-CONF_VANE_SLEEP = "vane_sleep_position"
 # Positions restored when the sleep window ends: during the day the vanes stay
 # still. Applied once, at the wind-down transition, so moving them by hand later
 # is not undone at the next pass.
@@ -173,9 +172,14 @@ DEFAULT_MORNING_OFF_ENABLED = True
 DEFAULT_TARGET_SLEEP = 23.0
 DEFAULT_SLEEP_START = "23:30:00"
 DEFAULT_SLEEP_END = "07:30:00"
-DEFAULT_PRESENCE_ENTITY = "person.rob"
+# Vuoto, non `person.rob`: fino al 1 settembre 2026 qui c'era cablata l'entita'
+# di UNA installazione, e il campo non compariva in nessuna schermata. Su ogni
+# altra installazione quel nome non esiste, `_fuori_casa` ricadeva su "a casa" e
+# la guardia "non accendo la notte fonda se sono fuori" restava spenta per
+# sempre, senza un modo per accorgersene. Vuoto significa la stessa cosa - sempre
+# a casa - ma ora l'entita' si sceglie dal flusso di configurazione.
+DEFAULT_PRESENCE_ENTITY = ""
 DEFAULT_SETPOINT_OFFSET = 0.0
-DEFAULT_VANE_SLEEP = "swing"
 DEFAULT_VANE_DAY = ""
 DEFAULT_AUTO_START_SLEEP = False
 DEFAULT_START_APPROVAL = False
@@ -464,9 +468,42 @@ DRY_DELTA_HYSTERESIS = 0.5
 # agosto 2026, due volte, sempre un passo di un grado con l'umidita' sopra
 # soglia. Il setpoint vero che va alla macchina resta a scatto: solo il
 # giudizio dry/cool guarda questo target rallentato. Tarato su un solo
-# episodio reale (~10 minuti perche' la camera recuperasse il grado perso):
-# da riverificare su altri episodi prima di considerarlo definitivo.
+# episodio reale, il primo salto delle 08:58 (isolato: nessun'altra causa in
+# moto): 601 secondi esatti fra il salto e il rientro in dry, cioe' 600 al
+# grado. Il secondo salto delle 09:47 non e' utilizzabile per la taratura:
+# lo scarto stava gia' salendo per riscaldamento reale della stanza prima del
+# salto, quindi il tempo di rientro misurato li' e' un impasto delle due
+# cause, non la velocita' pura dell'anello.
+#
+# Riverificato il 1 settembre 2026 sulla cronologia reale dei 90 giorni
+# precedenti: nessun altro episodio con la stessa firma (salto dell'anello
+# che attraversa il bordo mentre `dry` e' attivo) e' mai avvenuto, prima o
+# dopo la 1.22.1 - la combinazione di umidita' sopra soglia, `dry` attivo e
+# salto dell'anello proprio sul bordo e' rara. Due tentativi post-fix con la
+# stessa condizione di innesco sono pero' comparsi il 29 agosto (10:03 e
+# 10:48, umidita' 62%): in entrambi nessun capovolgimento, quindi il
+# meccanismo tiene sul campo. Resta senza una seconda misura indipendente
+# della costante in se': 600 e' verificato funzionare, non riverificato come
+# numero.
 DRY_TARGET_SLEW_SECONDS_PER_DEGREE = 600
+# Il rallentamento sopra e' una velocita', e da sola non basta: fra una
+# valutazione e l'altra puo' passare un intervallo intero del timer periodico
+# (UPDATE_INTERVAL_SECONDS, 300 s), e 300/600 fa **0.5** - cioe' esattamente
+# DRY_DELTA_HYSTERESIS. Una sola passata poteva quindi consumare tutto il
+# margine e riprodurre il capovolgimento che la 1.22.1 doveva impedire: stanza
+# ferma a scarto 1.0, un passo dell'anello su un tick silenzioso, scarto
+# giudicato 1.5, fuori da `dry`. Trovato da una revisione indipendente il 1
+# settembre 2026, non ancora visto sul campo (i due inneschi del 29 agosto
+# sono passati lisci) ma aritmetico, non ipotetico.
+#
+# Quindi un tetto per passata: meta' del margine, cosi' servono sempre almeno
+# due valutazioni per attraversare il bordo. Morde solo quando le passate sono
+# piu' rade di 150 s - fitte come sono di norma, la velocita' di sopra resta
+# quella che comanda. Nel caso peggiore (solo il tick periodico) il recupero
+# di un grado passa da 10 a 20 minuti: e' il verso giusto in cui sbagliare,
+# perche' ogni cambio di modo e' un beep fisico sull'unita' e la macchina in
+# `dry` un minuto di troppo non costa niente (DOSSIER §6.4).
+DRY_TARGET_MAX_STEP_PER_PASS = DRY_DELTA_HYSTERESIS / 2
 
 # --- Day phases (only meaningful in MODE_AUTO / MODE_SMART) ---
 PHASE_DAY = "day"

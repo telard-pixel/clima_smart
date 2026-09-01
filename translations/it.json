@@ -15,10 +15,12 @@
           "humidity_sensor": "Sensore di umidità interna (opzionale)",
           "house_sensors": "Termometri delle altre stanze",
           "vane_horizontal": "Aletta orizzontale",
-          "vane_vertical": "Aletta verticale"
+          "vane_vertical": "Aletta verticale",
+          "presence_entity": "Sensore di presenza (chi dorme in casa)"
         },
         "data_description": {
-          "house_sensors": "Il resto della casa si scalda prima della camera: la loro media è il segnale che permette di partire prima del picco."
+          "house_sensors": "Il resto della casa si scalda prima della camera: la loro media è il segnale che permette di partire prima del picco.",
+          "presence_entity": "Se questa entità dice che sei fuori, la notte fonda non parte da sola. Vuoto: parte sempre. Uno stato rotto vale «a casa»."
         }
       },
       "reconfigure": {
@@ -35,10 +37,12 @@
           "humidity_sensor": "Sensore di umidità interna (opzionale)",
           "house_sensors": "Termometri delle altre stanze",
           "vane_horizontal": "Aletta orizzontale",
-          "vane_vertical": "Aletta verticale"
+          "vane_vertical": "Aletta verticale",
+          "presence_entity": "Sensore di presenza (chi dorme in casa)"
         },
         "data_description": {
-          "house_sensors": "Il resto della casa si scalda prima della camera: la loro media è il segnale che permette di partire prima del picco."
+          "house_sensors": "Il resto della casa si scalda prima della camera: la loro media è il segnale che permette di partire prima del picco.",
+          "presence_entity": "Se questa entità dice che sei fuori, la notte fonda non parte da sola. Vuoto: parte sempre. Uno stato rotto vale «a casa»."
         }
       }
     },
@@ -73,7 +77,6 @@
           "auto_start_room": "Accendi da solo quando la stanza supera (°C)",
           "auto_start_house": "...oppure quando la media delle altre stanze supera (°C)",
           "auto_start_outdoor": "Solo se fuori ci sono almeno (°C)",
-          "vane_sleep_position": "Posizione delle alette nella notte fonda",
           "vane_day_horizontal": "Aletta orizzontale di giorno",
           "vane_day_vertical": "Aletta verticale di giorno",
           "adaptive_outdoor_start": "Adatta il target sopra questa esterna (°C)",
@@ -99,7 +102,6 @@
           "auto_start_room": "Avvio diurno: se il clima è spento e la stanza supera questa temperatura, viene acceso una volta al giorno. 0 disattiva.",
           "auto_start_house": "Seconda condizione per l'avvio diurno, indipendente dalla soglia della stanza. 0 disattiva.",
           "auto_start_outdoor": "Nessun avvio diurno sotto questa temperatura esterna. 0 toglie il vincolo.",
-          "vane_sleep_position": "Di norma `swing`: tiene l'aria in movimento invece di puntarla sul letto. Fuori dalla notte fonda le alette non vengono toccate.",
           "vane_day_horizontal": "Posizione ripristinata alla fine della notte fonda, una volta sola. Vuoto: le alette restano dove sono.",
           "vane_day_vertical": "Posizione ripristinata alla fine della notte fonda, una volta sola. Vuoto: le alette restano dove sono.",
           "adaptive_outdoor_start": "0 disattiva l'adattamento. Sotto questa temperatura il target resta quello impostato.",
