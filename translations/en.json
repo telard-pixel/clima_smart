@@ -13,6 +13,7 @@
           "night_switch": "Night mode switch",
           "room_sensor": "Bedroom thermometer, used as a lower limit (not as a target)",
           "humidity_sensor": "Indoor humidity sensor (optional)",
+          "power_sensor": "Unit's power meter (optional, diagnostics only)",
           "house_sensors": "Thermometers in the other rooms",
           "vane_horizontal": "Horizontal vane",
           "vane_vertical": "Vertical vane",
@@ -35,6 +36,7 @@
           "night_switch": "Night mode switch",
           "room_sensor": "Bedroom thermometer, used as a lower limit (not as a target)",
           "humidity_sensor": "Indoor humidity sensor (optional)",
+          "power_sensor": "Unit's power meter (optional, diagnostics only)",
           "house_sensors": "Thermometers in the other rooms",
           "vane_horizontal": "Horizontal vane",
           "vane_vertical": "Vertical vane",
@@ -95,7 +97,9 @@
           "start_approval": "Ask for permission before starting (instead of starting by itself)",
           "morning_off_enabled": "Morning shutdown enabled",
           "night_mild_outdoor": "Mild night: outdoor below which deep night settles for less (0 = disabled)",
-          "target_sleep_mild": "Mild night: room target when it is cool outside"
+          "target_sleep_mild": "Mild night: room target when it is cool outside",
+          "efficiency_alert_minutes": "Sustained poor efficiency: minutes above 45 measured Hz before flagging it (0 = disabled)",
+          "high_fan_guard_minutes": "High-fan guard: minutes without gain before dropping to medium (0 = disabled)"
         },
         "data_description": {
           "auto_start_sleep": "If the unit is off at that time, it is switched on once. Outside that moment the controller never starts it by itself.",
@@ -158,6 +162,9 @@
       },
       "house_average": {
         "name": "House average"
+      },
+      "efficiency": {
+        "name": "Implied Hz (from power)"
       }
     },
     "number": {
@@ -199,6 +206,12 @@
       },
       "target_sleep_mild": {
         "name": "Mild night: room target"
+      },
+      "efficiency_alert_minutes": {
+        "name": "Poor efficiency: alert after"
+      },
+      "high_fan_guard_minutes": {
+        "name": "High-fan guard"
       }
     }
   },

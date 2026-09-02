@@ -8,7 +8,7 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import EntityCategory, UnitOfTemperature
+from homeassistant.const import EntityCategory, UnitOfFrequency, UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -36,6 +36,7 @@ async def async_setup_entry(
             ClimaSmartTargetSensor(controller),
             ClimaSmartHouseSensor(controller),
             ClimaSmartReasonSensor(controller),
+            ClimaSmartEfficiencySensor(controller),
         ]
     )
 
@@ -147,4 +148,41 @@ class ClimaSmartReasonSensor(ClimaSmartEntity, SensorEntity):
             "valutato_alle": ctrl.last_evaluated.isoformat()
             if ctrl.last_evaluated
             else None,
+        }
+
+
+class ClimaSmartEfficiencySensor(ClimaSmartEntity, SensorEntity):
+    """Hz impliciti dalla potenza Shelly: l'unica finestra rimasta sul
+    compressore da quando il sensore di frequenza e' stato disabilitato.
+
+    Vuoto (None) quando non si puo' stimare in modo onesto: macchina non in
+    raffrescamento/deumidificazione, wattmetro non collegato, o potenza sotto
+    la soglia dei 28 Hz dove la curva misurata non vale piu'.
+    """
+
+    _attr_translation_key = "efficiency"
+    _attr_icon = "mdi:sine-wave"
+    _attr_native_unit_of_measurement = UnitOfFrequency.HERTZ
+    _attr_device_class = SensorDeviceClass.FREQUENCY
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_suggested_display_precision = 1
+
+    def __init__(self, controller) -> None:
+        super().__init__(controller, "efficiency")
+
+    @property
+    def native_value(self) -> float | None:
+        return self._controller.implied_compressor_hz
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        ctrl = self._controller
+        return {
+            "w_misurati": ctrl.efficiency_measured_watts,
+            "stima_affidabile": ctrl.efficiency_reliable,
+            "in_fascia_efficiente": ctrl.efficiency_in_band,
+            "estrapolato_oltre_81hz": ctrl.efficiency_extrapolated,
+            "resa_scarsa_da_minuti": round(ctrl.poor_efficiency_minutes, 1),
+            "resa_scarsa_prolungata": ctrl.poor_efficiency_alert,
         }

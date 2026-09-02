@@ -25,6 +25,12 @@ CONF_ROOM_SENSOR = "room_sensor"
 # them last.
 CONF_VANE_H = "vane_horizontal"
 CONF_VANE_V = "vane_vertical"
+# Il wattmetro (Shelly 2PM) sulla linea dedicata. Da quando il sensore di
+# frequenza del compressore e' stato disabilitato (inaffidabile, andava
+# staccato dalla rete per farlo ripartire), e' l'unica traccia rimasta di
+# quanto sta lavorando l'unita' - letta al contrario sulla curva del §1 del
+# dossier. Solo diagnostica: vuoto non cambia alcuna decisione di controllo.
+CONF_POWER_SENSOR = "power_sensor"
 
 # --- Option keys (tunable at runtime via the options flow / number / select) ---
 CONF_TARGET_HOME = "target_home"
@@ -151,6 +157,31 @@ CONF_ADAPTIVE_START = "adaptive_outdoor_start"
 CONF_ADAPTIVE_SLOPE = "adaptive_slope"
 CONF_ADAPTIVE_MAX = "adaptive_max"
 
+# --- Diagnostica di resa (Hz impliciti dalla potenza) ---
+# Stessa curva misurata sopra, letta al contrario: dalla potenza Shelly si
+# ricava lo Hz che la produce. Vale SOLO sopra i 28 Hz (circa 302 W): sotto,
+# lo zoccolo fisso (ventole, elettronica, minimo del compressore) rende la
+# retta inutilizzabile, quindi sotto quella potenza non si stima nulla -
+# dire "resa scarsa" senza poterla misurare sarebbe inventare precisione che
+# non c'e'. La fascia 28-45 Hz e' quella di rendimento migliore (12-13
+# W/Hz); oltre gli 81 Hz osservati la formula e' estrapolazione, non misura.
+EFFICIENCY_CURVE_SLOPE = 17.7
+EFFICIENCY_CURVE_INTERCEPT = -194.0
+EFFICIENCY_BAND_MIN_HZ = 28.0
+EFFICIENCY_BAND_MAX_HZ = 45.0
+EFFICIENCY_OBSERVED_MAX_HZ = 81.0
+EFFICIENCY_CURVE_MIN_W = (
+    EFFICIENCY_CURVE_SLOPE * EFFICIENCY_BAND_MIN_HZ + EFFICIENCY_CURVE_INTERCEPT
+)
+# Oltre questa potenza uno Shelly che legge bene non arriva su questa unita':
+# scarta i glitch numerici invece di trasformarli in Hz assurdi.
+POWER_PLAUSIBLE_MAX_W = 5000.0
+# Quanti minuti consecutivi sopra i 45 Hz (misurati, non estrapolati) prima
+# di segnalare una resa scarsa prolungata. Zero disattiva solo l'allarme: la
+# stima degli Hz impliciti resta comunque visibile sul sensore.
+CONF_EFFICIENCY_ALERT_MINUTES = "efficiency_alert_minutes"
+DEFAULT_EFFICIENCY_ALERT_MINUTES = 20
+
 # --- Defaults (validated values from the original automation) ---
 DEFAULT_TARGET_HOME = 26.0
 DEFAULT_ECO_BAND = 2.0
@@ -158,6 +189,13 @@ DEFAULT_ECO_OUTDOOR_ON = 33.0
 DEFAULT_ECO_OUTDOOR_OFF = 34.0
 DEFAULT_SUMMER_THRESHOLD = 21.0
 DEFAULT_OVERRIDE_MINUTES = 60
+# Tetto che number.py e config_flow.py impongono alla manopola. Serve anche al
+# controller come sanita' del ripristino: il limite deve essere il massimo
+# CONFIGURABILE, non `self.override_minutes` letto oggi - se l'utente abbassa
+# la manopola mentre un override e' attivo e HA riavvia nel mezzo, un limite
+# legato al valore odierno scartava un override ancora valido, concesso
+# quando la manopola stava piu' alta.
+OVERRIDE_MINUTES_MAX = 480
 DEFAULT_DAY_START = "10:00:00"
 DEFAULT_NIGHT_START = "22:00:00"
 DEFAULT_MORNING_OFF_START = "08:00:00"
@@ -448,6 +486,24 @@ FAN_HYSTERESIS_SLEEP = 0.5
 # nulla da guadagnare: misurati a 45 Hz costanti, `low` 637 W e `medium` 645 W,
 # otto watt. Non vale un comando ogni dieci minuti.
 MIN_FAN_DWELL_SECONDS = 1800
+
+# --- Guardiano di resa su `high` ---
+# Lo scarto e' un indizio, il risultato e' la prova - stesso principio di
+# TRIM_PROBE_GAIN/_last_step_paid, applicato alla ventola invece che al
+# target di casa. Nato dal 10 agosto 2026: `high` acceso 3.5 ore (fino a 72
+# Hz, 814 W) senza che la ripresa si muovesse di un grado, scoperto solo
+# con un'analisi manuale dei consumi giorni dopo, non dal controller.
+# Stessa attesa della sonda di casa (HOUSE_TRIM_DWELL_SECONDS): se `high`
+# non ha mosso la ripresa di HIGH_FAN_GUARD_MIN_GAIN entro questi minuti, si
+# torna a `medium` per un'altra finestra uguale, poi si ridà la parola a
+# `_fan_for`. Zero disattiva: nessun guardiano, come prima.
+CONF_HIGH_FAN_GUARD_MINUTES = "high_fan_guard_minutes"
+DEFAULT_HIGH_FAN_GUARD_MINUTES = 45
+# Fisso, non una manopola di comfort: e' la prova minima che qualcosa si sia
+# davvero mosso, non un obiettivo di velocita'. Il caso che ha fatto nascere
+# questo guardiano non aveva mosso la ripresa di NIENTE in 3.5 ore: 0.3
+# gradi e' gia' un margine ampio sopra zero.
+HIGH_FAN_GUARD_MIN_GAIN = 0.3
 
 # --- MODE_SMART: `dry` program, only with a humidity sensor configured ---
 # Muggy but already at temperature: dehumidifying is what actually helps, and it

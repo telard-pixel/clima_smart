@@ -13,6 +13,7 @@
           "night_switch": "Switch Modalità Notte",
           "room_sensor": "Termometro della camera, usato come limite inferiore (non come obiettivo)",
           "humidity_sensor": "Sensore di umidità interna (opzionale)",
+          "power_sensor": "Wattmetro dell'unità (opzionale, solo diagnostica)",
           "house_sensors": "Termometri delle altre stanze",
           "vane_horizontal": "Aletta orizzontale",
           "vane_vertical": "Aletta verticale",
@@ -35,6 +36,7 @@
           "night_switch": "Switch Modalità Notte",
           "room_sensor": "Termometro della camera, usato come limite inferiore (non come obiettivo)",
           "humidity_sensor": "Sensore di umidità interna (opzionale)",
+          "power_sensor": "Wattmetro dell'unità (opzionale, solo diagnostica)",
           "house_sensors": "Termometri delle altre stanze",
           "vane_horizontal": "Aletta orizzontale",
           "vane_vertical": "Aletta verticale",
@@ -95,7 +97,9 @@
           "start_approval": "Chiedi il permesso prima di avviare (invece di partire da solo)",
           "morning_off_enabled": "Spegnimento del mattino attivo",
           "night_mild_outdoor": "Notte mite: esterna sotto cui la notte fonda si accontenta (0 = disattivato)",
-          "target_sleep_mild": "Notte mite: target della camera quando fuori è fresco"
+          "target_sleep_mild": "Notte mite: target della camera quando fuori è fresco",
+          "efficiency_alert_minutes": "Resa scarsa prolungata: minuti sopra i 45 Hz misurati prima di segnalarla (0 = disattivato)",
+          "high_fan_guard_minutes": "Guardiano ventola high: minuti senza guadagno prima di tornare a medium (0 = disattivato)"
         },
         "data_description": {
           "auto_start_sleep": "Se il clima è spento all'orario di inizio, lo accende una volta sola. Fuori da quel momento il controller non accende mai da sé.",
@@ -158,6 +162,9 @@
       },
       "house_average": {
         "name": "Media di casa"
+      },
+      "efficiency": {
+        "name": "Hz impliciti (da potenza)"
       }
     },
     "number": {
@@ -199,6 +206,12 @@
       },
       "target_sleep_mild": {
         "name": "Notte mite: target camera"
+      },
+      "efficiency_alert_minutes": {
+        "name": "Resa scarsa: allarme dopo"
+      },
+      "high_fan_guard_minutes": {
+        "name": "Guardiano ventola high"
       }
     }
   },

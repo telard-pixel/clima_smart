@@ -19,6 +19,8 @@ from .const import (
     CONF_ECO_BAND,
     CONF_ECO_OUTDOOR_OFF,
     CONF_ECO_OUTDOOR_ON,
+    CONF_EFFICIENCY_ALERT_MINUTES,
+    CONF_HIGH_FAN_GUARD_MINUTES,
     CONF_NIGHT_MILD_OUTDOOR,
     CONF_OVERRIDE_MINUTES,
     CONF_SETPOINT_OFFSET,
@@ -33,6 +35,8 @@ from .const import (
     DEFAULT_ECO_BAND,
     DEFAULT_ECO_OUTDOOR_OFF,
     DEFAULT_ECO_OUTDOOR_ON,
+    DEFAULT_EFFICIENCY_ALERT_MINUTES,
+    DEFAULT_HIGH_FAN_GUARD_MINUTES,
     DEFAULT_NIGHT_MILD_OUTDOOR,
     DEFAULT_OVERRIDE_MINUTES,
     DEFAULT_SETPOINT_OFFSET,
@@ -44,6 +48,7 @@ from .const import (
     DEFAULT_WINTER_ROOM_START,
     DEFAULT_WINTER_ROOM_TARGET,
     DOMAIN,
+    OVERRIDE_MINUTES_MAX,
 )
 from .entity import ClimaSmartEntity
 
@@ -96,7 +101,7 @@ _NUMBERS: tuple[TuneNumber, ...] = (
                minimum=10, maximum=30, step=1, icon="mdi:sun-thermometer",
                unit=UnitOfTemperature.CELSIUS),
     TuneNumber(key=CONF_OVERRIDE_MINUTES, default=DEFAULT_OVERRIDE_MINUTES,
-               minimum=0, maximum=480, step=5, icon="mdi:hand-back-right",
+               minimum=0, maximum=OVERRIDE_MINUTES_MAX, step=5, icon="mdi:hand-back-right",
                unit=UnitOfTime.MINUTES, device_class=NumberDeviceClass.DURATION),
     # Le tre dell'inverno, accanto alle estive: `target_home` e `target_sleep`
     # erano gia' manopole rapide, le loro corrispondenti invernali stavano
@@ -113,6 +118,17 @@ _NUMBERS: tuple[TuneNumber, ...] = (
                default=DEFAULT_WINTER_HOUSE_CEILING,
                minimum=0, maximum=30, step=0.5, icon="mdi:home-thermometer-outline",
                unit=UnitOfTemperature.CELSIUS),
+    # Diagnostica di resa: quanti minuti sopra i 45 Hz misurati (non
+    # estrapolati) prima di segnalare una resa scarsa prolungata. Zero
+    # disattiva solo l'allarme, non la stima degli Hz impliciti.
+    TuneNumber(key=CONF_EFFICIENCY_ALERT_MINUTES, default=DEFAULT_EFFICIENCY_ALERT_MINUTES,
+               minimum=0, maximum=180, step=5, icon="mdi:gauge-low",
+               unit=UnitOfTime.MINUTES, device_class=NumberDeviceClass.DURATION),
+    # Guardiano di resa: se `high` non ha mosso la ripresa entro questi
+    # minuti, torna a `medium` per un'altra finestra uguale. Zero disattiva.
+    TuneNumber(key=CONF_HIGH_FAN_GUARD_MINUTES, default=DEFAULT_HIGH_FAN_GUARD_MINUTES,
+               minimum=0, maximum=180, step=5, icon="mdi:fan-alert",
+               unit=UnitOfTime.MINUTES, device_class=NumberDeviceClass.DURATION),
 )
 
 

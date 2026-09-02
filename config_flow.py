@@ -35,6 +35,8 @@ from .const import (
     CONF_ECO_OUTDOOR_OFF,
     CONF_ECO_OUTDOOR_ON,
     CONF_ECO_SWITCH,
+    CONF_EFFICIENCY_ALERT_MINUTES,
+    CONF_HIGH_FAN_GUARD_MINUTES,
     CONF_HOUSE_SENSORS,
     CONF_HUMIDITY,
     CONF_MORNING_OFF_ENABLED,
@@ -51,6 +53,7 @@ from .const import (
     CONF_PRESENCE_ENTITY,
     CONF_OUTDOOR,
     CONF_OUTDOOR_FALLBACK,
+    CONF_POWER_SENSOR,
     CONF_ROOM_SENSOR,
     CONF_OVERRIDE_MINUTES,
     CONF_SETPOINT_OFFSET,
@@ -81,6 +84,8 @@ from .const import (
     DEFAULT_ECO_BAND,
     DEFAULT_ECO_OUTDOOR_OFF,
     DEFAULT_ECO_OUTDOOR_ON,
+    DEFAULT_EFFICIENCY_ALERT_MINUTES,
+    DEFAULT_HIGH_FAN_GUARD_MINUTES,
     DEFAULT_MORNING_OFF_ENABLED,
     DEFAULT_MORNING_OFF_START,
     DEFAULT_NIGHT_START,
@@ -100,6 +105,7 @@ from .const import (
     DEFAULT_TARGET_SLEEP_MILD,
     DEFAULT_VANE_DAY,
     DOMAIN,
+    OVERRIDE_MINUTES_MAX,
 )
 
 
@@ -140,6 +146,11 @@ def _setup_schema(defaults: dict[str, Any]) -> vol.Schema:
             ),
             _optional(CONF_HUMIDITY, defaults): _entity(
                 "sensor", device_class="humidity"
+            ),
+            # Solo diagnostica (vedi sensor.efficiency): vuoto non toglie nulla
+            # al controllo, si perde solo la stima degli Hz impliciti.
+            _optional(CONF_POWER_SENSOR, defaults): _entity(
+                "sensor", device_class="power"
             ),
             _optional(CONF_HOUSE_SENSORS, defaults): selector.EntitySelector(
                 selector.EntitySelectorConfig(
@@ -293,7 +304,7 @@ class ClimaSmartOptionsFlow(OptionsFlow):
                 ): vol.All(vol.Coerce(float), vol.Range(min=10, max=30)),
                 vol.Required(
                     CONF_OVERRIDE_MINUTES, default=_num(CONF_OVERRIDE_MINUTES, DEFAULT_OVERRIDE_MINUTES)
-                ): vol.All(vol.Coerce(int), vol.Range(min=0, max=480)),
+                ): vol.All(vol.Coerce(int), vol.Range(min=0, max=OVERRIDE_MINUTES_MAX)),
                 vol.Required(
                     CONF_TARGET_SLEEP, default=_num(CONF_TARGET_SLEEP, DEFAULT_TARGET_SLEEP)
                 ): vol.All(vol.Coerce(float), vol.Range(min=16, max=30)),
@@ -397,6 +408,18 @@ class ClimaSmartOptionsFlow(OptionsFlow):
                         CONF_WINTER_HOUSE_CEILING, DEFAULT_WINTER_HOUSE_CEILING
                     ),
                 ): vol.All(vol.Coerce(float), vol.Range(min=0, max=30)),
+                vol.Required(
+                    CONF_EFFICIENCY_ALERT_MINUTES,
+                    default=_num(
+                        CONF_EFFICIENCY_ALERT_MINUTES, DEFAULT_EFFICIENCY_ALERT_MINUTES
+                    ),
+                ): vol.All(vol.Coerce(int), vol.Range(min=0, max=180)),
+                vol.Required(
+                    CONF_HIGH_FAN_GUARD_MINUTES,
+                    default=_num(
+                        CONF_HIGH_FAN_GUARD_MINUTES, DEFAULT_HIGH_FAN_GUARD_MINUTES
+                    ),
+                ): vol.All(vol.Coerce(int), vol.Range(min=0, max=180)),
                 vol.Required(
                     CONF_AUTO_START_SLEEP,
                     default=_num(CONF_AUTO_START_SLEEP, DEFAULT_AUTO_START_SLEEP),

@@ -531,6 +531,25 @@ class ControllerRegressionTests(unittest.TestCase):
             "la resa manuale deve sopravvivere anche se la passata non gira",
         )
 
+    def test_restart_sanity_uses_the_configurable_max_not_todays_knob(self):
+        """Il tetto di sanita' del ripristino deve essere il massimo
+        CONFIGURABILE (480 min), non `override_minutes` letto oggi: se la
+        manopola viene abbassata mentre un override e' attivo, un riavvio non
+        deve scartare la resa manuale ancora valida."""
+        ctrl = self._smart_controller(room=27.0)
+        ctrl.entry.options = dict(ctrl.entry.options, override_minutes=400)
+        ctrl._start_override("prova")
+        self.assertTrue(ctrl.override_active)
+        asyncio.run(ctrl._async_save_memoria())
+        # L'utente abbassa la manopola dopo aver concesso l'override.
+        ctrl.entry.options = dict(ctrl.entry.options, override_minutes=10)
+        dopo = self._riavvia(ctrl)
+        self.assertTrue(
+            dopo.override_active,
+            "l'override concesso a 400 minuti non va scartato solo perche' "
+            "la manopola e' stata abbassata a 10 prima del riavvio",
+        )
+
     def test_a_refused_fan_is_not_a_person(self):
         """L'unita' che rimette `auto` subito dopo il nostro comando.
 
@@ -1684,6 +1703,50 @@ class ControllerRegressionTests(unittest.TestCase):
         dopo = GIORNO + timedelta(seconds=controller_module.MIN_FAN_DWELL_SECONDS + 60)
         self.assertEqual(ctrl._compute(dopo).fan, "low")
 
+    # --------------------------------------------- guardiano di resa su high
+
+    def test_high_fan_guard_drops_to_medium_after_a_barren_window(self):
+        """Il caso del 10 agosto 2026: `high` per ore senza che la ripresa si
+        muova. Dopo la finestra di default (45 min) senza guadagno, si torna
+        a `medium` anche se lo scarto direbbe ancora `high`."""
+        ctrl = self._smart_controller(room=30.0)
+        self.assertEqual(ctrl._compute(GIORNO).fan, "high")
+        dopo = GIORNO + timedelta(minutes=46)
+        self.assertEqual(ctrl._compute(dopo).fan, "medium")
+
+    def test_high_fan_guard_lets_high_continue_when_it_is_working(self):
+        """Se la ripresa e' davvero scesa (qui 0.5, sopra i 0.3 minimi), `high`
+        resta e la finestra si riapre per il tratto successivo."""
+        ctrl = self._smart_controller(room=30.0)
+        self.assertEqual(ctrl._compute(GIORNO).fan, "high")
+        ctrl.hass.states.values["climate.test"].attributes["current_temperature"] = 29.5
+        dopo = GIORNO + timedelta(minutes=46)
+        self.assertEqual(ctrl._compute(dopo).fan, "high")
+
+    def test_high_fan_guard_holds_medium_through_the_cooldown_then_remeasures(self):
+        ctrl = self._smart_controller(room=30.0)
+        ctrl._compute(GIORNO)
+        capped_at = GIORNO + timedelta(minutes=46)
+        self.assertEqual(ctrl._compute(capped_at).fan, "medium")
+        primo_capped_until = ctrl._high_fan_capped_until
+        # Ancora dentro il raffreddamento imposto: resta medium, e il termine
+        # del raffreddamento non si muove.
+        poco_dopo = capped_at + timedelta(minutes=10)
+        self.assertEqual(ctrl._compute(poco_dopo).fan, "medium")
+        self.assertEqual(ctrl._high_fan_capped_until, primo_capped_until)
+        # Il raffreddamento scade: la ripresa non si e' mai mossa, quindi la
+        # nuova finestra boccia di nuovo e il vincolo si rinnova.
+        dopo_scadenza = capped_at + timedelta(minutes=46)
+        self.assertEqual(ctrl._compute(dopo_scadenza).fan, "medium")
+        self.assertGreater(ctrl._high_fan_capped_until, primo_capped_until)
+
+    def test_high_fan_guard_can_be_disabled(self):
+        ctrl = self._smart_controller(room=30.0)
+        ctrl.entry.options = dict(ctrl.entry.options, high_fan_guard_minutes=0)
+        ctrl._compute(GIORNO)
+        dopo = GIORNO + timedelta(hours=3)
+        self.assertEqual(ctrl._compute(dopo).fan, "high")
+
     def test_nothing_to_cool_means_ventilate_not_stop(self):
         """Con la ripresa sotto il target l'unita' stacca tutto e va a 8 W.
 
@@ -1731,6 +1794,41 @@ class ControllerRegressionTests(unittest.TestCase):
         # solo se il ciclo era gia' riconosciuto come in corso.
         dopo.hass.states.values["climate.test"].attributes["current_temperature"] = 24.7
         self.assertEqual(dopo._compute(GIORNO).hvac, "fan_only")
+
+    def test_fan_only_entry_also_pulls_high_down_to_medium(self):
+        """Stessa ragione di `low`: col compressore fermo restano una decina di
+        watt, quindi nemmeno `high` cambia il consumo - fa solo piu' rumore
+        per lo stesso niente. Prima del fix restava a `high` perche' solo
+        `low` veniva corretto."""
+        ctrl = self._smart_controller(room=24.0, fan="high")
+        ctrl.hass.states.values["climate.test"].attributes["hvac_modes"] = [
+            "off", "cool", "dry", "fan_only"]
+        d = ctrl._compute(GIORNO)
+        self.assertEqual(d.hvac, "fan_only")
+        self.assertEqual(d.fan, "medium")
+
+    def test_fan_only_active_resets_once_the_unit_stops(self):
+        """Stesso schema gia' corretto per `_dry_active`, applicato al suo
+        fratello documentato: senza un reset incondizionato, un ciclo
+        fan_only concluso lasciava il flag acceso, e al rientro in cool la
+        soglia usata era quella di ritenzione (target) invece che quella
+        d'ingresso (target - margine) - la stanza rientrava subito in
+        fan_only invece di raffreddare."""
+        ctrl = self._smart_controller(room=24.0)   # ripresa un grado sotto: fan_only scatta
+        ctrl.hass.states.values["climate.test"].attributes["hvac_modes"] = [
+            "off", "cool", "dry", "fan_only"]
+        self.assertEqual(ctrl._compute(GIORNO).hvac, "fan_only")
+        self.assertTrue(ctrl._fan_only_active)
+        # L'unita' si ferma (spenta a mano, o un ciclo concluso altrove).
+        ctrl.hass.states.values["climate.test"].state = "off"
+        ctrl._compute(GIORNO)
+        self.assertFalse(ctrl._fan_only_active)
+        # Riaccesa a 24.8: sopra la soglia d'ingresso (24.5) ma dentro quella
+        # di ritenzione (25.0). Col flag azzerato si deve tornare a
+        # raffreddare, non restare a ventilare.
+        ctrl.hass.states.values["climate.test"].state = "cool"
+        ctrl.hass.states.values["climate.test"].attributes["current_temperature"] = 24.8
+        self.assertEqual(ctrl._compute(GIORNO).hvac, "cool")
 
     def test_dry_wins_over_ventilation_when_humidity_is_high(self):
         """L'umidita' alta ha la precedenza sulla sola ventilazione: fermarsi a
@@ -3808,6 +3906,121 @@ class ControllerRegressionTests(unittest.TestCase):
         asyncio.run(ctrl.async_evaluate("evento"))
         ctrl._queue_evaluate("evento")
         self.assertEqual(len(ctrl.entry.tasks), 2)
+
+    # ----------------------------------------------------- diagnostica di resa
+
+    def _con_potenza(self, watt, hvac="cool", data=None):
+        base_data = {"climate_entity": "climate.test", "power_sensor": "sensor.potenza"}
+        if data:
+            base_data.update(data)
+        climate = State(
+            hvac,
+            {
+                "current_temperature": 26,
+                "temperature_unit": "°C",
+                "hvac_modes": ["off", "cool", "dry", "fan_only"],
+            },
+        )
+        ctrl = make_controller(
+            {"climate.test": climate, "sensor.potenza": State(str(watt))},
+            base_data,
+        )
+        return ctrl
+
+    def test_implied_hz_below_curve_floor_is_unknown(self):
+        """Sotto i 28 Hz (circa 302 W) la retta non vale: non si inventa un
+        numero, si dice onestamente che non si sa."""
+        ctrl = self._con_potenza(250)
+        ctrl._compute(NOW)
+        self.assertIsNone(ctrl.implied_compressor_hz)
+        self.assertFalse(ctrl.efficiency_reliable)
+        self.assertIsNone(ctrl.efficiency_in_band)
+        self.assertEqual(ctrl.efficiency_measured_watts, 250.0)
+
+    def test_implied_hz_computed_in_the_efficient_band(self):
+        """514 W sulla curva misurata (W = 17.7 x Hz - 194) fa esattamente 40 Hz,
+        dentro la fascia 28-45 di rendimento migliore."""
+        ctrl = self._con_potenza(514)
+        ctrl._compute(NOW)
+        self.assertEqual(ctrl.implied_compressor_hz, 40.0)
+        self.assertTrue(ctrl.efficiency_reliable)
+        self.assertTrue(ctrl.efficiency_in_band)
+        self.assertFalse(ctrl.efficiency_extrapolated)
+
+    def test_implied_hz_ignored_when_compressor_is_not_running(self):
+        """Stessa potenza di prima, ma in fan_only: senza compressore la
+        potenza non dice nulla sugli Hz, quindi non si stima."""
+        ctrl = self._con_potenza(514, hvac="fan_only")
+        ctrl._compute(NOW)
+        self.assertIsNone(ctrl.implied_compressor_hz)
+        self.assertFalse(ctrl.efficiency_reliable)
+
+    def test_implied_hz_beyond_observed_range_is_flagged_extrapolated(self):
+        """1310.5 W fa 85 Hz: oltre gli 81 osservati, quindi marcato come
+        estrapolazione, non misura - ma il valore resta visibile."""
+        ctrl = self._con_potenza(1310.5)
+        ctrl._compute(NOW)
+        self.assertEqual(ctrl.implied_compressor_hz, 85.0)
+        self.assertTrue(ctrl.efficiency_reliable)
+        self.assertTrue(ctrl.efficiency_extrapolated)
+        self.assertFalse(ctrl.efficiency_in_band)
+
+    def test_poor_efficiency_alert_after_sustained_high_hz(self):
+        """1062.7 W fa 71 Hz, sopra i 45: dopo 25 minuti continui supera la
+        soglia di default (20 min) e l'allarme scatta."""
+        ctrl = self._con_potenza(1062.7)
+        ctrl._compute(GIORNO)
+        self.assertFalse(ctrl.poor_efficiency_alert)
+        ctrl._compute(GIORNO + timedelta(minutes=25))
+        self.assertAlmostEqual(ctrl.poor_efficiency_minutes, 25.0)
+        self.assertTrue(ctrl.poor_efficiency_alert)
+
+    def test_poor_efficiency_resets_once_back_in_band(self):
+        ctrl = self._con_potenza(1062.7)
+        ctrl._compute(GIORNO)
+        ctrl._compute(GIORNO + timedelta(minutes=25))
+        self.assertTrue(ctrl.poor_efficiency_alert)
+        # Torna a 40 Hz (dentro fascia): l'orologio della resa scarsa si azzera.
+        ctrl.hass.states.values["sensor.potenza"] = State("514")
+        ctrl._compute(GIORNO + timedelta(minutes=26))
+        self.assertEqual(ctrl.poor_efficiency_minutes, 0.0)
+        self.assertFalse(ctrl.poor_efficiency_alert)
+
+    def test_poor_efficiency_alert_can_be_disabled(self):
+        ctrl = self._con_potenza(1062.7)
+        ctrl.entry.options = {"efficiency_alert_minutes": 0}
+        ctrl._compute(GIORNO)
+        ctrl._compute(GIORNO + timedelta(hours=2))
+        self.assertFalse(ctrl.poor_efficiency_alert)
+
+    def test_diagnostics_cleared_when_climate_unavailable_includes_efficiency(self):
+        ctrl = self._con_potenza(1062.7)
+        ctrl._compute(GIORNO)
+        self.assertIsNotNone(ctrl.implied_compressor_hz)
+        ctrl.hass.states.values["climate.test"] = State("unavailable")
+        ctrl._compute(GIORNO + timedelta(minutes=1))
+        self.assertIsNone(ctrl.implied_compressor_hz)
+        self.assertIsNone(ctrl.efficiency_measured_watts)
+        self.assertFalse(ctrl.efficiency_reliable)
+        self.assertIsNone(ctrl.efficiency_in_band)
+        self.assertEqual(ctrl.poor_efficiency_minutes, 0.0)
+
+    def test_no_power_sensor_configured_leaves_efficiency_unknown(self):
+        ctrl = make_controller(
+            {
+                "climate.test": State(
+                    "cool",
+                    {
+                        "current_temperature": 26,
+                        "temperature_unit": "°C",
+                        "hvac_modes": ["off", "cool"],
+                    },
+                )
+            }
+        )
+        ctrl._compute(NOW)
+        self.assertIsNone(ctrl.implied_compressor_hz)
+        self.assertIsNone(ctrl.efficiency_measured_watts)
 
 
 class ValidationTests(unittest.TestCase):

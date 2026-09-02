@@ -44,6 +44,8 @@ from .const import (
     CONF_ECO_OUTDOOR_OFF,
     CONF_ECO_OUTDOOR_ON,
     CONF_ECO_SWITCH,
+    CONF_EFFICIENCY_ALERT_MINUTES,
+    CONF_HIGH_FAN_GUARD_MINUTES,
     CONF_HOUSE_SENSORS,
     CONF_WINTER_ROOM_START,
     CONF_WINTER_ROOM_TARGET,
@@ -60,6 +62,7 @@ from .const import (
     CONF_NIGHT_SWITCH,
     CONF_OUTDOOR,
     CONF_OUTDOOR_FALLBACK,
+    CONF_POWER_SENSOR,
     CONF_ROOM_SENSOR,
     CONF_ROOM_FLOOR,
     CONF_TRIM_MAX,
@@ -97,6 +100,8 @@ from .const import (
     DEFAULT_ECO_BAND,
     DEFAULT_ECO_OUTDOOR_OFF,
     DEFAULT_ECO_OUTDOOR_ON,
+    DEFAULT_EFFICIENCY_ALERT_MINUTES,
+    DEFAULT_HIGH_FAN_GUARD_MINUTES,
     DEFAULT_MORNING_OFF_ENABLED,
     DEFAULT_MORNING_OFF_START,
     DEFAULT_NIGHT_START,
@@ -125,6 +130,12 @@ from .const import (
     FAN_ONLY_MARGIN,
     COLD_NIGHT_HYSTERESIS,
     NIGHT_MILD_HYSTERESIS,
+    EFFICIENCY_BAND_MAX_HZ,
+    EFFICIENCY_BAND_MIN_HZ,
+    EFFICIENCY_CURVE_INTERCEPT,
+    EFFICIENCY_CURVE_MIN_W,
+    EFFICIENCY_CURVE_SLOPE,
+    EFFICIENCY_OBSERVED_MAX_HZ,
     EVENT_APPROVAL_NEEDED,
     EVENT_COOL_OFF,
     EVENT_STARTED,
@@ -134,6 +145,7 @@ from .const import (
     FAN_HYSTERESIS_SLEEP,
     FAN_HYSTERESIS_UP,
     FAN_ORDER,
+    HIGH_FAN_GUARD_MIN_GAIN,
     HOT_OUTDOOR_HYSTERESIS,
     HOUSE_TRIM_DEADBAND,
     HOUSE_TRIM_DWELL_SECONDS,
@@ -150,8 +162,10 @@ from .const import (
     PHASE_DAY,
     PHASE_GAP,
     PHASE_NIGHT,
+    OVERRIDE_MINUTES_MAX,
     PHASE_SLEEP,
     PHASE_WIND_DOWN,
+    POWER_PLAUSIBLE_MAX_W,
     RESTORE_TIMEOUT_SECONDS,
     SATURATION_GAP,
     SATURATION_HYSTERESIS,
@@ -340,6 +354,15 @@ class ClimaSmartController:
         # wait out MIN_FAN_DWELL_SECONDS instead of chasing every tenth of a degree.
         self._last_fan_band: str | None = None
         self._last_fan_band_at: datetime | None = None
+        # Guardiano di resa su `high` (vedi _high_fan_guard): da quando `high` e'
+        # in corso e la ripresa a quel momento, per giudicare se ha davvero
+        # mosso qualcosa; una volta bocciato, fino a quando resta forzato a
+        # `medium`. Non persistito: un riavvio a meta' finestra riparte a
+        # misurare da capo, nel peggiore dei casi concede un `high` di troppo
+        # per qualche minuto - innocuo, a differenza di scartare un override.
+        self._high_fan_started_at: datetime | None = None
+        self._high_fan_room_at_start: float | None = None
+        self._high_fan_capped_until: datetime | None = None
         self._dry_active = False
         self._fan_only_active = False
         # Il target che _program_for guarda per dry/cool, rallentato rispetto
@@ -432,6 +455,17 @@ class ClimaSmartController:
         # il recorder di righe identiche nel contenuto.
         self.last_trigger: str | None = None
         self.last_evaluated: datetime | None = None
+        # Hz impliciti dalla potenza Shelly (vedi _update_efficiency) e da quando
+        # sono fuori dalla fascia efficiente senza interruzioni. Non persistiti:
+        # un riavvio riparte senza storia e si riallinea da solo entro la
+        # finestra di allarme, come _dry_target_updated_at - lag zero, innocuo.
+        self.implied_compressor_hz: float | None = None
+        self.efficiency_measured_watts: float | None = None
+        self.efficiency_reliable: bool = False
+        self.efficiency_in_band: bool | None = None
+        self.efficiency_extrapolated: bool = False
+        self._poor_efficiency_since: datetime | None = None
+        self.poor_efficiency_minutes: float = 0.0
 
         # entity_id -> conf_key for the eco/mute/night aux switches, resolved in
         # async_start() so manual toggles on them get the same override grace
@@ -524,6 +558,16 @@ class ClimaSmartController:
     @property
     def override_minutes(self) -> int:
         return int(self._cfg(CONF_OVERRIDE_MINUTES, DEFAULT_OVERRIDE_MINUTES))
+
+    @property
+    def poor_efficiency_alert(self) -> bool:
+        """Sopra i 45 Hz misurati (non estrapolati) senza interruzioni da almeno
+        questa soglia. Zero disattiva solo l'allarme, non la stima degli Hz."""
+        soglia = float(
+            self._cfg(CONF_EFFICIENCY_ALERT_MINUTES, DEFAULT_EFFICIENCY_ALERT_MINUTES)
+            or 0.0
+        )
+        return soglia > 0 and self.poor_efficiency_minutes >= soglia
 
     # ------------------------------------------------------------- lifecycle
     async def async_start(self) -> None:
@@ -1125,7 +1169,11 @@ class ClimaSmartController:
         def dopo(a: datetime, b: datetime) -> bool:
             return a.astimezone(timezone.utc) > b.astimezone(timezone.utc)
 
-        limite_override = adesso + timedelta(minutes=max(0, self.override_minutes))
+        # Il tetto MASSIMO configurabile, non self.override_minutes letto oggi:
+        # se l'utente abbassa la manopola mentre un override e' attivo e HA
+        # riavvia nel mezzo, un limite legato al valore odierno scartava un
+        # override ancora valido, concesso quando la manopola stava piu' alta.
+        limite_override = adesso + timedelta(minutes=OVERRIDE_MINUTES_MAX)
         if (
             self._override_until is not None
             and (
@@ -1315,6 +1363,67 @@ class ClimaSmartController:
         if valore is None or not _plausible(valore):
             return None
         return valore
+
+    def _read_power(self) -> float | None:
+        """La potenza dello Shelly 2PM, in W. Nessuna conversione di unita': lo
+        Shelly pubblica gia' in W, a differenza dei termometri che possono
+        arrivare in Fahrenheit."""
+        ent = self._cfg(CONF_POWER_SENSOR)
+        if not ent:
+            return None
+        st = self.hass.states.get(ent)
+        if st is None:
+            return None
+        valore = _to_float(st.state)
+        if valore is None or not (0.0 <= valore <= POWER_PLAUSIBLE_MAX_W):
+            return None
+        return valore
+
+    def _reset_efficiency_diagnostics(self) -> None:
+        self.implied_compressor_hz = None
+        self.efficiency_measured_watts = None
+        self.efficiency_reliable = False
+        self.efficiency_in_band = None
+        self.efficiency_extrapolated = False
+        self._poor_efficiency_since = None
+        self.poor_efficiency_minutes = 0.0
+
+    def _update_efficiency(self, now: datetime, cooling_active: bool) -> None:
+        """Stima gli Hz impliciti dalla potenza Shelly, l'unico modo rimasto di
+        guardare il compressore da quando il suo sensore di frequenza e' stato
+        disabilitato (vedi CONF_POWER_SENSOR). Sotto i 28 Hz la curva misurata
+        non vale (lo zoccolo fisso domina), quindi li' non si stima nulla:
+        dire "resa scarsa" senza poterla misurare sarebbe inventare precisione
+        che non c'e'. Per lo stesso motivo il conteggio della resa scarsa
+        prolungata guarda solo il lato alto, misurato fino a 81 Hz.
+
+        Puramente diagnostico: non cambia nessuna decisione di controllo.
+        """
+        potenza = self._read_power()
+        self.efficiency_measured_watts = potenza
+        hz = None
+        affidabile = False
+        if potenza is not None and cooling_active and potenza >= EFFICIENCY_CURVE_MIN_W:
+            hz = (potenza - EFFICIENCY_CURVE_INTERCEPT) / EFFICIENCY_CURVE_SLOPE
+            affidabile = True
+        self.implied_compressor_hz = round(hz, 1) if affidabile else None
+        self.efficiency_reliable = affidabile
+        self.efficiency_extrapolated = affidabile and hz > EFFICIENCY_OBSERVED_MAX_HZ
+        self.efficiency_in_band = (
+            EFFICIENCY_BAND_MIN_HZ <= hz <= EFFICIENCY_BAND_MAX_HZ
+            if affidabile
+            else None
+        )
+        if affidabile and hz > EFFICIENCY_BAND_MAX_HZ:
+            if self._poor_efficiency_since is None:
+                self._poor_efficiency_since = now
+        else:
+            self._poor_efficiency_since = None
+        self.poor_efficiency_minutes = (
+            (now - self._poor_efficiency_since).total_seconds() / 60.0
+            if self._poor_efficiency_since is not None
+            else 0.0
+        )
 
     def _read_outdoor(self) -> tuple[float | None, bool]:
         for key in (CONF_OUTDOOR, CONF_OUTDOOR_FALLBACK):
@@ -2092,6 +2201,52 @@ class ClimaSmartController:
             self._last_fan_band_at = now
         return wanted
 
+    def _high_fan_guard(self, fan: str | None, room: float | None, now: datetime) -> str | None:
+        """Se `high` non sta rendendo, torna a `medium` anche se lo scarto lo
+        richiederebbe ancora. Vedi CONF_HIGH_FAN_GUARD_MINUTES in const.py per
+        il perche'.
+
+        Il giudizio guarda solo se sta gia' scontando una bocciatura
+        precedente (`_high_fan_capped_until`, che vince su tutto per la sua
+        durata) o se una finestra di misura e' scaduta senza guadagno; non
+        rivaluta a ogni passata quanto `high` sia "giustificato", perche' quel
+        giudizio spetta gia' a `_fan_for`.
+        """
+        soglia = float(
+            self._cfg(CONF_HIGH_FAN_GUARD_MINUTES, DEFAULT_HIGH_FAN_GUARD_MINUTES)
+            or 0.0
+        )
+        if soglia <= 0 or room is None:
+            self._high_fan_started_at = None
+            self._high_fan_room_at_start = None
+            self._high_fan_capped_until = None
+            return fan
+        if self._high_fan_capped_until is not None:
+            if now < self._high_fan_capped_until:
+                return "medium" if fan == "high" else fan
+            self._high_fan_capped_until = None
+        if fan != "high":
+            self._high_fan_started_at = None
+            self._high_fan_room_at_start = None
+            return fan
+        if self._high_fan_started_at is None:
+            self._high_fan_started_at = now
+            self._high_fan_room_at_start = room
+            return fan
+        trascorsi_minuti = (now - self._high_fan_started_at).total_seconds() / 60.0
+        if trascorsi_minuti < soglia:
+            return fan
+        reso = room <= self._high_fan_room_at_start - HIGH_FAN_GUARD_MIN_GAIN
+        # La finestra si riapre comunque, resa o no: se ha reso si continua a
+        # misurare il prossimo tratto, se no la prossima bocciatura deve
+        # aspettare la sua stessa finestra piena.
+        self._high_fan_started_at = now
+        self._high_fan_room_at_start = room
+        if reso:
+            return fan
+        self._high_fan_capped_until = now + timedelta(minutes=soglia)
+        return "medium"
+
     def _dry_reference_target(self, target: float, now: datetime) -> float:
         """Target per il giudizio dry/cool, rallentato rispetto a quello vero.
 
@@ -2173,10 +2328,12 @@ class ClimaSmartController:
             # the sensors advertise a phase and a target we are no longer chasing.
             self.current_phase = None
             self.active_target = None
+            self._reset_efficiency_diagnostics()
             return Desired(reason="clima non disponibile")
 
         cur_mode = climate.state
         cooling_active = cur_mode in (HVAC_COOL, HVAC_DRY)
+        self._update_efficiency(now, cooling_active)
         # Due domande diverse, rimaste la stessa per sbaglio dalla 1.21.0 in poi.
         # `cooling_active` significa «il compressore sta girando»: serve al
         # giudizio dry, che va azzerato a macchina ferma. `nostro_ciclo`
@@ -2202,6 +2359,14 @@ class ClimaSmartController:
         # deumidificazione di entrare del tutto. Le prove lo hanno dimostrato.
         if not cooling_active:
             self._dry_active = False
+        # Stesso schema di _dry_active, per lo stesso motivo: senza un reset
+        # incondizionato, un ciclo fan_only concluso (spegnimento, cambio
+        # manuale, o un semplice off/on) lasciava il flag acceso, e al rientro
+        # in cool/dry la soglia usata era quella di USCITA (target pieno)
+        # invece che quella di INGRESSO (target - FAN_ONLY_MARGIN) - la stanza
+        # poteva rientrare in fan_only invece di raffreddare davvero.
+        if not nostro_ciclo:
+            self._fan_only_active = False
         climate_unit = self._system_temperature_unit
         ripresa = _convert_temperature(
             _to_float(climate.attributes.get("current_temperature")),
@@ -2246,7 +2411,12 @@ class ClimaSmartController:
         # target. Everything that keyed off "is it night" must include it.
         is_night = phase in (PHASE_NIGHT, PHASE_SLEEP)
 
-        if phase == PHASE_GAP and self.mode == MODE_SMART:
+        # Il solo modo che arriva qui e' MODE_SMART: MODE_OFF e' gia' uscito sopra
+        # (MODES ne ha solo due). Quindi niente `elif phase == PHASE_GAP` gemello:
+        # esisteva ma non poteva mai eseguire, ed era una mina - avrebbe spento
+        # qualunque unita' in raffrescamento per l'intera fascia 08-10, in
+        # contraddizione con lo spegnimento "una volta sola" qui sotto.
+        if phase == PHASE_GAP:
             # For MODE_SMART the morning switch-off is one event, not a state held
             # for two hours: outside its window the phase behaves like the day, so a
             # unit the user turns back on in the morning is managed, not switched off.
@@ -2260,12 +2430,6 @@ class ClimaSmartController:
                 self._morning_off_armed = True
                 self.active_target = None
                 return Desired(hvac=HVAC_OFF, reason="smart: spegnimento del mattino")
-        elif phase == PHASE_GAP:
-            self.active_target = None
-            # Turn off, but only if cooling (never touch heating).
-            if cur_mode == HVAC_COOL:
-                return Desired(hvac=HVAC_OFF, reason="fascia 08-10: spengo")
-            return Desired(reason="fascia 08-10: clima gia spento")
 
         # Mattina fresca: simmetrico alla guardia dell'avvio diurno, ma per una
         # macchina gia' accesa - dalla notte fonda, o perche' l'utente l'ha
@@ -2596,6 +2760,12 @@ class ClimaSmartController:
                     # mezz'ora, e `high` costa il doppio di `medium`.
                     self._fan_hysteresis(PHASE_SLEEP if notte_fonda else PHASE_DAY),
                 )
+            if not spinta:
+                # La spinta iniziale di notte fonda e' gia' una scelta
+                # deliberata per una finestra breve (SLEEP_BOOST_MINUTES): non
+                # e' il bersaglio di questo guardiano, che giudica un `high`
+                # tenuto a lungo dall'anello ordinario.
+                fan = self._high_fan_guard(fan, room, now)
         if phase == PHASE_SLEEP:
             # Alette FISSE anche di notte, nella stessa posizione del giorno. Prima
             # era `swing`, da un'opzione dedicata: ma oscillando mescolavano l'aria
@@ -2669,10 +2839,12 @@ class ClimaSmartController:
                 program = HVAC_FAN_ONLY
                 # In sola ventilazione la ventola non e' piu' un compromesso fra
                 # portata e consumo: il compressore e' fermo e restano una decina
-                # di watt, quindi `low` non fa risparmiare niente - fa solo girare
-                # meno aria. Richiesta dell'utente il 25 agosto 2026.
+                # di watt, quindi ne' `low` ne' `high` cambiano il consumo - `low`
+                # fa solo girare meno aria, `high` solo piu' rumore per lo stesso
+                # niente. Richiesta dell'utente il 25 agosto 2026 (per `low`);
+                # `high` non ha mai avuto un motivo per restarci di piu'.
                 modi = climate.attributes.get("fan_modes")
-                if (not modi or "medium" in modi) and fan in (None, "low"):
+                if (not modi or "medium" in modi) and fan in (None, "low", "high"):
                     fan = "medium"
         else:
             self._fan_only_active = False
