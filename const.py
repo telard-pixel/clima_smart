@@ -405,9 +405,12 @@ MODES: list[str] = [MODE_SMART, MODE_OFF]
 # soglia 2.0 (effettiva 3.0 con l'isteresi) faceva scattare `high` su uno scarto
 # **artificiale**, non su un vero bisogno di raffreddare la camera. La giornata
 # piu' efficiente (9 agosto: casa piu' fredda, 28.7 Hz, la piu' economica pur col
-# meteo piu' caldo) girava tutta a `medium`. Con soglia 3.0 (effettiva 4.0),
-# `high` resta come valvola per il pull-down da avvio molto caldo, ma il regime
-# lavora a `medium`, il cuore efficiente della macchina (28-45 Hz).
+# meteo piu' caldo) girava tutta a `medium`. Con soglia 3.0 (effettiva 3.5 con
+# l'isteresi attuale - era 4.0 quando questo commento e' stato scritto, prima
+# che FAN_HYSTERESIS_UP scendesse a 0.5 il 23 agosto, vedi il commento su
+# quella costante piu' sotto), `high` resta come valvola per il pull-down da
+# avvio molto caldo, ma il regime lavora a `medium`, il cuore efficiente della
+# macchina (28-45 Hz).
 FAN_BANDS: tuple[tuple[float, str], ...] = (
     (3.0, "high"),
     (1.0, "medium"),
@@ -506,8 +509,12 @@ DEFAULT_HIGH_FAN_GUARD_MINUTES = 45
 HIGH_FAN_GUARD_MIN_GAIN = 0.3
 
 # --- MODE_SMART: `dry` program, only with a humidity sensor configured ---
-# Muggy but already at temperature: dehumidifying is what actually helps, and it
-# draws less than compressor cooling. Two thresholds, again to avoid flapping.
+# Muggy but already at temperature: dehumidifying is what actually helps.
+# **Non per risparmiare energia** - misurato il contrario (DOSSIER §6.4, 03/08
+# e 04/08: `dry` +4 W e +21 W rispetto a `cool` a frequenza comparabile). E'
+# per questo che `wind_down` (piu' sotto in questo file) usa `cool` a fisso
+# invece di lasciar decidere questo programma. Due soglie, ancora per evitare
+# il ballo fra i due modi.
 DRY_HUMIDITY_ON = 60.0
 DRY_HUMIDITY_OFF = 55.0
 # Above this gap the room needs cooling, not dehumidifying. The second value is

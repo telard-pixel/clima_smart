@@ -434,6 +434,15 @@ class ClimaSmartController:
         # di quel che serve. Il documento di progetto della 1.18.0 lo elencava fra
         # le cose da verificare in fase di realizzazione, e non era stato fatto.
         self._approval_waiting_on: date | None = None
+        # Motivo in attesa di essere annunciato (EVENT_STARTED), armato dal
+        # riconoscimento del consenso qui sopra e sparato dalla prima passata
+        # di `async_evaluate` che segue, con target e fase gia' assestati -
+        # stesso schema dell'avvio automatico, che l'evento lo spara subito
+        # dopo il proprio `_apply`. Prima di questo, chi voleva annunciare un
+        # avvio approvato doveva rifare la stessa attesa fuori, in
+        # un'automazione Telegram con un `delay` che un riavvio a meta' finiva
+        # per perdere del tutto. Trovato il 4 settembre 2026.
+        self._announce_start_reason: str | None = None
         self._day_start_done_on = None
         # E per lo spegnimento di una mattina fresca: come lo spegnimento del
         # mattino, un tentativo al giorno, cosi' un riavvio non lo ritenta
@@ -799,7 +808,15 @@ class ClimaSmartController:
         )
         if (
             hvac_changed
-            and self._approval_waiting_on == now.date()
+            # Oggi o ieri, non solo oggi: la domanda per la notte fonda cade
+            # sempre a ridosso della mezzanotte (finestra intorno a
+            # sleep_start), e una risposta arrivata pochi minuti dopo lo
+            # scoccare del giorno successivo va comunque riconosciuta come
+            # consenso. Trovato il 4 settembre 2026: con la sola uguaglianza
+            # di data, rispondere dopo mezzanotte faceva leggere il "si'"
+            # come una mano e cedeva il comando per un'ora subito dopo
+            # l'assenso.
+            and self._approval_waiting_on in (now.date(), now.date() - timedelta(days=1))
             and old_state.state == HVAC_OFF
             and new_state.state in (HVAC_COOL, HVAC_DRY)
         ):
@@ -807,6 +824,13 @@ class ClimaSmartController:
             # invece di cedere per un'ora. Vale una volta sola, per la giornata
             # in cui si e' chiesto: da qui in poi un intervento e' un intervento.
             self._approval_waiting_on = None
+            # Chi vuole annunciarlo aspetta la prossima passata, che ha target e
+            # fase gia' assestati - vedi il commento su `_announce_start_reason`.
+            self._announce_start_reason = (
+                START_REASON_NIGHT
+                if self.current_phase in (PHASE_SLEEP, PHASE_WIND_DOWN)
+                else START_REASON_DAY
+            )
             self.last_reason = "permesso accordato: prendo in mano io"
             self._notify_entities()
             return
@@ -1066,6 +1090,10 @@ class ClimaSmartController:
             # l'utente aveva appena acconsentito. Trovato dalla revisione a tre
             # del 27 agosto 2026.
             "approval_waiting_on": giorno(self._approval_waiting_on),
+            # Lo stesso motivo: un riavvio fra il consenso e la prima passata
+            # utile (una finestra ormai minima, non piu' 30 secondi di un
+            # `delay`) non deve perdere l'annuncio.
+            "announce_start_reason": self._announce_start_reason,
             "override_until": giorno(self._override_until),
             "adaptive_extra": self.adaptive_extra,
             "house_trim": self.house_trim,
@@ -1158,6 +1186,7 @@ class ClimaSmartController:
         self._morning_cool_off_done_on = data_di("morning_cool_off_done_on")
         self._vane_restored_on = data_di("vane_restored_on")
         self._approval_waiting_on = data_di("approval_waiting_on")
+        self._announce_start_reason = dati.get("announce_start_reason")
         self._override_until = istante_di("override_until")
         self._adaptive_changed_at = istante_di("adaptive_changed_at")
         self._trim_changed_at = istante_di("trim_changed_at")
@@ -2725,6 +2754,18 @@ class ClimaSmartController:
             #
             # Stessa partenza, stessa deriva della camera, due gradi in piu' fuori, e
             # ha speso meno. Il confronto e' su una sola mattina, ma e' pulito.
+            #
+            # `_program_for` (l'unico altro punto che tocca `_dry_active`) qui
+            # non viene mai chiamato: senza questo azzeramento esplicito il
+            # flag restava congelato al valore di prima del wind_down per
+            # tutta la sua durata, perche' `cooling_active` (riga ~2335) resta
+            # vero mentre si raffredda comunque, solo forzati su `cool`. Al
+            # rientro in `day`/`gap` la soglia usata era quella di USCITA (55)
+            # invece che quella di INGRESSO (60) - lo stesso sintomo che il
+            # reset di `cooling_active` qui sopra doveva gia' chiudere (bug
+            # del 22 agosto), riaperto da quando questo ramo e' stato cablato
+            # a fisso il 5 agosto. Trovato il 4 settembre 2026.
+            self._dry_active = False
             program = HVAC_COOL
             fan = "auto"
         else:
@@ -2943,6 +2984,24 @@ class ClimaSmartController:
                     self.hass.bus.async_fire(
                         EVENT_APPROVAL_NEEDED,
                         {"entity_id": self.climate_entity, **self._approval_armed},
+                    )
+                if self._announce_start_reason is not None and not self._apply_errors:
+                    # Il consenso su Telegram e' stato riconosciuto in
+                    # `_maybe_flag_manual`, che non ha ne' il target ne' la fase
+                    # gia' assestati: questa e' la prima passata successiva, con
+                    # entrambi pronti. Ritenta alla passata dopo se ci sono
+                    # errori d'applicazione, invece di annunciare un avvio non
+                    # riuscito.
+                    motivo = self._announce_start_reason
+                    self._announce_start_reason = None
+                    self.hass.bus.async_fire(
+                        EVENT_STARTED,
+                        {
+                            "entity_id": self.climate_entity,
+                            "target": self.active_target,
+                            "phase": self.current_phase,
+                            "motivo": motivo,
+                        },
                     )
             except Exception as err:  # noqa: BLE001 - one bad pass must not wedge the loop silently
                 _LOGGER.exception(

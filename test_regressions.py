@@ -2298,6 +2298,44 @@ class ControllerRegressionTests(unittest.TestCase):
         )
         self.assertTrue(ctrl.override_active)
 
+    def test_the_approved_start_is_recognised_after_midnight_too(self):
+        """La domanda di notte fonda cade a ridosso della mezzanotte: una
+
+        risposta arrivata pochi minuti dopo lo scoccare del giorno successivo
+        deve restare riconosciuta come consenso, non come una mano. Trovato
+        il 4 settembre 2026: con la sola uguaglianza di data, rispondere
+        dopo mezzanotte cedeva il comando per un'ora subito dopo l'assenso.
+        """
+        ctrl = self._smart_controller(room=27.0)
+        ctrl._approval_waiting_on = (NOW - timedelta(days=1)).date()
+        ctrl.hass.states.values["climate.test"].state = "off"
+        ctrl._maybe_flag_manual(
+            Event(
+                State("off", {}),
+                State("cool", {"temperature": 25.0}),
+            )
+        )
+        self.assertFalse(ctrl.override_active, "il si' non e' un intervento")
+        self.assertIsNone(ctrl._approval_waiting_on, "vale una volta sola")
+
+    def test_a_stale_approval_from_days_ago_is_not_recognised(self):
+        """Il perdono per la mezzanotte non deve diventare indefinito: una
+
+        richiesta rimasta senza risposta da piu' di un giorno non deve far
+        scambiare un'accensione manuale successiva, e scollegata, per un
+        consenso.
+        """
+        ctrl = self._smart_controller(room=27.0)
+        ctrl._approval_waiting_on = (NOW - timedelta(days=2)).date()
+        ctrl.hass.states.values["climate.test"].state = "off"
+        ctrl._maybe_flag_manual(
+            Event(
+                State("off", {}),
+                State("cool", {"temperature": 25.0}),
+            )
+        )
+        self.assertTrue(ctrl.override_active, "e' una mano, non un vecchio si'")
+
     def test_winter_help_stays_off_when_the_outdoor_is_unreadable(self):
         """Non sapere che stagione e' non e' una ragione per scaldare.
 
@@ -2714,6 +2752,74 @@ class ControllerRegressionTests(unittest.TestCase):
         )
         self.assertFalse(dopo.override_active, "il si' non e' un intervento")
 
+    def test_approved_start_announces_on_the_next_pass(self):
+        """Il consenso su Telegram non porta subito target e fase assestati:
+
+        l'annuncio (EVENT_STARTED) deve aspettare la prima passata di
+        `async_evaluate` successiva, non un `delay` fuori dal controller -
+        quella copia in un'automazione Telegram perdeva l'annuncio se Home
+        Assistant riavviava nei suoi 30 secondi. Trovato il 4 settembre 2026.
+        """
+        ctrl = self._con_approvazione()
+        self._pronto_a_valutare(ctrl)
+        asyncio.run(ctrl.async_evaluate("chiede"))
+        self.assertEqual(
+            len(self._eventi(ctrl, controller_module.EVENT_APPROVAL_NEEDED)), 1
+        )
+        self.assertEqual(self._eventi(ctrl, controller_module.EVENT_STARTED), [])
+
+        ctrl.hass.states.values["climate.test"].state = "off"
+        ctrl._maybe_flag_manual(
+            Event(State("off", {}), State("cool", {"temperature": 25.0}))
+        )
+        self.assertEqual(
+            ctrl._announce_start_reason, controller_module.START_REASON_DAY
+        )
+        self.assertEqual(
+            self._eventi(ctrl, controller_module.EVENT_STARTED), [],
+            "non ancora: aspetta la passata",
+        )
+
+        ctrl.hass.states.values["climate.test"].state = "cool"
+        asyncio.run(ctrl.async_evaluate("dopo il si'"))
+        eventi = self._eventi(ctrl, controller_module.EVENT_STARTED)
+        self.assertEqual(len(eventi), 1)
+        self.assertEqual(eventi[0]["motivo"], controller_module.START_REASON_DAY)
+        self.assertIsNotNone(eventi[0]["target"])
+        self.assertIsNone(ctrl._announce_start_reason, "una volta sola")
+
+        # Una terza passata non lo rispara.
+        asyncio.run(ctrl.async_evaluate("ancora"))
+        self.assertEqual(len(self._eventi(ctrl, controller_module.EVENT_STARTED)), 1)
+
+    def test_announce_start_reason_survives_a_restart(self):
+        """Lo stesso motivo persistito per `_approval_waiting_on` vale anche
+
+        qui: la finestra fra il consenso e la prima passata utile e' ormai
+        minima (non piu' 30 secondi di un `delay` esterno), ma non nulla.
+        """
+        ctrl = self._con_approvazione()
+        self._pronto_a_valutare(ctrl)
+        asyncio.run(ctrl.async_evaluate("chiede"))
+        ctrl.hass.states.values["climate.test"].state = "off"
+        ctrl._maybe_flag_manual(
+            Event(State("off", {}), State("cool", {"temperature": 25.0}))
+        )
+        self.assertEqual(
+            ctrl._announce_start_reason, controller_module.START_REASON_DAY
+        )
+        asyncio.run(ctrl._async_save_memoria())
+        dopo = self._riavvia(ctrl)
+        self.assertEqual(
+            dopo._announce_start_reason, controller_module.START_REASON_DAY
+        )
+        dopo.hass.states.values["climate.test"].state = "cool"
+        self._pronto_a_valutare(dopo)
+        asyncio.run(dopo.async_evaluate("dopo il riavvio"))
+        eventi = self._eventi(dopo, controller_module.EVENT_STARTED)
+        self.assertEqual(len(eventi), 1)
+        self.assertIsNone(dopo._announce_start_reason)
+
     def test_approval_blocks_the_evening_start_too(self):
         """Anche l'avvio della notte fonda chiede il permesso, e se nessuno
         risponde la notte fonda non parte."""
@@ -3001,6 +3107,39 @@ class ControllerRegressionTests(unittest.TestCase):
         self.assertEqual(desired.hvac, "cool")
         self.assertEqual(desired.fan, "auto")
         self.assertEqual(desired.setpoint, 22.0)
+
+    def test_dry_verdict_does_not_survive_wind_down(self):
+        """`_dry_active` non deve congelarsi durante `wind_down`.
+
+        `wind_down` forza `cool` a fisso e non passa mai da `_program_for`,
+        l'unico altro punto che tocca `_dry_active`: senza un azzeramento
+        esplicito il flag restava congelato al valore di prima del
+        wind_down per tutta la sua durata, perche' la macchina continua
+        comunque a raffreddare (`cooling_active` resta vero, solo forzata
+        su `cool`). Al rientro in `day` la soglia usata era quella di
+        USCITA (55) invece che quella di INGRESSO (60) - lo stesso sintomo
+        gia' corretto per la macchina spenta il 22 agosto, riaperto da
+        quando questo ramo e' stato cablato a fisso il 5 agosto. Trovato
+        il 4 settembre 2026.
+        """
+        ctrl = self._smart_controller(room=23.0, humidity=56)
+        self._profilo_notte(ctrl)
+        ctrl._dry_active = True   # un ciclo dry rimasto attivo dalla sera
+        desired = ctrl._compute(GIORNO.replace(hour=8, minute=0))
+        self.assertEqual(ctrl.current_phase, "wind_down")
+        self.assertEqual(desired.hvac, "cool")
+        self.assertFalse(
+            ctrl._dry_active, "wind_down forza cool: il giudizio dry non sopravvive"
+        )
+        dopo = ctrl._compute(GIORNO.replace(hour=10, minute=1))
+        self.assertEqual(
+            ctrl.current_phase, "day", "serve essere rientrati in giorno pieno"
+        )
+        self.assertEqual(
+            dopo.hvac,
+            "cool",
+            "al 56% si entra in dry solo se il ciclo era gia' in corso",
+        )
 
     def test_morning_switch_off_happens_once(self):
         ctrl = self._smart_controller(room=24.0)
