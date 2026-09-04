@@ -1,0 +1,24 @@
+comando_bot:
+  name: Comando dal bot
+  description: >-
+    Accende o spegne l'unita' governata da un'istanza di Clima Smart senza
+    farla leggere come un intervento manuale (che cederebbe il controllo
+    per un'ora). Pensato per automazioni fidate come il bot Telegram del
+    /menu, non per un tocco da dashboard.
+  fields:
+    entity_id:
+      name: Entita' clima
+      description: L'entita' climate governata dall'istanza di Clima Smart da comandare.
+      required: true
+      selector:
+        entity:
+          domain: climate
+    hvac_mode:
+      name: Modo
+      description: cool per accendere, off per spegnere.
+      required: true
+      selector:
+        select:
+          options:
+            - cool
+            - "off"

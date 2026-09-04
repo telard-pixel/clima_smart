@@ -3208,6 +3208,42 @@ class ClimaSmartController:
     def _arm_settle(self, field: str) -> None:
         setattr(self, field, dt_util.now() + timedelta(seconds=COMMAND_SETTLE_SECONDS))
 
+    async def async_bot_command(self, hvac_mode: str) -> bool:
+        """Un comando esplicito del bot Telegram (/menu), non una mano sul telecomando.
+
+        Le chiamate da un'automazione non portano `context.user_id`: senza
+        questo, `_maybe_flag_manual` le leggeva come intervento manuale e
+        cedeva il comando per un'ora - lo stesso bug gia' risolto per il
+        flusso "chiedi il permesso" (vedi `_approval_waiting_on`), qui per
+        Accendi/Spegni del menu generico, che non passa da quel flusso.
+        Trovato il 4 settembre 2026. Arma la stessa finestra di
+        assestamento che il controller usa per i propri comandi, cosi'
+        l'eco che segue viene riconosciuto come nostro, non come una mano.
+        """
+        async with self._lock:
+            if hvac_mode not in (HVAC_OFF, HVAC_COOL):
+                return False
+            climate = self.hass.states.get(self.climate_entity)
+            if climate is None or climate.state in _UNAVAILABLE:
+                return False
+            if climate.state == hvac_mode:
+                return True
+            prev = self._last_hvac_cmd
+            self._last_hvac_cmd = hvac_mode
+            self._arm_settle("_settle_hvac_until")
+            self._arm_settle("_settle_mode_change_until")
+            if hvac_mode == HVAC_OFF:
+                ok = await self._call("climate", "turn_off", {})
+            else:
+                ok = await self._call(
+                    "climate", "set_hvac_mode", {"hvac_mode": hvac_mode}
+                )
+            if not ok:
+                self._last_hvac_cmd = prev
+                self._settle_hvac_until = None
+                self._settle_mode_change_until = None
+            return ok
+
     async def _apply_switch(self, conf_key: str, want: bool | None) -> bool:
         if want is None:
             return False

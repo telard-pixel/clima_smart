@@ -2336,6 +2336,52 @@ class ControllerRegressionTests(unittest.TestCase):
         )
         self.assertTrue(ctrl.override_active, "e' una mano, non un vecchio si'")
 
+    def test_bot_command_is_not_read_as_a_manual_override(self):
+        """Il pulsante Accendi del /menu Telegram non deve cedere il
+
+        controllo per un'ora: le chiamate da un'automazione non portano
+        `context.user_id`, lo stesso bug gia' risolto per il flusso di
+        approvazione (`_approval_waiting_on`) ma qui per il /menu
+        generico, che non passa da quel flusso. Trovato il 4 settembre
+        2026 durante una revisione indipendente delle automazioni.
+        """
+        ctrl = self._smart_controller(room=27.0)
+        ctrl.hass.states.values["climate.test"].state = "off"
+        inviati = []
+
+        async def riesce(domain, service, data=None):
+            inviati.append(service)
+            return True
+
+        ctrl._call = riesce
+        ok = asyncio.run(ctrl.async_bot_command(controller_module.HVAC_COOL))
+        self.assertTrue(ok)
+        self.assertIn("set_hvac_mode", inviati)
+
+        # L'eco che segue, senza context.user_id, non deve essere letta
+        # come una mano.
+        ctrl.hass.states.values["climate.test"].state = "cool"
+        ctrl._maybe_flag_manual(Event(State("off", {}), State("cool", {})))
+        self.assertFalse(ctrl.override_active, "il comando del bot non e' una mano")
+
+    def test_bot_command_rejects_unsupported_modes(self):
+        ctrl = self._smart_controller(room=27.0)
+        ok = asyncio.run(ctrl.async_bot_command("heat"))
+        self.assertFalse(ok)
+
+    def test_bot_command_is_a_no_op_if_already_there(self):
+        ctrl = self._smart_controller(room=27.0)   # gia' 'cool' di default
+        chiamate = []
+
+        async def conta(domain, service, data=None):
+            chiamate.append(service)
+            return True
+
+        ctrl._call = conta
+        ok = asyncio.run(ctrl.async_bot_command(controller_module.HVAC_COOL))
+        self.assertTrue(ok)
+        self.assertEqual(chiamate, [], "gia' li', nessun comando da mandare")
+
     def test_winter_help_stays_off_when_the_outdoor_is_unreadable(self):
         """Non sapere che stagione e' non e' una ragione per scaldare.
 

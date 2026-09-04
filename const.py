@@ -6,6 +6,12 @@ DOMAIN = "clima_smart"
 
 PLATFORMS: list[str] = ["switch", "select", "number", "sensor"]
 
+# Servizio esposto per un'automazione fidata (il bot Telegram del /menu) che
+# vuole accendere/spegnere senza essere scambiata per una mano sul
+# telecomando - vedi il commento su `async_bot_command` in controller.py.
+SERVICE_BOT_COMMAND = "comando_bot"
+ATTR_HVAC_MODE = "hvac_mode"
+
 # --- Config-entry data keys (set once in the config flow) ---
 CONF_CLIMATE = "climate_entity"
 CONF_OUTDOOR = "outdoor_sensor"
