@@ -143,6 +143,7 @@ from .const import (
     FAN_BANDS_SLEEP,
     FAN_HYSTERESIS_DOWN,
     FAN_HYSTERESIS_SLEEP,
+    FAN_HYSTERESIS_SLEEP_DOWN,
     FAN_HYSTERESIS_UP,
     FAN_ORDER,
     HIGH_FAN_GUARD_MIN_GAIN,
@@ -172,6 +173,7 @@ from .const import (
     SERVICE_CALL_TIMEOUT_SECONDS,
     PLAUSIBLE_MAX_C,
     PLAUSIBLE_MIN_C,
+    DAY_START_CONFIRM_SECONDS,
     SEASON_EXIT_CONFIRM_SECONDS,
     SLEEP_BOOST_MIN_DELTA,
     STORAGE_VERSION,
@@ -375,6 +377,14 @@ class ClimaSmartController:
         # Da quando la condizione "non e' piu' stagione calda" e' vera senza
         # interruzioni: None finche' siamo in stagione.
         self._not_summer_since: datetime | None = None
+        # Stesso principio di _not_summer_since, per _day_start_due e
+        # _morning_cool_off_due: da quando ciascuna condizione e' vera senza
+        # interruzioni, None se non e' vera adesso. Non persistono fra un
+        # riavvio e l'altro (come _not_summer_since): un riavvio nel mezzo
+        # di una conferma la fa solo ripartire da capo, non e' un problema.
+        self._day_start_room_hot_since: datetime | None = None
+        self._day_start_house_hot_since: datetime | None = None
+        self._morning_cool_off_cold_since: datetime | None = None
         # Anello esterno: il target della camera scelto per tenere le altre stanze
         # sulla linea di comfort. Vive fra un riavvio e l'altro come gli altri
         # contrassegni, perche' ci mette ore ad assestarsi e ripartire da capo
@@ -1342,6 +1352,28 @@ class ClimaSmartController:
         # Not confirmed yet: carry on as if it were still summer.
         return True
 
+    def _held_for(
+        self, active: bool, now: datetime, since_attr: str, confirm_seconds: float
+    ) -> bool:
+        """Se `active` e' vera senza interruzioni da almeno `confirm_seconds`.
+
+        Versione generica dello stesso debounce che _season_confirmed fa per
+        il confine estate/non-estate, riusata per segnali soggetti a un
+        singolo campione rumoroso (vedi _day_start_due,
+        _morning_cool_off_due). A differenza di _season_confirmed non tiene
+        vera la condizione durante l'attesa: qui l'attesa serve a NON agire
+        finche' non e' confermata, non a continuare ad agire come prima.
+        """
+        if not active:
+            setattr(self, since_attr, None)
+            return False
+        since = getattr(self, since_attr)
+        if since is None:
+            setattr(self, since_attr, now)
+            return False
+        elapsed = (now - since).total_seconds()
+        return elapsed >= confirm_seconds
+
     def _fan_hysteresis(self, phase: str) -> tuple[float, float]:
         """How much margin the fan decision needs before it moves.
 
@@ -1352,7 +1384,9 @@ class ClimaSmartController:
         tolerance for sensor noise, and nothing more.
         """
         if phase == PHASE_SLEEP:
-            return FAN_HYSTERESIS_SLEEP, FAN_HYSTERESIS_SLEEP
+            # Salita e discesa non sono piu' simmetriche qui: vedi il
+            # commento su FAN_HYSTERESIS_SLEEP_DOWN in const.py.
+            return FAN_HYSTERESIS_SLEEP, FAN_HYSTERESIS_SLEEP_DOWN
         return FAN_HYSTERESIS_UP, FAN_HYSTERESIS_DOWN
 
     def _read_bedside(self) -> float | None:
@@ -1701,13 +1735,23 @@ class ClimaSmartController:
         riacceso a mano. Un solo tentativo al giorno, nella finestra fra la fine
         della notte fonda e l'inizio del giorno pieno: fuori da li' decide il
         resto dell'algoritmo, non questa guardia.
+
+        Stessa conferma temporale di `_day_start_due` sulla lettura esterna,
+        per coerenza (le due guardie sono simmetriche per design, vedi sopra):
+        qui il segnale e' gia' piu' stabile (esterna_filtrata, non la ripresa),
+        quindi il rischio del singolo campione era minore, ma l'asimmetria
+        sarebbe stata ingiustificata una volta corretta l'altra guardia.
         """
         if self._morning_cool_off_done_on == now.date():
+            self._morning_cool_off_cold_since = None
             return False
         guard = float(
             self._cfg(CONF_AUTO_START_OUTDOOR, DEFAULT_AUTO_START_OUTDOOR) or 0.0
         )
-        if guard <= 0 or outdoor is None or outdoor >= guard:
+        fredda = guard > 0 and outdoor is not None and outdoor < guard
+        if not self._held_for(
+            fredda, now, "_morning_cool_off_cold_since", DAY_START_CONFIRM_SECONDS
+        ):
             return False
         sleep_end = _parse_time(
             self._cfg(CONF_SLEEP_END, DEFAULT_SLEEP_END), DEFAULT_SLEEP_END
@@ -2054,28 +2098,50 @@ class ClimaSmartController:
         bedroom being hot means it is already uncomfortable, the house average
         being hot means it is about to be. Both are gated on the outdoor reading,
         so a cool day never triggers a start.
+
+        Ciascun segnale deve restare sopra soglia per DAY_START_CONFIRM_SECONDS
+        senza interruzioni prima di far scattare la richiesta: la ripresa si
+        sposta di un grado in due minuti per un solo passo di ventola (vedi
+        DOSSIER), e vale una volta sola per tutta la giornata (_day_start_done_on),
+        quindi un campione isolato non deve bruciare l'unico tentativo. Trovato
+        l'8 settembre 2026, dopo un avvio richiesto mentre in casa si stava
+        ancora bene.
         """
         if self._day_start_done_on == now.date():
+            self._day_start_room_hot_since = None
+            self._day_start_house_hot_since = None
             return None
         guard = float(
             self._cfg(CONF_AUTO_START_OUTDOOR, DEFAULT_AUTO_START_OUTDOOR) or 0.0
         )
         if guard > 0 and (outdoor is None or outdoor < guard):
+            # Fuori da qui non si sta confermando niente: un'attesa che
+            # riparte da capo quando l'esterna torna sopra soglia e' corretta,
+            # non un difetto - vedi il commento su _day_start_room_hot_since.
+            self._day_start_room_hot_since = None
+            self._day_start_house_hot_since = None
             return None
 
         soglia_stanza = float(
             self._cfg(CONF_AUTO_START_ROOM, DEFAULT_AUTO_START_ROOM) or 0.0
         )
-        if soglia_stanza > 0 and room is not None and room >= soglia_stanza:
+        stanza_calda = (
+            soglia_stanza > 0 and room is not None and room >= soglia_stanza
+        )
+        if self._held_for(
+            stanza_calda, now, "_day_start_room_hot_since", DAY_START_CONFIRM_SECONDS
+        ):
             return f"stanza {room:.1f} oltre {soglia_stanza:.1f}"
 
         soglia_casa = float(
             self._cfg(CONF_AUTO_START_HOUSE, DEFAULT_AUTO_START_HOUSE) or 0.0
         )
-        if soglia_casa > 0:
-            casa = self._house_average()
-            if casa is not None and casa >= soglia_casa:
-                return f"casa {casa:.1f} oltre {soglia_casa:.1f}"
+        casa = self._house_average() if soglia_casa > 0 else None
+        casa_calda = soglia_casa > 0 and casa is not None and casa >= soglia_casa
+        if self._held_for(
+            casa_calda, now, "_day_start_house_hot_since", DAY_START_CONFIRM_SECONDS
+        ):
+            return f"casa {casa:.1f} oltre {soglia_casa:.1f}"
         return None
 
     def _vane_day_due(self, now: datetime) -> bool:

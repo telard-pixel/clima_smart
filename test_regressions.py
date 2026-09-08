@@ -816,14 +816,22 @@ class ControllerRegressionTests(unittest.TestCase):
 
     def test_the_fan_margins_are_asymmetric(self):
         """Salire costa, scendere fa risparmiare: i due versi non meritano la stessa
-        reticenza. Di notte restano simmetrici, dove non c'e' niente da bilanciare."""
+        reticenza - ne' di giorno ne' di notte. Di notte, dall'8 settembre 2026,
+        la discesa e' anche piu' permissiva della salita (vedi
+        FAN_HYSTERESIS_SLEEP_DOWN): senza, `low` restava quasi irraggiungibile
+        (5% dei campioni misurati) nonostante fosse l'intenzione dichiarata."""
         ctrl = self._smart_controller(room=27.0)
         self.assertEqual(
             ctrl._fan_hysteresis("day"),
             (controller_module.FAN_HYSTERESIS_UP, controller_module.FAN_HYSTERESIS_DOWN),
         )
-        s = controller_module.FAN_HYSTERESIS_SLEEP
-        self.assertEqual(ctrl._fan_hysteresis("sleep"), (s, s))
+        self.assertEqual(
+            ctrl._fan_hysteresis("sleep"),
+            (
+                controller_module.FAN_HYSTERESIS_SLEEP,
+                controller_module.FAN_HYSTERESIS_SLEEP_DOWN,
+            ),
+        )
 
     # -------------------------- anello esterno: comanda la casa, non la camera
     def _con_anello(self, ripresa=27.0, altre=(27.3, 27.1, 26.3), linea=26.5):
@@ -2764,12 +2772,28 @@ class ControllerRegressionTests(unittest.TestCase):
             return True
 
         ctrl._call = registra
+        # DAY_START_CONFIRM_SECONDS (8/9/2026): _day_start_due e
+        # _morning_cool_off_due ora pretendono che la condizione sia vera da
+        # un po', non solo al campione corrente. La maggior parte di queste
+        # prove simula una condizione gia' in corso da tempo (non l'istante
+        # esatto in cui inizia), quindi la si marca gia' confermata qui una
+        # volta sola - se una prova vuole testare la conferma stessa, sovrascrive
+        # questi attributi dopo la chiamata.
+        gia_da_un_pezzo = quando - timedelta(
+            seconds=controller_module.DAY_START_CONFIRM_SECONDS + 1
+        )
+        ctrl._day_start_room_hot_since = gia_da_un_pezzo
+        ctrl._day_start_house_hot_since = gia_da_un_pezzo
+        ctrl._morning_cool_off_cold_since = gia_da_un_pezzo
         return inviati
 
     def test_approval_blocks_the_daytime_start(self):
         """Con l'approvazione accesa il controller non accende: annuncia e
         aspetta che qualcuno decida."""
         ctrl = self._con_approvazione()
+        ctrl._day_start_house_hot_since = GIORNO - timedelta(
+            seconds=controller_module.DAY_START_CONFIRM_SECONDS + 1
+        )
         desired = ctrl._compute(GIORNO)
         self.assertIsNone(desired.hvac)
         self.assertIn("chiedo il permesso", desired.reason)
@@ -3039,6 +3063,9 @@ class ControllerRegressionTests(unittest.TestCase):
         ctrl = self._smart_controller(room=25.0, outdoor=22.0)
         self._orari(ctrl, morning_off_enabled=False)
         ctrl.entry.options = dict(ctrl.entry.options, auto_start_outdoor=26.0)
+        ctrl._morning_cool_off_cold_since = NOW.replace(hour=8, minute=0) - timedelta(
+            seconds=controller_module.DAY_START_CONFIRM_SECONDS + 1
+        )
         desired = ctrl._compute(NOW.replace(hour=8, minute=0))
         self.assertEqual(desired.hvac, "off")
         self.assertIn("mattina fresca", desired.reason)
@@ -3066,11 +3093,17 @@ class ControllerRegressionTests(unittest.TestCase):
         ctrl.entry.options = dict(
             ctrl.entry.options, auto_start_outdoor=26.0, auto_start_room=27.5
         )
+        ctrl._morning_cool_off_cold_since = NOW.replace(hour=8, minute=0) - timedelta(
+            seconds=controller_module.DAY_START_CONFIRM_SECONDS + 1
+        )
         spegne = ctrl._compute(NOW.replace(hour=8, minute=0))
         self.assertEqual(spegne.hvac, "off")
         ctrl._morning_cool_off_done_on = NOW.date()   # marcato da async_evaluate
         ctrl.hass.states.values["climate.test"].state = "off"
         ctrl.hass.states.values["sensor.outdoor"].state = "30.0"
+        ctrl._day_start_room_hot_since = NOW.replace(hour=9, minute=0) - timedelta(
+            seconds=controller_module.DAY_START_CONFIRM_SECONDS + 1
+        )
         riparte = ctrl._compute(NOW.replace(hour=9, minute=0))
         self.assertEqual(riparte.hvac, "cool")
 
@@ -3364,6 +3397,9 @@ class ControllerRegressionTests(unittest.TestCase):
         self._orari(ctrl, morning_off_enabled=False)
         ctrl.entry.options = dict(ctrl.entry.options, auto_start_outdoor=26.0)
         ctrl.hass.states.values["climate.test"].state = "fan_only"
+        ctrl._morning_cool_off_cold_since = NOW.replace(hour=8, minute=0) - timedelta(
+            seconds=controller_module.DAY_START_CONFIRM_SECONDS + 1
+        )
         desired = ctrl._compute(NOW.replace(hour=8, minute=0))
         self.assertEqual(desired.hvac, "off")
         self.assertIn("mattina fresca", desired.reason)
@@ -3504,6 +3540,9 @@ class ControllerRegressionTests(unittest.TestCase):
 
         ctrl._call = riesce
         self._orologio(GIORNO.replace(hour=12, minute=0))
+        ctrl._day_start_room_hot_since = GIORNO.replace(
+            hour=12, minute=0
+        ) - timedelta(seconds=controller_module.DAY_START_CONFIRM_SECONDS + 1)
         asyncio.run(ctrl.async_evaluate("prova"))
         self.assertIn("set_hvac_mode", inviati)
         tipo, dati = ctrl.hass.bus.eventi[-1]
@@ -3516,6 +3555,80 @@ class ControllerRegressionTests(unittest.TestCase):
         self._orologio(GIORNO.replace(hour=15, minute=0))
         asyncio.run(ctrl.async_evaluate("prova"))
         self.assertEqual(inviati, [])
+
+    def test_a_brief_spike_above_the_room_threshold_does_not_start(self):
+        """L'8 settembre 2026: la ripresa si sposta di un grado in due minuti
+
+        per un solo passo di ventola (misurato, vedi DOSSIER), e la richiesta
+        di permesso valeva una volta sola per tutta la giornata - un campione
+        isolato sopra soglia bruciava l'unico tentativo mentre in casa si
+        stava ancora bene. Un picco che non dura non deve chiedere nulla.
+        """
+        ctrl = self._smart_controller(room=28.5)
+        self._profilo_notte(ctrl)
+        ctrl.entry.options = dict(ctrl.entry.options, auto_start_room=28.0)
+        ctrl.hass.states.values["climate.test"].state = "off"
+        ctrl._restore_event.set()
+        inviati = []
+
+        async def registra(domain, service, data=None):
+            inviati.append(service)
+            return True
+
+        ctrl._call = registra
+        # Primo campione sopra soglia: comincia a misurare, non chiede ancora.
+        self._orologio(GIORNO.replace(hour=12, minute=0))
+        asyncio.run(ctrl.async_evaluate("picco"))
+        self.assertEqual(inviati, [])
+        self.assertEqual(
+            len(self._eventi(ctrl, controller_module.EVENT_APPROVAL_NEEDED)), 0
+        )
+        # Il picco rientra un minuto dopo: la conferma si azzera.
+        ctrl.hass.states.values["climate.test"] = State(
+            "off", {"current_temperature": 26.5}
+        )
+        self._orologio(GIORNO.replace(hour=12, minute=1))
+        asyncio.run(ctrl.async_evaluate("rientrato"))
+        self.assertIsNone(ctrl._day_start_room_hot_since)
+        # Anche molto piu' tardi nello stesso giorno, senza un nuovo periodo
+        # sostenuto sopra soglia, non deve mai essere scattato nulla.
+        self._orologio(GIORNO.replace(hour=18, minute=0))
+        asyncio.run(ctrl.async_evaluate("piu' tardi"))
+        self.assertEqual(inviati, [])
+        self.assertEqual(
+            len(self._eventi(ctrl, controller_module.EVENT_APPROVAL_NEEDED)), 0
+        )
+
+    def test_sustained_heat_above_the_room_threshold_does_start(self):
+        """Lo stesso scenario, ma la stanza resta calda per tutta la finestra
+
+        di conferma invece di un solo campione: qui la richiesta deve
+        scattare, altrimenti il fix del picco isolato avrebbe smesso di
+        funzionare anche per un caldo vero.
+        """
+        ctrl = self._smart_controller(room=28.5)
+        self._profilo_notte(ctrl)
+        ctrl.entry.options = dict(ctrl.entry.options, auto_start_room=28.0)
+        ctrl.hass.states.values["climate.test"].state = "off"
+        ctrl._restore_event.set()
+        inviati = []
+
+        async def registra(domain, service, data=None):
+            inviati.append(service)
+            return True
+
+        ctrl._call = registra
+        self._orologio(GIORNO.replace(hour=12, minute=0))
+        asyncio.run(ctrl.async_evaluate("comincia a misurare"))
+        self.assertEqual(inviati, [])
+        # La stessa stanza calda, confermata: la finestra e' passata senza
+        # mai scendere sotto soglia nel frattempo.
+        dopo_la_conferma = GIORNO.replace(hour=12, minute=0) + timedelta(
+            seconds=controller_module.DAY_START_CONFIRM_SECONDS + 1
+        )
+        self._orologio(dopo_la_conferma)
+        asyncio.run(ctrl.async_evaluate("confermato"))
+        self.assertIn("set_hvac_mode", inviati)
 
     def _con_casa(self, room=26.0, altre=(27.0, 26.5, 25.5), outdoor=31.0):
         ctrl = self._smart_controller(room=room, outdoor=outdoor)
@@ -3535,6 +3648,15 @@ class ControllerRegressionTests(unittest.TestCase):
             auto_start_outdoor=28.0,
         )
         ctrl.hass.states.values["climate.test"].state = "off"
+        # Stessa ancora di _con_casa_inverno per _not_summer_since: mezzanotte
+        # meno il margine di conferma, cosi' resta valida per qualunque ora del
+        # giorno usino i singoli test.
+        gia_da_un_pezzo = GIORNO.replace(
+            hour=0, minute=0, second=0, microsecond=0
+        ) - timedelta(seconds=controller_module.DAY_START_CONFIRM_SECONDS + 1)
+        ctrl._day_start_room_hot_since = gia_da_un_pezzo
+        ctrl._day_start_house_hot_since = gia_da_un_pezzo
+        ctrl._morning_cool_off_cold_since = gia_da_un_pezzo
         return ctrl
 
     def test_the_start_no_longer_waits_for_an_arbitrary_hour(self):

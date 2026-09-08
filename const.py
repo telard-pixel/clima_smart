@@ -260,6 +260,17 @@ PLAUSIBLE_MAX_C = 60.0
 # pretende che la condizione duri, cosi' un campione isolato non decide nulla.
 SEASON_EXIT_CONFIRM_SECONDS = 900
 
+# Stesso principio applicato all'avvio diurno: la ripresa si sposta di un grado
+# in due minuti per un solo passo di ventola (misurato, vedi DOSSIER), quindi
+# un singolo campione sopra soglia non e' un motivo per chiedere il permesso -
+# e vale una volta sola per tutta la giornata, quindi un falso allarme non ha
+# un secondo tentativo. Riusato anche da _morning_cool_off_due per coerenza:
+# le due guardie sono simmetriche per design (vedi il commento li'), quindi
+# restano simmetriche anche nella robustezza al rumore. Trovato l'8 settembre
+# 2026, dopo che l'utente ha segnalato avvii mentre in casa si stava ancora
+# bene.
+DAY_START_CONFIRM_SECONDS = 900
+
 # Versione del piccolo archivio che tiene in vita, fra un riavvio e l'altro, i
 # contrassegni "gia' fatto oggi" e la resa manuale.
 STORAGE_VERSION = 1
@@ -491,6 +502,15 @@ FAN_HYSTERESIS_DOWN = 0.5
 # **due soli cambi di ventola in sette ore**, perche' la tabella notturna ha un
 # bordo solo e la permanenza minima di mezz'ora basta gia'.
 FAN_HYSTERESIS_SLEEP = 0.5
+# Anche 0.5 in discesa pretende un grado pieno sotto il setpoint - con la
+# quantizzazione della macchina, quasi il target stesso. Misurato l'8
+# settembre 2026 su 299 campioni notturni (23/08-1/09): `low` raggiunto solo
+# nel 5% dei casi, contro l'intenzione dichiarata che sia la norma, non
+# l'eccezione. La salita resta a FAN_HYSTERESIS_SLEEP (protegge dalle
+# oscillazioni quando si scalda), la discesa qui e' piu' permissiva: una
+# stanza davvero sotto target scende a `low` prima, senza toccare
+# MIN_FAN_DWELL_SECONDS che gia' previene lo sbattimento.
+FAN_HYSTERESIS_SLEEP_DOWN = 0.2
 # Mezz'ora invece di dieci minuti. Ha senso perche' fra i due passi non c'e'
 # nulla da guadagnare: misurati a 45 Hz costanti, `low` 637 W e `medium` 645 W,
 # otto watt. Non vale un comando ogni dieci minuti.
