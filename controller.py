@@ -824,6 +824,17 @@ class ClimaSmartController:
             # invece di cedere per un'ora. Vale una volta sola, per la giornata
             # in cui si e' chiesto: da qui in poi un intervento e' un intervento.
             self._approval_waiting_on = None
+            # Come async_bot_command: arma la finestra di assestamento anche
+            # qui, cosi' un secondo evento che segue il consenso (es. la
+            # ventola che torna al default del dispositivo) non viene letto
+            # come una mano - difesa in profondita', non solo affidamento sul
+            # fatto che il chiamante passi da clima_smart.comando_bot.
+            # Trovato l'8 settembre 2026, riprodotto con un test: senza
+            # questo, un'eco arrivata subito dopo un consenso appena dato
+            # cedeva il comando per un'ora.
+            self._last_hvac_cmd = new_state.state
+            self._arm_settle("_settle_hvac_until")
+            self._arm_settle("_settle_mode_change_until")
             # Chi vuole annunciarlo aspetta la prossima passata, che ha target e
             # fase gia' assestati - vedi il commento su `_announce_start_reason`.
             self._announce_start_reason = (

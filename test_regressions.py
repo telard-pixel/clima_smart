@@ -2289,7 +2289,14 @@ class ControllerRegressionTests(unittest.TestCase):
         )
         self.assertFalse(ctrl.override_active, "il si' non e' un intervento")
         self.assertIsNone(ctrl._approval_waiting_on, "vale una volta sola")
-        # Da qui in poi un intervento torna a essere un intervento.
+        # Trovato l'8 settembre 2026: il consenso ora arma la stessa finestra
+        # di assestamento di async_bot_command (COMMAND_SETTLE_SECONDS), cosi'
+        # un'eco del dispositivo che segue il si' non viene letta come una
+        # mano. Un intervento genuino torna a essere un intervento solo dopo
+        # che quella finestra e' scaduta - la si forza scaduta qui per
+        # testare esattamente questo, non l'istante subito dopo il consenso.
+        ctrl._settle_hvac_until = NOW - timedelta(seconds=1)
+        ctrl._settle_mode_change_until = NOW - timedelta(seconds=1)
         ctrl._maybe_flag_manual(
             Event(
                 State("cool", {"temperature": 25.0}),
@@ -2297,6 +2304,37 @@ class ControllerRegressionTests(unittest.TestCase):
             )
         )
         self.assertTrue(ctrl.override_active)
+
+    def test_a_device_echo_right_after_consent_is_not_a_manual_override(self):
+        """L'8 settembre 2026: il consenso al permesso di avvio non armava
+
+        nessuna finestra di assestamento (a differenza di async_bot_command).
+        Un secondo evento arrivato subito dopo - qui la ventola che torna al
+        default del dispositivo, senza context.user_id - veniva letto come
+        una mano e cedeva il comando per un'ora proprio dopo un si' appena
+        dato. Riprodotto e corretto lo stesso giorno.
+        """
+        ctrl = self._smart_controller(room=27.0)
+        ctrl._approval_waiting_on = NOW.date()
+        ctrl.hass.states.values["climate.test"].state = "off"
+        ctrl._maybe_flag_manual(
+            Event(
+                State("off", {}),
+                State("cool", {"temperature": 25.0, "fan_mode": "medium"}),
+            )
+        )
+        self.assertFalse(ctrl.override_active, "il si' non e' un intervento")
+        # L'eco: la ventola torna al default del dispositivo, nessun comando
+        # nostro l'ha chiesto e nessun tempo e' passato dal consenso.
+        ctrl._maybe_flag_manual(
+            Event(
+                State("cool", {"temperature": 25.0, "fan_mode": "medium"}),
+                State("cool", {"temperature": 25.0, "fan_mode": "auto"}),
+            )
+        )
+        self.assertFalse(
+            ctrl.override_active, "l'eco del dispositivo non e' una mano"
+        )
 
     def test_the_approved_start_is_recognised_after_midnight_too(self):
         """La domanda di notte fonda cade a ridosso della mezzanotte: una
