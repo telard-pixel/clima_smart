@@ -2428,6 +2428,109 @@ class ControllerRegressionTests(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(chiamate, [], "gia' li', nessun comando da mandare")
 
+    def test_fan_bot_command_is_not_read_as_a_manual_override(self):
+        """Stesso principio di async_bot_command, per la ventola: aggiunta il
+
+        9 settembre 2026 insieme alla protezione, non prima - il menu non
+        esponeva la ventola proprio perche' comandarla direttamente faceva
+        scattare l'override.
+        """
+        ctrl = self._smart_controller(room=27.0, fan="auto")
+        inviati = []
+
+        async def riesce(domain, service, data=None):
+            inviati.append(service)
+            return True
+
+        ctrl._call = riesce
+        ok = asyncio.run(ctrl.async_fan_command("high"))
+        self.assertTrue(ok)
+        self.assertIn("set_fan_mode", inviati)
+
+        ctrl.hass.states.values["climate.test"].attributes["fan_mode"] = "high"
+        ctrl._maybe_flag_manual(
+            Event(
+                State("cool", {"fan_mode": "auto"}),
+                State("cool", {"fan_mode": "high"}),
+            )
+        )
+        self.assertFalse(ctrl.override_active, "il comando del bot non e' una mano")
+
+    def test_fan_bot_command_rejects_unsupported_modes(self):
+        ctrl = self._smart_controller(room=27.0)
+        ok = asyncio.run(ctrl.async_fan_command("turbo"))
+        self.assertFalse(ok)
+
+    def test_fan_bot_command_is_a_no_op_if_already_there(self):
+        ctrl = self._smart_controller(room=27.0, fan="high")
+        chiamate = []
+
+        async def conta(domain, service, data=None):
+            chiamate.append(service)
+            return True
+
+        ctrl._call = conta
+        ok = asyncio.run(ctrl.async_fan_command("high"))
+        self.assertTrue(ok)
+        self.assertEqual(chiamate, [], "gia' li', nessun comando da mandare")
+
+    def test_nudge_bot_shifts_the_target_temporarily(self):
+        """La spinta e' additiva su active_target e scade da sola dopo
+
+        NUDGE_MINUTES, senza toccare target_home. Aggiunta il 9 settembre
+        2026 per esporre una regolazione dal /menu che si autocorregge,
+        invece delle soglie tarate che un tocco distratto vanificherebbe.
+        """
+        ctrl = self._smart_controller(room=27.0)
+        ctrl._nudge_until = GIORNO + timedelta(minutes=controller_module.NUDGE_MINUTES)
+        ctrl._nudge_value = -controller_module.NUDGE_DELTA_C
+        self._orologio(GIORNO)
+        desired = ctrl._compute(GIORNO)
+        self.assertEqual(desired.setpoint, 25.0)      # l'obiettivo resta 25
+        self.assertEqual(ctrl.active_target, 25.0)    # e il sensore pure
+        sent = []
+
+        async def record(domain, service, data):
+            sent.append((service, data))
+            return True
+
+        ctrl._call = record
+        asyncio.run(ctrl._apply(desired))
+        # ...ma alla macchina arriva un grado in meno
+        self.assertIn(("set_temperature", {"temperature": 24.0}), sent)
+
+        # Scaduta: il comando torna quello vero, senza sconto.
+        sent.clear()
+        ctrl._nudge_until = GIORNO - timedelta(seconds=1)
+        self.assertFalse(ctrl.nudge_active)
+        ctrl._last_setpoint_cmd = None
+        ctrl._settle_setpoint_until = None
+        asyncio.run(ctrl._apply(ctrl._compute(GIORNO)))
+        self.assertIn(("set_temperature", {"temperature": 25.0}), sent)
+
+    def test_nudge_bot_opposite_direction_replaces_not_stacks(self):
+        ctrl = self._smart_controller(room=27.0)
+        ctrl._restore_event.set()
+
+        async def riesce(domain, service, data=None):
+            return True
+
+        ctrl._call = riesce
+        asyncio.run(ctrl.async_nudge_bot("fresco"))
+        asyncio.run(ctrl.async_nudge_bot("caldo"))
+        self.assertEqual(ctrl.nudge_direction, "caldo")
+        prima = ctrl._compute(GIORNO).setpoint
+        # Non -2 e +1 sommati: solo l'ultima direzione conta.
+        self.assertAlmostEqual(
+            ctrl._active_nudge(), controller_module.NUDGE_DELTA_C
+        )
+
+    def test_nudge_bot_rejects_unknown_direction(self):
+        ctrl = self._smart_controller(room=27.0)
+        ok = asyncio.run(ctrl.async_nudge_bot("boh"))
+        self.assertFalse(ok)
+        self.assertFalse(ctrl.nudge_active)
+
     def test_winter_help_stays_off_when_the_outdoor_is_unreadable(self):
         """Non sapere che stagione e' non e' una ragione per scaldare.
 

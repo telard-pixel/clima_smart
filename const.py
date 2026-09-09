@@ -10,6 +10,8 @@ PLATFORMS: list[str] = ["switch", "select", "number", "sensor"]
 # vuole accendere/spegnere senza essere scambiata per una mano sul
 # telecomando - vedi il commento su `async_bot_command` in controller.py.
 SERVICE_BOT_COMMAND = "comando_bot"
+SERVICE_FAN_COMMAND = "ventola_bot"
+SERVICE_NUDGE_COMMAND = "spinta_bot"
 ATTR_HVAC_MODE = "hvac_mode"
 
 # --- Config-entry data keys (set once in the config flow) ---
@@ -394,6 +396,14 @@ UPDATE_INTERVAL_SECONDS = 300
 # cloud round-trip catching up to our value is not mistaken for a user action.
 # 180s gives ~2-3x margin over the typical Haier cloud latency (10-60s).
 COMMAND_SETTLE_SECONDS = 180
+
+# Spinta temporanea dal bot Telegram (9 settembre 2026): +-1 grado per un'ora,
+# poi torna da sola. Additiva su active_target, non tocca target_home/
+# target_sleep - il menu puo' esporla senza il rischio che un tocco distratto
+# vanifichi la taratura, la stessa preoccupazione che aveva escluso comandi
+# diretti dal menu in origine.
+NUDGE_DELTA_C = 1.0
+NUDGE_MINUTES = 60
 # Hard cap on a single climate/switch service call. A hung Haier cloud must not
 # block the control loop nor the lock-drain in async_stop (unload) indefinitely;
 # on timeout the call is treated as failed and retried on the next pass.

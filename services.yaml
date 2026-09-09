@@ -22,3 +22,51 @@ comando_bot:
           options:
             - cool
             - "off"
+
+ventola_bot:
+  name: Ventola dal bot
+  description: >-
+    Cambia la ventola dell'unita' governata da un'istanza di Clima Smart
+    senza farla leggere come un intervento manuale. Aggiunto il 9 settembre
+    2026, stesso principio di comando_bot ma per la ventola: prima il menu
+    non la esponeva proprio perche' comandarla direttamente faceva scattare
+    l'override.
+  fields:
+    entity_id:
+      name: Entita' clima
+      description: L'entita' climate governata dall'istanza di Clima Smart da comandare.
+      required: true
+      selector:
+        entity:
+          domain: climate
+    fan_mode:
+      name: Ventola
+      description: Uno dei modi ventola supportati dall'unita' (es. low, medium, high, auto).
+      required: true
+      selector:
+        text:
+
+spinta_bot:
+  name: Spinta temporanea dal bot
+  description: >-
+    Sposta il target di +-1 grado per un'ora, poi torna da solo. Non tocca
+    la taratura permanente (target_home/target_sleep): pensato per il /menu,
+    cosi' un tocco distratto si autocorregge invece di vanificare settimane
+    di lavoro. Aggiunto il 9 settembre 2026.
+  fields:
+    entity_id:
+      name: Entita' clima
+      description: L'entita' climate governata dall'istanza di Clima Smart da comandare.
+      required: true
+      selector:
+        entity:
+          domain: climate
+    direzione:
+      name: Direzione
+      description: fresco abbassa il target di un grado, caldo lo alza.
+      required: true
+      selector:
+        select:
+          options:
+            - fresco
+            - caldo

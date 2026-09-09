@@ -144,6 +144,11 @@ class ClimaSmartReasonSensor(ClimaSmartEntity, SensorEntity):
             "override_fino_a": ctrl.override_until.isoformat()
             if ctrl.override_until
             else None,
+            "spinta_attiva": ctrl.nudge_active,
+            "spinta_direzione": ctrl.nudge_direction,
+            "spinta_fino_a": ctrl.nudge_until.isoformat()
+            if ctrl.nudge_until
+            else None,
             "innesco": ctrl.last_trigger,
             "valutato_alle": ctrl.last_evaluated.isoformat()
             if ctrl.last_evaluated

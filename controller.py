@@ -29,6 +29,8 @@ from homeassistant.util.unit_conversion import TemperatureConverter
 from .const import (
     AUX_REFUSAL_BACKOFF_SECONDS,
     COMMAND_SETTLE_SECONDS,
+    NUDGE_DELTA_C,
+    NUDGE_MINUTES,
     ADAPTIVE_MIN_DWELL_SECONDS,
     ADAPTIVE_QUANTUM,
     CONF_ADAPTIVE_MAX,
@@ -318,6 +320,11 @@ class ClimaSmartController:
         self._restore_event = asyncio.Event()
         self._restore_wait_timed_out = False
         self._override_cancel = None
+        # Spinta temporanea dal bot (9/9/2026): valore additivo su
+        # active_target, non persistito, scade da solo - vedi async_nudge_bot.
+        self._nudge_cancel = None
+        self._nudge_value: float = 0.0
+        self._nudge_until: datetime | None = None
         self._apply_errors: list[str] = []
         # True while an evaluation has been queued but has not started yet, so a
         # burst of state events collapses into one pass (see _queue_evaluate).
@@ -1027,6 +1034,20 @@ class ClimaSmartController:
     def override_until(self) -> datetime | None:
         return self._override_until
 
+    @property
+    def nudge_active(self) -> bool:
+        return self._nudge_until is not None and dt_util.now() < self._nudge_until
+
+    @property
+    def nudge_until(self) -> datetime | None:
+        return self._nudge_until
+
+    @property
+    def nudge_direction(self) -> str | None:
+        if not self.nudge_active:
+            return None
+        return "fresco" if self._nudge_value < 0 else "caldo"
+
     # ----------------------------------------------------------- public API
     async def async_set_enabled(self, value: bool) -> None:
         self.enabled = value
@@ -1529,6 +1550,17 @@ class ClimaSmartController:
         """Unit used by climate state attributes and climate service payloads."""
         units = getattr(getattr(self.hass, "config", None), "units", None)
         return getattr(units, "temperature_unit", UnitOfTemperature.CELSIUS)
+
+    def _active_nudge(self) -> float:
+        """La spinta temporanea del bot (+-NUDGE_DELTA_C), o 0.0 se non attiva
+        o scaduta. Vedi async_nudge_bot. Applicata in _apply insieme a
+        setpoint_offset, non qui: stesso principio, sposta solo cio' che
+        viene chiesto alla macchina, mai active_target/la diagnostica, che
+        devono continuare a raccontare l'obiettivo vero (vedi il commento
+        su setpoint_offset in _apply)."""
+        if self._nudge_until is None or dt_util.now() >= self._nudge_until:
+            return 0.0
+        return self._nudge_value
 
     def _reachable_target(self, target: float, climate) -> float:
         """The target the unit will really hold, expressed back in Celsius.
@@ -3195,6 +3227,12 @@ class ClimaSmartController:
             want_set = desired.setpoint
             if want_set is not None and desired.hvac != HVAC_HEAT:
                 want_set += self.setpoint_offset
+                # Stesso principio dell'offset qui sopra, per la spinta
+                # temporanea del bot (9/9/2026): sposta solo il comando,
+                # active_target resta l'obiettivo vero. A differenza
+                # dell'offset e' segnata e scade da sola - vedi
+                # async_nudge_bot/_active_nudge.
+                want_set += self._active_nudge()
             if want_set is not None:
                 want_set = _convert_temperature(
                     want_set, UnitOfTemperature.CELSIUS, climate_unit
@@ -3320,6 +3358,72 @@ class ClimaSmartController:
                 self._settle_hvac_until = None
                 self._settle_mode_change_until = None
             return ok
+
+    async def async_fan_command(self, fan_mode: str) -> bool:
+        """Un comando esplicito della ventola dal bot Telegram (/menu).
+
+        Stesso principio di async_bot_command, per la ventola invece del
+        modo: senza armare la finestra di assestamento, l'eco che segue
+        verrebbe letta come una mano ed cederebbe il comando per un'ora -
+        il motivo per cui il menu non esponeva affatto la ventola prima del
+        9 settembre 2026. Aggiunta insieme a questa protezione, non prima.
+        """
+        async with self._lock:
+            climate = self.hass.states.get(self.climate_entity)
+            if climate is None or climate.state in _UNAVAILABLE:
+                return False
+            fan_modes = climate.attributes.get("fan_modes")
+            if fan_modes and fan_mode not in fan_modes:
+                return False
+            if climate.attributes.get("fan_mode") == fan_mode:
+                return True
+            prev = self._last_fan_cmd
+            self._last_fan_cmd = fan_mode
+            self._arm_settle("_settle_fan_until")
+            ok = await self._call("climate", "set_fan_mode", {"fan_mode": fan_mode})
+            if not ok:
+                self._last_fan_cmd = prev
+                self._settle_fan_until = None
+            return ok
+
+    async def async_nudge_bot(self, direzione: str) -> bool:
+        """Spinta temporanea del target dal bot Telegram: +-NUDGE_DELTA_C per
+
+        NUDGE_MINUTES, poi torna da sola. Non tocca target_home/target_sleep:
+        e' additiva su active_target via _reachable_target/_active_nudge, e
+        scade con lo stesso meccanismo di _start_override (async_call_later).
+        Una spinta nella direzione opposta a una gia' attiva la sostituisce
+        invece di sommarsi; la stessa direzione ripetuta rinnova solo il
+        timer. Aggiunta il 9 settembre 2026 - il menu puo' esporla senza il
+        rischio che un tocco distratto vanifichi la taratura, perche' si
+        autocorregge da sola entro un'ora.
+        """
+        if direzione not in ("fresco", "caldo"):
+            return False
+        async with self._lock:
+            self._nudge_value = -NUDGE_DELTA_C if direzione == "fresco" else NUDGE_DELTA_C
+            if self._nudge_cancel is not None:
+                self._nudge_cancel()
+            self._nudge_until = dt_util.now() + timedelta(minutes=NUDGE_MINUTES)
+            self._nudge_cancel = async_call_later(
+                self.hass,
+                timedelta(minutes=NUDGE_MINUTES),
+                self._on_nudge_expired,
+            )
+        await self.async_evaluate(f"spinta bot: {direzione}")
+        return True
+
+    @callback
+    def _on_nudge_expired(self, now: datetime) -> None:
+        self._nudge_cancel = None
+        self._nudge_value = 0.0
+        self._nudge_until = None
+        if not self._stopped:
+            self.entry.async_create_background_task(
+                self.hass,
+                self.async_evaluate("spinta bot scaduta"),
+                "clima_smart_nudge_expired",
+            )
 
     async def _apply_switch(self, conf_key: str, want: bool | None) -> bool:
         if want is None:

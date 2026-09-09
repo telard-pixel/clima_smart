@@ -18,6 +18,8 @@ from .const import (
     HVAC_OFF,
     PLATFORMS,
     SERVICE_BOT_COMMAND,
+    SERVICE_FAN_COMMAND,
+    SERVICE_NUDGE_COMMAND,
 )
 from .controller import ClimaSmartController
 
@@ -27,6 +29,23 @@ SERVICE_BOT_COMMAND_SCHEMA = vol.Schema(
     {
         vol.Required("entity_id"): cv.entity_id,
         vol.Required(ATTR_HVAC_MODE): vol.In([HVAC_OFF, HVAC_COOL]),
+    }
+)
+
+SERVICE_FAN_COMMAND_SCHEMA = vol.Schema(
+    {
+        vol.Required("entity_id"): cv.entity_id,
+        # Non vol.In fisso: i modi ventola validi vengono dall'entita' climate
+        # governata (fan_modes), non da un elenco universale - controllati
+        # dentro async_fan_command, non qui.
+        vol.Required("fan_mode"): cv.string,
+    }
+)
+
+SERVICE_NUDGE_COMMAND_SCHEMA = vol.Schema(
+    {
+        vol.Required("entity_id"): cv.entity_id,
+        vol.Required("direzione"): vol.In(["fresco", "caldo"]),
     }
 )
 
@@ -58,6 +77,46 @@ async def _async_setup_services(hass: HomeAssistant) -> None:
         SERVICE_BOT_COMMAND,
         _handle_bot_command,
         schema=SERVICE_BOT_COMMAND_SCHEMA,
+    )
+
+    async def _handle_fan_command(call: ServiceCall) -> None:
+        entity_id = call.data["entity_id"]
+        fan_mode = call.data["fan_mode"]
+        for data in hass.data.get(DOMAIN, {}).values():
+            controller: ClimaSmartController = data[DATA_CONTROLLER]
+            if controller.climate_entity == entity_id:
+                await controller.async_fan_command(fan_mode)
+                return
+        _LOGGER.warning(
+            "Clima Smart: ventola_bot per %s, nessun controller la governa",
+            entity_id,
+        )
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_FAN_COMMAND,
+        _handle_fan_command,
+        schema=SERVICE_FAN_COMMAND_SCHEMA,
+    )
+
+    async def _handle_nudge_command(call: ServiceCall) -> None:
+        entity_id = call.data["entity_id"]
+        direzione = call.data["direzione"]
+        for data in hass.data.get(DOMAIN, {}).values():
+            controller: ClimaSmartController = data[DATA_CONTROLLER]
+            if controller.climate_entity == entity_id:
+                await controller.async_nudge_bot(direzione)
+                return
+        _LOGGER.warning(
+            "Clima Smart: spinta_bot per %s, nessun controller la governa",
+            entity_id,
+        )
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_NUDGE_COMMAND,
+        _handle_nudge_command,
+        schema=SERVICE_NUDGE_COMMAND_SCHEMA,
     )
 
 
@@ -108,6 +167,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             # L'ultima istanza se n'e' andata: il servizio non avrebbe piu'
             # nessun controller da servire.
             hass.services.async_remove(DOMAIN, SERVICE_BOT_COMMAND)
+            hass.services.async_remove(DOMAIN, SERVICE_FAN_COMMAND)
+            hass.services.async_remove(DOMAIN, SERVICE_NUDGE_COMMAND)
         if controller:
             await controller.async_stop()
     elif controller:
