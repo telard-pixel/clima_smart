@@ -3492,6 +3492,49 @@ class ControllerRegressionTests(unittest.TestCase):
         desired = ctrl._compute(GIORNO)
         self.assertNotEqual(desired.hvac, "off")
 
+    # ------------------------------ notte: la stagione non ferma un ciclo gia' acceso
+    def test_out_of_season_does_not_stop_a_night_cycle_already_running(self):
+        """Persiane chiuse, niente ricambio d'aria: se il ciclo notturno e' gia'
+        acceso, un'esterna scesa sotto soglia non lo ferma - la notte e' quasi
+        sempre piu' fresca del giorno, stagione o non stagione, e quel fresco
+        non arriva comunque in camera. Incidente del 10->11 settembre 2026:
+        l'esterna sotto soglia dalle 23 in poi ha spento il raffrescamento
+        ripetutamente, lasciando la camera sopra i 23 gradi tutta la notte."""
+        ctrl = self._smart_controller(room=23.5, humidity=60, outdoor=8.0)
+        self._profilo_notte(ctrl)
+        ctrl.hass.states.values["climate.test"].state = "cool"
+        ctrl._not_summer_since = GIORNO - timedelta(
+            seconds=controller_module.SEASON_EXIT_CONFIRM_SECONDS
+        )
+        notte = GIORNO.replace(hour=23, minute=30)
+        desired = ctrl._compute(notte)
+        self.assertEqual(ctrl.current_phase, "sleep")
+        self.assertNotEqual(desired.hvac, "off")
+
+    def test_out_of_season_still_stops_a_cycle_started_during_the_day(self):
+        """L'eccezione notturna non tocca il giorno: un pomeriggio fresco resta
+        un segnale di stagione vero, e ferma il ciclo come sempre."""
+        ctrl = self._smart_controller(room=23.5, outdoor=8.0)
+        self._profilo_notte(ctrl)
+        ctrl.hass.states.values["climate.test"].state = "cool"
+        ctrl._not_summer_since = GIORNO - timedelta(
+            seconds=controller_module.SEASON_EXIT_CONFIRM_SECONDS
+        )
+        desired = ctrl._compute(GIORNO.replace(hour=12, minute=0))
+        self.assertEqual(desired.hvac, "off")
+
+    def test_out_of_season_at_night_does_not_start_a_new_cycle(self):
+        """L'eccezione vale solo per un ciclo gia' in corso: a macchina spenta,
+        di notte, la guardia di stagione resta piena come prima."""
+        ctrl = self._smart_controller(room=23.5, outdoor=8.0)
+        self._profilo_notte(ctrl)
+        ctrl.hass.states.values["climate.test"].state = "off"
+        ctrl._not_summer_since = GIORNO - timedelta(
+            seconds=controller_module.SEASON_EXIT_CONFIRM_SECONDS
+        )
+        desired = ctrl._compute(GIORNO.replace(hour=23, minute=30))
+        self.assertIsNone(desired.hvac)
+
     def test_cool_morning_stops_a_unit_left_in_fan_only(self):
         """Anche lo spegnimento della mattina fresca cercava solo `cool` e
         `dry`: una mattina fredda trovata con l'unita' in sola ventilazione la

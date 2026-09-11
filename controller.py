@@ -2458,6 +2458,10 @@ class ClimaSmartController:
     def _compute(self, now: datetime) -> Desired:
         self._trim_probe_age(now)
         phase = self._phase(now)
+        # The sleep window is a stretch of the night: same quiet behaviour, colder
+        # target. Everything that keyed off "is it night" must include it. Computed
+        # this early so the summer/season guard below can read it too.
+        is_night = phase in (PHASE_NIGHT, PHASE_SLEEP)
         if phase in (PHASE_SLEEP, PHASE_WIND_DOWN):
             self._clear_trim_probe()
         climate = self.hass.states.get(self.climate_entity)
@@ -2537,6 +2541,18 @@ class ClimaSmartController:
             # reading that could actually be caused by winter heating.
             summer = nostro_ciclo
 
+        # Di notte un ciclo di raffrescamento/deumidificazione gia' avviato non si
+        # ferma per il solo giudizio di stagione: l'esterna e' quasi sempre piu'
+        # fresca la notte, stagione o non stagione, e con le persiane chiuse quella
+        # frescura non arriva comunque in camera. Incidente del 10->11 settembre
+        # 2026: l'esterna filtrata e' scesa sotto soglia dalle 23 in poi e lo
+        # spegnimento ripetuto ha lasciato la camera sopra i 23 gradi al 60% di
+        # umidita' per tutta la notte. Non abilita un avvio nuovo (nostro_ciclo
+        # resta condizione necessaria): di giorno, o a macchina spenta, la guardia
+        # e' piena come prima.
+        if not summer and nostro_ciclo and is_night:
+            summer = True
+
         if self.mode == MODE_OFF:
             self.current_phase = None
             self.active_target = None
@@ -2545,9 +2561,6 @@ class ClimaSmartController:
         # Da qui in poi c'e' un solo percorso: fasce orarie, guardie di stagione, e
         # le decisioni prese dai sensori.
         self.current_phase = phase
-        # The sleep window is a stretch of the night: same quiet behaviour, colder
-        # target. Everything that keyed off "is it night" must include it.
-        is_night = phase in (PHASE_NIGHT, PHASE_SLEEP)
 
         # Il solo modo che arriva qui e' MODE_SMART: MODE_OFF e' gia' uscito sopra
         # (MODES ne ha solo due). Quindi niente `elif phase == PHASE_GAP` gemello:
