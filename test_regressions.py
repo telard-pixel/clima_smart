@@ -1116,6 +1116,25 @@ class ControllerRegressionTests(unittest.TestCase):
         asyncio.new_event_loop().run_until_complete(altro._async_load_memoria())
         self.assertTrue(altro._hot_outdoor)
 
+    def test_the_hot_outdoor_flag_resets_overnight(self):
+        """_house_trim, che scrive _hot_outdoor, non gira di notte: senza un
+        reset esplicito il flag restava congelato al valore del giorno prima, e
+        la prima valutazione del giorno dopo partiva gia' con l'isteresi di
+        mantenimento invece di quella d'ingresso. Trovato nella revisione del
+        24 settembre 2026."""
+        ctrl = self._con_anello()
+        ctrl.entry.options = dict(ctrl.entry.options, hot_outdoor=28.0, trim_min_hot=23.0)
+        ctrl._hot_outdoor_floor(28.5)               # sopra soglia: acceso, come ieri sera
+        self.assertTrue(ctrl._hot_outdoor)
+        notte = GIORNO.replace(hour=2, minute=0)    # notte fonda: _house_trim non gira
+        ctrl._compute(notte)
+        self.assertFalse(
+            ctrl._hot_outdoor,
+            "il flag non deve sopravvivere alla notte: la prima valutazione del "
+            "giorno dopo deve ripartire dalla soglia d'ingresso, non da quella "
+            "di mantenimento",
+        )
+
     def test_an_implausible_return_air_is_ignored(self):
         """Un valore assurdo o NaN sull'aria di ripresa non entra nel controllo:
         room diventa None come quando il termometro manca, invece di trascinare la
@@ -1742,10 +1761,16 @@ class ControllerRegressionTests(unittest.TestCase):
         poco_dopo = capped_at + timedelta(minutes=10)
         self.assertEqual(ctrl._compute(poco_dopo).fan, "medium")
         self.assertEqual(ctrl._high_fan_capped_until, primo_capped_until)
-        # Il raffreddamento scade: la ripresa non si e' mai mossa, quindi la
-        # nuova finestra boccia di nuovo e il vincolo si rinnova.
+        # Il raffreddamento scade: `high` torna subito, con un riferimento
+        # fresco preso ora - non quello di inizio-cap, che avrebbe attribuito
+        # a `high` un eventuale guadagno ottenuto da `medium` durante il cap.
         dopo_scadenza = capped_at + timedelta(minutes=46)
-        self.assertEqual(ctrl._compute(dopo_scadenza).fan, "medium")
+        self.assertEqual(ctrl._compute(dopo_scadenza).fan, "high")
+        self.assertIsNone(ctrl._high_fan_capped_until)
+        # La ripresa non si e' mai mossa: dopo una finestra intera di prova
+        # vera con `high`, la nuova bocciatura arriva e il vincolo si rinnova.
+        nuova_bocciatura = dopo_scadenza + timedelta(minutes=46)
+        self.assertEqual(ctrl._compute(nuova_bocciatura).fan, "medium")
         self.assertGreater(ctrl._high_fan_capped_until, primo_capped_until)
 
     def test_high_fan_guard_can_be_disabled(self):
@@ -2188,6 +2213,26 @@ class ControllerRegressionTests(unittest.TestCase):
         self.assertEqual(fuori.setpoint, 22.0)
         self.assertFalse(ctrl._night_mild)
 
+    def test_mild_night_resets_over_the_day(self):
+        """_night_mild lo scrive solo _sleep_target, che gira solo di notte:
+        senza un reset esplicito restava congelato dal giorno prima, e la prima
+        valutazione della notte dopo partiva gia' con l'isteresi di
+        mantenimento invece di quella d'ingresso. Trovato nella revisione del
+        24 settembre 2026."""
+        ctrl = self._smart_controller(room=26.0, outdoor=21.0)
+        self._notte_mite(ctrl)
+        ctrl._compute(NOW.replace(hour=2, minute=0))
+        self.assertTrue(ctrl._night_mild)
+        ctrl._compute(GIORNO)                       # di giorno _sleep_target non gira
+        self.assertFalse(ctrl._night_mild)
+        # Un'esterna dentro la vecchia banda di isteresi (22.5, fra soglia 22 e
+        # soglia+1) non basta piu': la notte dopo deve ripartire dalla soglia
+        # d'ingresso vera, non da quella di mantenimento del giorno prima.
+        ctrl.hass.states.values["sensor.outdoor"] = State("22.5", {"unit_of_measurement": "°C"})
+        dopo = ctrl._compute(NOW.replace(hour=2, minute=10))
+        self.assertEqual(dopo.setpoint, 22.0)
+        self.assertFalse(ctrl._night_mild)
+
     def test_mild_night_is_off_by_default(self):
         """Soglia a zero: nessuna installazione esistente cambia comportamento."""
         ctrl = self._smart_controller(room=26.0, outdoor=15.0)
@@ -2428,6 +2473,33 @@ class ControllerRegressionTests(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(chiamate, [], "gia' li', nessun comando da mandare")
 
+    def test_bot_command_refuses_while_disabled(self):
+        """Ogni altro punto che comanda l'unita' (_apply, _apply_switch,
+        _apply_select) controlla `self._stopped or not self.enabled` prima di
+        agire; async_bot_command no. Trovato nella revisione del 24 settembre
+        2026: con lo switch master spento, o durante il drenaggio di un
+        reload (`_stopped=True`), il /menu poteva comunque comandare l'unita'
+        vera."""
+        ctrl = self._smart_controller(room=27.0)
+        ctrl.hass.states.values["climate.test"].state = "off"
+        chiamate = []
+
+        async def conta(domain, service, data=None):
+            chiamate.append(service)
+            return True
+
+        ctrl._call = conta
+        ctrl.enabled = False
+        ok = asyncio.run(ctrl.async_bot_command(controller_module.HVAC_COOL))
+        self.assertFalse(ok)
+        self.assertEqual(chiamate, [])
+
+        ctrl.enabled = True
+        ctrl._stopped = True
+        ok = asyncio.run(ctrl.async_bot_command(controller_module.HVAC_COOL))
+        self.assertFalse(ok)
+        self.assertEqual(chiamate, [])
+
     def test_fan_bot_command_is_not_read_as_a_manual_override(self):
         """Stesso principio di async_bot_command, per la ventola: aggiunta il
 
@@ -2473,6 +2545,28 @@ class ControllerRegressionTests(unittest.TestCase):
         ok = asyncio.run(ctrl.async_fan_command("high"))
         self.assertTrue(ok)
         self.assertEqual(chiamate, [], "gia' li', nessun comando da mandare")
+
+    def test_fan_bot_command_refuses_while_disabled(self):
+        """Stesso bug di test_bot_command_refuses_while_disabled, per la
+        ventola. Trovato nella revisione del 24 settembre 2026."""
+        ctrl = self._smart_controller(room=27.0, fan="auto")
+        chiamate = []
+
+        async def conta(domain, service, data=None):
+            chiamate.append(service)
+            return True
+
+        ctrl._call = conta
+        ctrl.enabled = False
+        ok = asyncio.run(ctrl.async_fan_command("high"))
+        self.assertFalse(ok)
+        self.assertEqual(chiamate, [])
+
+        ctrl.enabled = True
+        ctrl._stopped = True
+        ok = asyncio.run(ctrl.async_fan_command("high"))
+        self.assertFalse(ok)
+        self.assertEqual(chiamate, [])
 
     def test_nudge_bot_shifts_the_target_temporarily(self):
         """La spinta e' additiva su active_target e scade da sola dopo
@@ -2675,6 +2769,29 @@ class ControllerRegressionTests(unittest.TestCase):
         self.assertEqual(riposo.hvac, "off")
         self.assertIn("riposa", riposo.reason)
         self.assertTrue(ctrl._cold_night_resting)
+
+    def test_cold_night_flag_resets_over_the_day(self):
+        """_cold_night lo scrive solo _cold_night_off, chiamata solo dentro
+        notte_fonda: senza un reset esplicito restava congelato dal giorno
+        prima, e la prima valutazione della notte dopo partiva gia' con
+        l'isteresi di mantenimento invece di quella d'ingresso. Trovato nella
+        revisione del 24 settembre 2026."""
+        ctrl = self._smart_controller(room=26.0, outdoor=15.0)
+        self._orari(ctrl, target_sleep=22.0)
+        ctrl.entry.options = dict(
+            ctrl.entry.options, night_start_outdoor=20.0, summer_threshold=5.0
+        )
+        self._comodino(ctrl, 21.0)   # media (15+21)/2 = 18.0, sotto target: entra
+        ctrl._compute(NOW.replace(hour=2, minute=0))
+        self.assertTrue(ctrl._cold_night)
+        ctrl._compute(GIORNO)        # di giorno _cold_night_off non gira
+        self.assertFalse(ctrl._cold_night)
+        # Una media dentro la vecchia banda di isteresi (22.5, fra target 22 e
+        # target+1) non deve piu' bastare per rientrare: serve la soglia
+        # d'ingresso vera, non quella di mantenimento del giorno prima.
+        self._comodino(ctrl, 30.0)   # media (15+30)/2 = 22.5
+        ctrl._compute(NOW.replace(hour=2, minute=10))
+        self.assertFalse(ctrl._cold_night)
 
     def test_cold_night_rest_resumes_outside_the_start_window(self):
         """A riposo, se il comodino risale e la media supera soglia piu'
@@ -4455,6 +4572,20 @@ class ControllerRegressionTests(unittest.TestCase):
         self.assertTrue(ctrl.efficiency_reliable)
         self.assertTrue(ctrl.efficiency_extrapolated)
         self.assertFalse(ctrl.efficiency_in_band)
+
+    def test_poor_efficiency_alert_ignores_extrapolated_readings(self):
+        """Il commento di _update_efficiency dice che la resa scarsa prolungata
+        'guarda solo il lato alto, misurato fino a 81 Hz': un valore
+        estrapolato (qui 85 Hz, oltre EFFICIENCY_OBSERVED_MAX_HZ) non deve
+        far scattare l'allarme nemmeno dopo mezz'ora sostenuta. Trovato nella
+        revisione del 24 settembre 2026: il codice controllava solo
+        EFFICIENCY_BAND_MAX_HZ, non il tetto dell'osservato."""
+        ctrl = self._con_potenza(1310.5)
+        ctrl._compute(GIORNO)
+        ctrl._compute(GIORNO + timedelta(minutes=30))
+        self.assertTrue(ctrl.efficiency_extrapolated)
+        self.assertEqual(ctrl.poor_efficiency_minutes, 0.0)
+        self.assertFalse(ctrl.poor_efficiency_alert)
 
     def test_poor_efficiency_alert_after_sustained_high_hz(self):
         """1062.7 W fa 71 Hz, sopra i 45: dopo 25 minuti continui supera la

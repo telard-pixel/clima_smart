@@ -1509,7 +1509,11 @@ class ClimaSmartController:
             if affidabile
             else None
         )
-        if affidabile and hz > EFFICIENCY_BAND_MAX_HZ:
+        if (
+            affidabile
+            and hz > EFFICIENCY_BAND_MAX_HZ
+            and not self.efficiency_extrapolated
+        ):
             if self._poor_efficiency_since is None:
                 self._poor_efficiency_since = now
         else:
@@ -2363,6 +2367,13 @@ class ClimaSmartController:
             if now < self._high_fan_capped_until:
                 return "medium" if fan == "high" else fan
             self._high_fan_capped_until = None
+            # Il riferimento della bocciatura precedente non vale per il
+            # prossimo giudizio: senza questo reset, `_high_fan_room_at_start`
+            # restava quello di inizio-cap, e un miglioramento ottenuto da
+            # `medium` durante il cap veniva attribuito a `high`, che non ha
+            # mai avuto una finestra vera per dimostrarlo.
+            self._high_fan_started_at = None
+            self._high_fan_room_at_start = None
         if fan != "high":
             self._high_fan_started_at = None
             self._high_fan_room_at_start = None
@@ -2713,6 +2724,11 @@ class ClimaSmartController:
             # ore invece che dei tre quarti d'ora per cui e' stata aperta.
             self._clear_trim_probe()
             target = self._sleep_target(outdoor)
+            # _house_trim non gira in questa fascia: senza reset esplicito
+            # _hot_outdoor resterebbe congelato al valore dell'ultimo giorno,
+            # e la prima valutazione del giorno dopo userebbe l'isteresi di
+            # mantenimento invece di quella d'ingresso.
+            self._hot_outdoor = False
         elif phase == PHASE_SLEEP:
             # Fascia notte fonda ma sono fuori: la salto. Non il freddo profondo, ma
             # nemmeno l'anello di giorno - quello spinge la camera piu' in basso per
@@ -2723,9 +2739,14 @@ class ClimaSmartController:
             target = self.target_home
             compensazione = self._adaptive_extra(outdoor, now, passo)
             target += compensazione
+            # Ne' _sleep_target ne' _house_trim girano in questa fascia: stesso
+            # motivo del reset qui sopra, per entrambi i loro flag di isteresi.
+            self._night_mild = False
+            self._hot_outdoor = False
         else:
             # Di giorno comanda la linea di comfort delle altre stanze, e la camera
             # e' lo strumento per ottenerla.
+            self._night_mild = False
             trim = self._house_trim(
                 now, casa, passo, comodino, outdoor, room
             )
@@ -2748,6 +2769,12 @@ class ClimaSmartController:
         freddo = notte_fonda and self._cold_night_off(outdoor, comodino, target)
         if not notte_fonda:
             self._cold_night_resting = False
+            # _cold_night_off non gira fuori da notte_fonda per lo short-circuit
+            # qui sopra: senza reset esplicito _cold_night resterebbe congelato
+            # al valore dell'ultima notte, e la prima valutazione della notte
+            # dopo userebbe l'isteresi di mantenimento invece di quella
+            # d'ingresso.
+            self._cold_night = False
         if freddo and cur_mode in (HVAC_COOL, HVAC_DRY):
             self._cold_night_resting = True
             return Desired(
@@ -3349,6 +3376,8 @@ class ClimaSmartController:
         l'eco che segue viene riconosciuto come nostro, non come una mano.
         """
         async with self._lock:
+            if self._stopped or not self.enabled:
+                return False
             if hvac_mode not in (HVAC_OFF, HVAC_COOL):
                 return False
             climate = self.hass.states.get(self.climate_entity)
@@ -3382,6 +3411,8 @@ class ClimaSmartController:
         9 settembre 2026. Aggiunta insieme a questa protezione, non prima.
         """
         async with self._lock:
+            if self._stopped or not self.enabled:
+                return False
             climate = self.hass.states.get(self.climate_entity)
             if climate is None or climate.state in _UNAVAILABLE:
                 return False

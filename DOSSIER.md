@@ -1,7 +1,18 @@
 # Clima Smart — dossier tecnico dell'impianto
 
-**Ultimo aggiornamento: 1 settembre 2026, ore 23:45 (Europe/Rome).**
-**Versione in funzione: 1.23.0.**
+**Ultimo aggiornamento: 24 settembre 2026 (Europe/Rome).**
+**Versione in funzione: 1.28.0.**
+
+**Nota sull'aggiornamento del 24 settembre.** Questo giro ha portato il
+dossier dal passo col codice della 1.23.0 (1° settembre) a quello della
+1.27.1 (11 settembre, ultimo commit), poi una revisione a quattro angoli
+indipendenti (macchina a stati/persistenza, soglie/isteresi, integrazione
+hardware, resa/efficienza) ha trovato e corretto quattro bug, pubblicati
+come 1.28.0. Le sezioni 3, 7, 10 e 13 sono state aggiornate leggendo i
+commit e il codice attuale, **non** una nuova lettura dal vivo della config
+entry: dove un valore del §3 non è stato riverificato, resta etichettato "1°
+settembre" come prima. Nessuna misura di campo nuova è stata raccolta in
+questo giro.
 
 Questo documento è scritto perché possa essere letto da un'altra intelligenza
 artificiale, o da un tecnico, senza avere accesso alla conversazione che l'ha
@@ -97,10 +108,42 @@ compressore non c'è più**.
 valeva −1.0 ed era "la pezza che il sensore di stanza esiste per togliere", **oggi
 è a 0.0**. La pezza è stata effettivamente tolta.
 
-## 3. Assetto in funzione (1.23.0)
+## 3. Assetto in funzione (1.23.0, con i meccanismi aggiunti fino alla 1.27.1)
 
 **Letto il 1 settembre 2026 dalla memoria della config entry**, non dai
-predefiniti del codice: sono i 37 valori realmente in funzione.
+predefiniti del codice: sono i 37 valori realmente in funzione a quella data.
+Non riletto dal vivo il 24 settembre — i valori sotto restano quelli del 1°
+settembre finché non si rifà la lettura. Quello che **è** cambiato nel
+frattempo è il codice attorno a questi valori, elencato qui sotto perché
+cambia il comportamento anche a parametri invariati.
+
+### Meccanismi aggiunti dalla 1.24.0 alla 1.27.1 (11 settembre)
+
+- **Debounce all'avvio diurno e allo spegnimento del mattino** (1.26.2):
+  `_day_start_due` e `_morning_cool_off_due` non agiscono più su un singolo
+  campione, ma richiedono la condizione stabile per `DAY_START_CONFIRM_SECONDS`
+  (900 s) — vedi §13 per il perché.
+- **Isteresi di discesa della ventola notturna abbassata** (1.26.2):
+  `FAN_HYSTERESIS_SLEEP_DOWN` 0.2 contro 0.5 in salita — chiude il difetto
+  §7.1.
+- **Guardiano di resa su `high`** (1.24.0): se `high` non muove la ripresa di
+  almeno 0.3° entro `high_fan_guard_minutes` (default 45), si torna a
+  `medium`.
+- **Guardia di fine stagione non interrompe più un ciclo notturno già acceso**
+  (hotfix dell'11 settembre, fuori numerazione minor): di notte la soglia
+  stagionale sull'esterna filtrata blocca solo un **nuovo** avvio, non spegne
+  più un ciclo in corso.
+- **Tre servizi Telegram a livello di dominio** (1.26.0, 1.27.0):
+  `clima_smart.comando_bot` (accendi/spegni dal `/menu`),
+  `clima_smart.ventola_bot` (ventola dal `/menu`), `clima_smart.spinta_bot`
+  (±1° per un'ora, poi torna da solo). Tutti e tre armano la finestra di
+  assestamento prima di agire, cosa che le chiamate dirette a
+  `climate.clima_camera` da un'automazione **non** fanno — vedi la trappola
+  §10.1, che per i comandi del bot è ormai aggirata, ma resta vera per
+  chiunque altro tocchi l'entità direttamente.
+- **Diagnostica di resa** (1.24.0): sensore `efficiency`, Hz impliciti dalla
+  potenza dello Shelly (curva W = 17.7 × Hz − 194, valida solo sopra 28 Hz).
+  Puramente diagnostico, non cambia nessuna decisione di controllo.
 
 ### Ciclo giornaliero
 
@@ -307,7 +350,7 @@ quattro giorni: l'umidità è rimasta fra 38 e 53% contro una soglia di 60.
 **Rivisto il 1 settembre 2026.** Dei cinque difetti dell'elenco originale ne
 restano aperti due, e nessuno dei due è quello che sembrava più grave.
 
-### 7.1 Il silenzio notturno arriva, ma poco — **comfort, non energia. APERTO**
+### 7.1 Il silenzio notturno arriva, ma poco — **corretto nel codice (1.26.2), non ancora rimisurato**
 
 Misurato sui dieci giorni fino al 1 settembre, distribuzione della ventola in
 notte fonda (23:00–08:00, 299 campioni):
@@ -319,9 +362,18 @@ notte fonda (23:00–08:00, 299 campioni):
 | `low` | **5%** |
 | `auto` | 5% |
 
-Ad agosto `medium` valeva il 97% e `low` il 3%: è migliorato, ma **`low` — che
-per l'utente è il silenzio — resta un'eccezione**. Il vincolo §9.3 non è ancora
-onorato davvero.
+Ad agosto `medium` valeva il 97% e `low` il 3%: era migliorato, ma **`low` —
+che per l'utente è il silenzio — restava un'eccezione**. Il vincolo §9.3 non
+era ancora onorato davvero.
+
+**L'8 settembre** la causa è stata isolata: l'isteresi di discesa della
+ventola notturna era uguale a quella di salita (0.5), quindi `low` era
+raggiungibile solo con uno scarto quasi nullo. `FAN_HYSTERESIS_SLEEP_DOWN` è
+stata abbassata a **0.2** (la salita resta a 0.5, per non oscillare quando si
+scalda) — release 1.26.2. **Nessuna misura di campo post-fix esiste ancora**:
+serve una nuova distribuzione sullo stesso schema (notte fonda, stessi target)
+per verificare che `low` sia davvero salito oltre il 5%. Vedi domanda #5 in
+§11.
 
 ### 7.2 La ventola non modula — **RISOLTO, misurato**
 
@@ -422,6 +474,13 @@ target.
    quando i file si copiano a mano.
 4. I timestamp restituiti dall'API storica di Home Assistant sono **UTC**. Tre
    revisori indipendenti hanno tratto conclusioni sbagliate ignorandolo.
+5. **La trappola del punto 3 si è ripetuta.** Verificato il 24 settembre 2026:
+   l'ultimo tag su GitHub è `1.24.0`, il codice su disco è alla **1.27.1** — tre
+   minor non taggate (1.25.0, 1.26.x, 1.27.x), esattamente come a fine agosto.
+   HACS, se installato su quest'istanza, crede ancora di avere la 1.24.0 e
+   prima o poi riscrive sopra la 1.27.1. **Da taggare**, non solo da
+   documentare: la regola del punto 3 ("ogni installazione va accompagnata dal
+   tag") non si è consolidata in un'abitudine.
 
 ---
 
@@ -435,7 +494,7 @@ target.
 | 2 | A quale velocità di ventola è tarata la correzione −1.0? | **chiusa**: la correzione è 0.0, il termometro di camera è arrivato |
 | 3 | Quanto vale un grado di target notturno? | **aperta**. Servono 8-10 notti alternate 22.5 / **23.5** (non 23.0, che la macchina riceve identico: §6.2), confrontando i kWh 23:00–08:00 normalizzati sull'esterna |
 | 4 | Ripartire alle 09:00 conviene? | **superata da `start_approval`**: oggi l'ora di partenza la decide una persona rispondendo su Telegram, non una soglia |
-| 5 | **Perché `low` di notte arriva solo il 5% del tempo?** | **nuova, aperta.** È il difetto §7.1. La misura che la chiude: distribuzione della ventola notturna dopo aver spostato il bordo delle bande notturne, a parità di target |
+| 5 | **Perché `low` di notte arriva solo il 5% del tempo?** | **causa trovata e corretta nel codice (1.26.2, §7.1), misura di riscontro ancora da fare.** Serve una nuova distribuzione della ventola notturna, stesso schema del 1° settembre, per confermare che `low` sia salito oltre il 5% |
 | 6 | **Il dimezzamento dei consumi quanto deve all'anello di casa e quanto alle ore in meno?** | **nuova, aperta.** La decomposizione ore/watt del §4.2 è misurata, l'attribuzione no. La chiuderebbe una settimana con `start_approval` spento e l'anello attivo, confrontata con una a parti invertite |
 
 ## 12. Acquisti giustificati
@@ -499,12 +558,22 @@ Sedici versioni. Le svolte, non l'elenco completo:
 | 1.22.0 | cinque bug dalla revisione a tre del 27 agosto | |
 | 1.22.1 | il giudizio dry/cool non insegue più i passi dell'anello | §7.6, secondo punto |
 | **1.23.0** | cinque bug dalla revisione a tre del 1 settembre | il più grave: `fan_only` non era riconosciuto come ciclo nostro, e un'unità in sola ventilazione a fine stagione **non veniva più spenta da nessuno** |
+| 1.24.0 | Hz impliciti dalla potenza (`efficiency`); guardiano di resa su `high`; quattro bug dalla revisione a due del 2 settembre | diagnostico, non tocca il controllo |
+| 1.25.0 | tre bug dalla revisione a quattro del 4 settembre; due migliorie rimandate chiuse | il consenso Telegram dopo mezzanotte non veniva più riconosciuto: cedeva il comando per un'ora subito dopo un sì |
+| 1.26.0 | servizio `comando_bot` per il `/menu` Telegram | il pulsante accendi/spegni del menu cedeva il comando per un'ora, stesso bug della 1.24.0 ma sul menu generico |
+| 1.26.1 | finestra di assestamento anche dopo il consenso Telegram | un evento subito dopo un sì (es. la ventola che torna al default) veniva letto come intervento manuale |
+| **1.26.2** | avvio diurno e ventola notturna più robusti al rumore | debounce di 900s su avvio/spegnimento diurno; `FAN_HYSTERESIS_SLEEP_DOWN` 0.5→0.2, chiude il §7.1 |
+| 1.27.0 | ventola e spinta temporanea sicure dal bot Telegram | nuovi servizi `ventola_bot` e `spinta_bot`, stesso principio di `comando_bot` |
+| 1.27.1 (hotfix, 11 set.) | la guardia di fine stagione non spegne più un ciclo notturno già acceso | di notte la soglia stagionale blocca solo un nuovo avvio, non interrompe più uno in corso |
+| **1.28.0** | quattro bug dalla revisione a quattro angoli del 24 settembre | tre flag di isteresi (`_cold_night`, `_night_mild`, `_hot_outdoor`) restavano congelati fuori dalla loro finestra e usavano la soglia di mantenimento invece di quella d'ingresso alla prima valutazione utile; l'allarme di resa scarsa contava anche gli Hz estrapolati; il guardiano su `high` accreditava a `high` un guadagno ottenuto da `medium` durante il cap; `async_bot_command`/`async_fan_command` non controllavano `enabled`/`_stopped` come ogni altro punto che comanda l'unità |
 
-**Il metodo che ha prodotto di più:** la *revisione a tre*. Tre revisori
-indipendenti, ognuno su un angolo diverso (macchina a stati e persistenza; soglie
-e isteresi numeriche; integrazione con l'hardware reale), che non si vedono fra
-loro, e ogni segnalazione riverificata a mano prima di toccare il codice. Tre
-sessioni su tre hanno prodotto bug veri: 1.13.1, 1.22.0, 1.23.0.
+**Il metodo che ha prodotto di più:** la *revisione a più occhi*. Più
+revisori indipendenti, ognuno su un angolo diverso (macchina a stati e
+persistenza; soglie e isteresi numeriche; integrazione con l'hardware reale;
+resa/efficienza), che non si vedono fra loro, e ogni segnalazione riverificata
+a mano prima di toccare il codice. Il numero di revisori è salito da tre a
+quattro dalla 1.25.0. Sessioni su sessioni hanno prodotto bug veri: 1.13.1,
+1.22.0, 1.23.0, 1.24.0, 1.25.0, 1.26.0, 1.26.1, 1.28.0.
 
 **Errori metodologici commessi e da non ripetere:**
 - cambiare il **segnale** di un anello lasciando le **soglie** tarate sull'altro;
