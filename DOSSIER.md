@@ -16,19 +16,24 @@ settembre" come prima.
 **Una misura di campo è stata raccolta**, con accesso diretto (token fornito
 dall'utente) all'API storica dell'istanza live: §7.1, ventola notturna.
 
-**Stato del deploy, verificato lo stesso giorno — da tenere a mente leggendo
-"1.28.0" qui sopra:** l'istanza live **non** è alla 1.28.0. L'entità
-`update.clima_smart_update` dichiara 1.24.0 (installed **e** latest), ma è
-la stessa spia inaffidabile della trappola §10.3/§10.5 — non prova nulla da
-sola. La prova che conta: i servizi `comando_bot`, `ventola_bot`,
-`spinta_bot` esistono e rispondono sull'istanza (`/api/services`), e questi
-tre non esistevano prima della 1.26.0/1.27.0 — quindi il codice live è
-**almeno alla 1.27.0**, non alla 1.24.0 che l'entità dichiara. Non c'è
-però modo di distinguere da qui se sia esattamente 1.27.0, 1.27.1 (il
-hotfix dell'11 settembre) o qualcosa fra i due, e **di sicuro non è la
-1.28.0** appena pubblicata in questa stessa sessione. La misura di §7.1 va
-letta di conseguenza: riflette il codice fino a 1.26.2/1.27.x, non i quattro
-bug appena corretti.
+**Stato del deploy, aggiornato lo stesso giorno.** Prima delle 11:22 CEST
+l'istanza live **non** era alla 1.28.0: l'entità `update.clima_smart_update`
+dichiarava 1.24.0 (installed e latest), la stessa spia inaffidabile della
+trappola §10.3/§10.5. La prova che allora contava di più - i servizi
+`comando_bot`/`ventola_bot`/`spinta_bot` già attivi - diceva che il codice
+live era almeno alla 1.27.0, non alla 1.24.0 dichiarata. La misura di §7.1
+riflette quel codice (fino a 1.26.2/1.27.x), non i quattro bug della 1.28.0.
+
+**Alle 11:51 CEST del 24 settembre il deploy della 1.28.0 è stato
+completato e verificato**: pubblicata la GitHub Release 1.28.0 (mancava,
+c'era solo il tag - HACS legge le release, non i tag), forzato l'update
+tramite `update.install` con versione esplicita (il refresh automatico di
+HACS non si è mai attivato da solo nella finestra osservata), e riavviato
+Home Assistant. Dopo il riavvio: `update.clima_smart_update` mostra
+installed = latest = 1.28.0, nessun errore nel log oltre al consueto
+"integrazione non testata", i tre servizi bot rispondono, il controller
+valuta regolarmente (`sensor.clima_smart_stato` aggiornato). **I quattro bug
+del §13/1.28.0 sono ora davvero in produzione**, non solo su GitHub.
 
 Questo documento è scritto perché possa essere letto da un'altra intelligenza
 artificiale, o da un tecnico, senza avere accesso alla conversazione che l'ha
