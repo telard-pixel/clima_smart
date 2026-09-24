@@ -11,8 +11,24 @@ hardware, resa/efficienza) ha trovato e corretto quattro bug, pubblicati
 come 1.28.0. Le sezioni 3, 7, 10 e 13 sono state aggiornate leggendo i
 commit e il codice attuale, **non** una nuova lettura dal vivo della config
 entry: dove un valore del §3 non è stato riverificato, resta etichettato "1°
-settembre" come prima. Nessuna misura di campo nuova è stata raccolta in
-questo giro.
+settembre" come prima.
+
+**Una misura di campo è stata raccolta**, con accesso diretto (token fornito
+dall'utente) all'API storica dell'istanza live: §7.1, ventola notturna.
+
+**Stato del deploy, verificato lo stesso giorno — da tenere a mente leggendo
+"1.28.0" qui sopra:** l'istanza live **non** è alla 1.28.0. L'entità
+`update.clima_smart_update` dichiara 1.24.0 (installed **e** latest), ma è
+la stessa spia inaffidabile della trappola §10.3/§10.5 — non prova nulla da
+sola. La prova che conta: i servizi `comando_bot`, `ventola_bot`,
+`spinta_bot` esistono e rispondono sull'istanza (`/api/services`), e questi
+tre non esistevano prima della 1.26.0/1.27.0 — quindi il codice live è
+**almeno alla 1.27.0**, non alla 1.24.0 che l'entità dichiara. Non c'è
+però modo di distinguere da qui se sia esattamente 1.27.0, 1.27.1 (il
+hotfix dell'11 settembre) o qualcosa fra i due, e **di sicuro non è la
+1.28.0** appena pubblicata in questa stessa sessione. La misura di §7.1 va
+letta di conseguenza: riflette il codice fino a 1.26.2/1.27.x, non i quattro
+bug appena corretti.
 
 Questo documento è scritto perché possa essere letto da un'altra intelligenza
 artificiale, o da un tecnico, senza avere accesso alla conversazione che l'ha
@@ -350,7 +366,7 @@ quattro giorni: l'umidità è rimasta fra 38 e 53% contro una soglia di 60.
 **Rivisto il 1 settembre 2026.** Dei cinque difetti dell'elenco originale ne
 restano aperti due, e nessuno dei due è quello che sembrava più grave.
 
-### 7.1 Il silenzio notturno arriva, ma poco — **corretto nel codice (1.26.2), non ancora rimisurato**
+### 7.1 Il silenzio notturno arriva, ma poco — **migliorato dal fix (1.26.2), ma ancora lontano dal vincolo §9.3**
 
 Misurato sui dieci giorni fino al 1 settembre, distribuzione della ventola in
 notte fonda (23:00–08:00, 299 campioni):
@@ -370,10 +386,33 @@ era ancora onorato davvero.
 ventola notturna era uguale a quella di salita (0.5), quindi `low` era
 raggiungibile solo con uno scarto quasi nullo. `FAN_HYSTERESIS_SLEEP_DOWN` è
 stata abbassata a **0.2** (la salita resta a 0.5, per non oscillare quando si
-scalda) — release 1.26.2. **Nessuna misura di campo post-fix esiste ancora**:
-serve una nuova distribuzione sullo stesso schema (notte fonda, stessi target)
-per verificare che `low` sia davvero salito oltre il 5%. Vedi domanda #5 in
-§11.
+scalda) — release 1.26.2.
+
+**Rimisurato il 24 settembre**, direttamente dalla cronologia dell'istanza
+live (API `/api/history/period` su `climate.clima_camera`, token fornito
+dall'utente), finestra 9–24 settembre (15 notti con almeno un ciclo attivo),
+notte fonda 23:00–08:00 Europe/Rome, **tempo pesato** invece che a campioni
+(metodo diverso da quello di agosto/settembre, più robusto al passo di
+campionamento):
+
+| passo | quota | quota (1° settembre, a campioni) |
+|---|---|---|
+| `medium` | **83.0%** | 77% |
+| `auto` | 9.3% | 5% |
+| `low` | **7.0%** | 5% |
+| `high` | 0.7% | 11% |
+
+Il fix ha funzionato nella direzione giusta ma **non ha chiuso il difetto**:
+`low` sale dal 5% al 7%, un miglioramento reale ma piccolo, non il
+cambiamento netto che l'isteresi dimezzata avrebbe fatto sperare. `high` è
+quasi sparito (11%→0.7%, probabilmente per il guardiano di resa introdotto
+nella stessa finestra, 1.24.0) e il guadagno è andato soprattutto a `medium`
+e `auto`, non a `low`. **Il vincolo §9.3 resta non onorato davvero.** Tempo
+attivo totale nel campione: solo ~3.5 giorni su 15 notti (il periodo include
+notti già più fresche di fine settembre, con `start_approval`/riposo per
+notte fredda che tengono la macchina spenta più spesso: il campione è più
+piccolo di quello di agosto e va letto con cautela). Vedi domanda #5 in §11,
+riaperta.
 
 ### 7.2 La ventola non modula — **RISOLTO, misurato**
 
@@ -494,7 +533,7 @@ target.
 | 2 | A quale velocità di ventola è tarata la correzione −1.0? | **chiusa**: la correzione è 0.0, il termometro di camera è arrivato |
 | 3 | Quanto vale un grado di target notturno? | **aperta**. Servono 8-10 notti alternate 22.5 / **23.5** (non 23.0, che la macchina riceve identico: §6.2), confrontando i kWh 23:00–08:00 normalizzati sull'esterna |
 | 4 | Ripartire alle 09:00 conviene? | **superata da `start_approval`**: oggi l'ora di partenza la decide una persona rispondendo su Telegram, non una soglia |
-| 5 | **Perché `low` di notte arriva solo il 5% del tempo?** | **causa trovata e corretta nel codice (1.26.2, §7.1), misura di riscontro ancora da fare.** Serve una nuova distribuzione della ventola notturna, stesso schema del 1° settembre, per confermare che `low` sia salito oltre il 5% |
+| 5 | **Perché `low` di notte arriva solo il 5-7% del tempo?** | **riaperta il 24 settembre.** Il fix del 1.26.2 (isteresi di discesa 0.5→0.2) ha alzato `low` dal 5% al 7% sulla cronologia live, un miglioramento reale ma insufficiente: §7.1. Il guadagno è andato a `medium`/`auto`, non a `low`. Serve capire cosa tiene ancora `low` così raro — probabile prossimo candidato: la soglia stessa (1.0) o il tempo minimo di permanenza (`MIN_FAN_DWELL_SECONDS`), non ancora messi in discussione |
 | 6 | **Il dimezzamento dei consumi quanto deve all'anello di casa e quanto alle ore in meno?** | **nuova, aperta.** La decomposizione ore/watt del §4.2 è misurata, l'attribuzione no. La chiuderebbe una settimana con `start_approval` spento e l'anello attivo, confrontata con una a parti invertite |
 
 ## 12. Acquisti giustificati
