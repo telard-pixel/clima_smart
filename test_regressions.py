@@ -3749,6 +3749,22 @@ class ControllerRegressionTests(unittest.TestCase):
         self.assertFalse(ctrl._cold_night)
         self.assertFalse(ctrl._night_mild)
 
+    def test_night_exception_lasts_until_the_morning_switch_off(self):
+        """Revisione del 25 ottobre 2026: alla fine del sonno (`wind_down`)
+        l'eccezione notturna smetteva di valere, e il timer di uscita dalla
+        stagione - che aveva contato tutta la notte - spegneva subito, alle
+        07:45, invece che allo spegnimento del mattino delle 08:30."""
+        ctrl = self._smart_controller(room=23.5, humidity=60, outdoor=18.0)
+        self._profilo_notte(ctrl)
+        ctrl.hass.states.values["climate.test"].state = "cool"
+        ctrl._not_summer_since = GIORNO - timedelta(hours=8)
+        desired = ctrl._compute(GIORNO.replace(hour=7, minute=45))
+        self.assertEqual(ctrl.current_phase, "wind_down")
+        self.assertNotEqual(desired.hvac, "off")
+        desired = ctrl._compute(GIORNO.replace(hour=8, minute=35))
+        self.assertEqual(desired.hvac, "off")
+        self.assertIn("spegnimento del mattino", desired.reason)
+
     def test_out_of_season_still_stops_a_cycle_started_during_the_day(self):
         """L'eccezione notturna non tocca il giorno: un pomeriggio fresco resta
         un segnale di stagione vero, e ferma il ciclo come sempre."""

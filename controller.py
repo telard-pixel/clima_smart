@@ -2613,10 +2613,14 @@ class ClimaSmartController:
         ciclo_notturno = nostro_ciclo or (
             phase == PHASE_SLEEP and self._cold_night_resting
         )
+        # Anche `wind_down`: e' ancora il target della notte, fino allo spegnimento
+        # del mattino. Fuori dall'eccezione, il timer di uscita dalla stagione
+        # (che ha continuato a contare tutta la notte) spegneva l'unita' gia' alla
+        # fine del sonno, senza nemmeno la conferma di 15 minuti.
         if (
             not summer
             and ciclo_notturno
-            and is_night
+            and (is_night or phase == PHASE_WIND_DOWN)
             and outdoor_valid
             and outdoor > self.summer_threshold - NIGHT_SEASON_OVERRIDE_DROP
         ):
