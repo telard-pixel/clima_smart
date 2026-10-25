@@ -2473,13 +2473,14 @@ class ControllerRegressionTests(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(chiamate, [], "gia' li', nessun comando da mandare")
 
-    def test_bot_command_refuses_while_disabled(self):
-        """Ogni altro punto che comanda l'unita' (_apply, _apply_switch,
-        _apply_select) controlla `self._stopped or not self.enabled` prima di
-        agire; async_bot_command no. Trovato nella revisione del 24 settembre
-        2026: con lo switch master spento, o durante il drenaggio di un
-        reload (`_stopped=True`), il /menu poteva comunque comandare l'unita'
-        vera."""
+    def test_bot_command_works_while_paused_but_not_while_unloading(self):
+        """La 1.28.0 aveva aggiunto `not self.enabled` per coerenza con `_apply`.
+        Revisione del 25 ottobre 2026: con la Pausa del menu (switch master
+        spento) Spegni veniva ignorato in silenzio mentre il bot rispondeva
+        «Clima spento.», e l'unita' restava accesa. Accendi/Spegni sono una
+        persona che decide, non il controller: in pausa passano. Restano
+        rifiutati durante lo scarico dell'entry e a controller fermo, dove due
+        controller potrebbero comandare insieme."""
         ctrl = self._smart_controller(room=27.0)
         ctrl.hass.states.values["climate.test"].state = "off"
         chiamate = []
@@ -2491,10 +2492,17 @@ class ControllerRegressionTests(unittest.TestCase):
         ctrl._call = conta
         ctrl.enabled = False
         ok = asyncio.run(ctrl.async_bot_command(controller_module.HVAC_COOL))
+        self.assertTrue(ok)
+        self.assertEqual(chiamate, ["set_hvac_mode"])
+
+        chiamate.clear()
+        ctrl.hass.states.values["climate.test"].state = "off"
+        asyncio.run(ctrl.async_pause(unloading=True))
+        ok = asyncio.run(ctrl.async_bot_command(controller_module.HVAC_COOL))
         self.assertFalse(ok)
         self.assertEqual(chiamate, [])
 
-        ctrl.enabled = True
+        ctrl.cancel_unloading()
         ctrl._stopped = True
         ok = asyncio.run(ctrl.async_bot_command(controller_module.HVAC_COOL))
         self.assertFalse(ok)
@@ -2546,9 +2554,8 @@ class ControllerRegressionTests(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(chiamate, [], "gia' li', nessun comando da mandare")
 
-    def test_fan_bot_command_refuses_while_disabled(self):
-        """Stesso bug di test_bot_command_refuses_while_disabled, per la
-        ventola. Trovato nella revisione del 24 settembre 2026."""
+    def test_fan_bot_command_works_while_paused_but_not_while_unloading(self):
+        """Stessa regola di Accendi/Spegni, per la ventola (25 ottobre 2026)."""
         ctrl = self._smart_controller(room=27.0, fan="auto")
         chiamate = []
 
@@ -2559,14 +2566,40 @@ class ControllerRegressionTests(unittest.TestCase):
         ctrl._call = conta
         ctrl.enabled = False
         ok = asyncio.run(ctrl.async_fan_command("high"))
+        self.assertTrue(ok)
+        self.assertEqual(chiamate, ["set_fan_mode"])
+
+        chiamate.clear()
+        asyncio.run(ctrl.async_pause(unloading=True))
+        ok = asyncio.run(ctrl.async_fan_command("medium"))
         self.assertFalse(ok)
         self.assertEqual(chiamate, [])
 
+    def test_nudge_bot_is_refused_while_paused_or_stopped(self):
+        """La spinta agisce solo sul target del controller: in pausa veniva
+        memorizzata in silenzio e ricompariva alla riattivazione, e dopo
+        async_stop armava un timer che nessuno cancellava piu' (25/10/2026)."""
+        ctrl = self._smart_controller(room=27.0)
+        ctrl._restore_event.set()
+        ctrl.enabled = False
+        ok = asyncio.run(ctrl.async_nudge_bot("fresco"))
+        self.assertFalse(ok)
+        self.assertEqual(ctrl._nudge_value, 0.0)
+        self.assertIsNone(ctrl._nudge_cancel)
+
         ctrl.enabled = True
         ctrl._stopped = True
-        ok = asyncio.run(ctrl.async_fan_command("high"))
+        ok = asyncio.run(ctrl.async_nudge_bot("fresco"))
         self.assertFalse(ok)
-        self.assertEqual(chiamate, [])
+        self.assertIsNone(ctrl._nudge_cancel)
+
+    def test_stop_cancels_a_pending_nudge_timer(self):
+        ctrl = self._smart_controller(room=27.0)
+        annullati = []
+        ctrl._nudge_cancel = lambda: annullati.append(True)
+        asyncio.run(ctrl.async_stop())
+        self.assertEqual(annullati, [True])
+        self.assertIsNone(ctrl._nudge_cancel)
 
     def test_nudge_bot_shifts_the_target_temporarily(self):
         """La spinta e' additiva su active_target e scade da sola dopo
@@ -3616,8 +3649,11 @@ class ControllerRegressionTests(unittest.TestCase):
         sempre piu' fresca del giorno, stagione o non stagione, e quel fresco
         non arriva comunque in camera. Incidente del 10->11 settembre 2026:
         l'esterna sotto soglia dalle 23 in poi ha spento il raffrescamento
-        ripetutamente, lasciando la camera sopra i 23 gradi tutta la notte."""
-        ctrl = self._smart_controller(room=23.5, humidity=60, outdoor=8.0)
+        ripetutamente, lasciando la camera sopra i 23 gradi tutta la notte.
+        Esterna a 18 (sotto la soglia 21 meno l'isteresi, sopra il pavimento
+        dell'eccezione): fino al 25 ottobre 2026 qui c'era 8, un valore che
+        l'eccezione non deve piu' coprire."""
+        ctrl = self._smart_controller(room=23.5, humidity=60, outdoor=18.0)
         self._profilo_notte(ctrl)
         ctrl.hass.states.values["climate.test"].state = "cool"
         ctrl._not_summer_since = GIORNO - timedelta(
@@ -3626,6 +3662,47 @@ class ControllerRegressionTests(unittest.TestCase):
         notte = GIORNO.replace(hour=23, minute=30)
         desired = ctrl._compute(notte)
         self.assertEqual(ctrl.current_phase, "sleep")
+        self.assertNotEqual(desired.hvac, "off")
+
+    def test_night_exception_does_not_turn_winter_ventilation_into_cool(self):
+        """Revisione del 25 ottobre 2026: l'eccezione notturna non aveva un
+        pavimento. A ottobre, 8 gradi fuori, un'unita' in sola ventilazione
+        passava a `cool` di notte, perfino con la camera sotto target."""
+        for stanza in (24.5, 26.0):
+            ctrl = self._smart_controller(room=stanza, outdoor=8.0)
+            self._profilo_notte(ctrl)
+            ctrl.hass.states.values["climate.test"].state = "fan_only"
+            ctrl._not_summer_since = GIORNO - timedelta(
+                seconds=controller_module.SEASON_EXIT_CONFIRM_SECONDS
+            )
+            for ora, minuto in ((22, 30), (23, 45)):
+                desired = ctrl._compute(GIORNO.replace(hour=ora, minute=minuto))
+                self.assertNotIn(desired.hvac, ("cool", "dry"))
+                self.assertEqual(desired.hvac, "off")
+
+    def test_night_exception_does_not_keep_cooling_in_winter(self):
+        """Lo stesso pavimento per un `cool` acceso: con 8 gradi fuori la notte
+        non e' piu' la coda di un'estate, e la guardia di stagione lo ferma."""
+        ctrl = self._smart_controller(room=23.5, humidity=60, outdoor=8.0)
+        self._profilo_notte(ctrl)
+        ctrl.hass.states.values["climate.test"].state = "cool"
+        ctrl._not_summer_since = GIORNO - timedelta(
+            seconds=controller_module.SEASON_EXIT_CONFIRM_SECONDS
+        )
+        desired = ctrl._compute(GIORNO.replace(hour=23, minute=30))
+        self.assertEqual(desired.hvac, "off")
+
+    def test_night_exception_still_holds_just_above_its_floor(self):
+        """Appena sopra il pavimento (soglia 21 - 4 = 17) l'eccezione resta: la
+        notte d'estate piu' fredda misurata a compressore acceso era 17.0 con
+        la soglia a 19, cioe' due gradi sopra il suo pavimento."""
+        ctrl = self._smart_controller(room=23.5, humidity=60, outdoor=17.5)
+        self._profilo_notte(ctrl)
+        ctrl.hass.states.values["climate.test"].state = "cool"
+        ctrl._not_summer_since = GIORNO - timedelta(
+            seconds=controller_module.SEASON_EXIT_CONFIRM_SECONDS
+        )
+        desired = ctrl._compute(GIORNO.replace(hour=23, minute=30))
         self.assertNotEqual(desired.hvac, "off")
 
     def test_out_of_season_still_stops_a_cycle_started_during_the_day(self):

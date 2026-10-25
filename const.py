@@ -251,6 +251,14 @@ DEFAULT_TRIM_MIN_HOT = 23.0
 # While the unit is already cooling, the season threshold drops by this much, so a
 # cycle in progress is not cut off by a small dip in the outdoor reading.
 SUMMER_HYSTERESIS = 2.0
+# Di notte un ciclo gia' acceso non si ferma per il giudizio di stagione (incidente
+# del 10->11 settembre 2026), ma solo finche' l'esterna resta a meno di tanti gradi
+# sotto la soglia: senza un pavimento l'eccezione valeva anche a ottobre con 8 gradi
+# fuori, e trasformava una sola ventilazione notturna in `cool`. Misurato il 25
+# ottobre 2026 sulle statistiche dell'istanza: su 290 ore notturne d'estate a
+# compressore acceso l'esterna piu' fredda era 17.0 (proprio l'11 settembre, ore
+# 01:00) con la soglia a 19; 4 gradi lasciano 2 gradi di margine sotto quella notte.
+NIGHT_SEASON_OVERRIDE_DROP = 4.0
 # Una lettura fuori da questo intervallo non e' una temperatura, e' un guasto.
 # Serve perche' la difesa "sensore non disponibile" non scattava su un numero
 # assurdo: quello passava come valido e scavalcava la protezione scritta apposta.

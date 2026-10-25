@@ -8,6 +8,7 @@ import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 
 from .const import (
@@ -65,7 +66,12 @@ async def _async_setup_services(hass: HomeAssistant) -> None:
         for data in hass.data.get(DOMAIN, {}).values():
             controller: ClimaSmartController = data[DATA_CONTROLLER]
             if controller.climate_entity == entity_id:
-                await controller.async_bot_command(hvac_mode)
+                if not await controller.async_bot_command(hvac_mode):
+                    # Prima il False si perdeva: il servizio riusciva, il bot
+                    # rispondeva come se il comando fosse passato (25/10/2026).
+                    raise HomeAssistantError(
+                        f"Clima Smart: comando_bot {hvac_mode} non eseguito su {entity_id}"
+                    )
                 return
         _LOGGER.warning(
             "Clima Smart: comando_bot per %s, nessun controller la governa",
@@ -85,7 +91,12 @@ async def _async_setup_services(hass: HomeAssistant) -> None:
         for data in hass.data.get(DOMAIN, {}).values():
             controller: ClimaSmartController = data[DATA_CONTROLLER]
             if controller.climate_entity == entity_id:
-                await controller.async_fan_command(fan_mode)
+                if not await controller.async_fan_command(fan_mode):
+                    # Prima il False si perdeva: il servizio riusciva, il bot
+                    # rispondeva come se il comando fosse passato (25/10/2026).
+                    raise HomeAssistantError(
+                        f"Clima Smart: ventola_bot {fan_mode} non eseguito su {entity_id}"
+                    )
                 return
         _LOGGER.warning(
             "Clima Smart: ventola_bot per %s, nessun controller la governa",
@@ -105,7 +116,12 @@ async def _async_setup_services(hass: HomeAssistant) -> None:
         for data in hass.data.get(DOMAIN, {}).values():
             controller: ClimaSmartController = data[DATA_CONTROLLER]
             if controller.climate_entity == entity_id:
-                await controller.async_nudge_bot(direzione)
+                if not await controller.async_nudge_bot(direzione):
+                    # Prima il False si perdeva: il servizio riusciva, il bot
+                    # rispondeva come se il comando fosse passato (25/10/2026).
+                    raise HomeAssistantError(
+                        f"Clima Smart: spinta_bot {direzione} non eseguito su {entity_id}"
+                    )
                 return
         _LOGGER.warning(
             "Clima Smart: spinta_bot per %s, nessun controller la governa",
@@ -159,7 +175,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if controller:
         # Stop new commands during platform teardown, but keep the controller
         # restartable if Home Assistant reports that unloading failed.
-        await controller.async_pause()
+        await controller.async_pause(unloading=True)
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
@@ -173,5 +189,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             await controller.async_stop()
     elif controller:
         controller.enabled = was_enabled
+        controller.cancel_unloading()
         controller.async_options_updated()
     return unload_ok

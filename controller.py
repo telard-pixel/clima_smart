@@ -184,6 +184,7 @@ from .const import (
     SLEEP_START_WINDOW_MINUTES,
     START_REASON_DAY,
     START_REASON_NIGHT,
+    NIGHT_SEASON_OVERRIDE_DROP,
     SUMMER_HYSTERESIS,
     UPDATE_INTERVAL_SECONDS,
 )
@@ -315,6 +316,10 @@ class ClimaSmartController:
         self._lock = asyncio.Lock()
         self._save_lock = asyncio.Lock()
         self._stopped = False
+        # Lo scarico della config entry: `async_pause` spegne `enabled` anche li',
+        # e i comandi espliciti del bot devono distinguere "l'utente ha messo in
+        # pausa il controllo" da "questo controller se ne sta andando".
+        self._unloading = False
         self._started = False
         self._restore_ready: set[str] = set()
         self._restore_event = asyncio.Event()
@@ -677,6 +682,11 @@ class ClimaSmartController:
         if self._override_cancel is not None:
             self._override_cancel()
             self._override_cancel = None
+        # Anche la spinta del bot ha un suo timer: lasciato vivo sopravviveva
+        # all'entry e scriveva su un controller gia' smontato.
+        if self._nudge_cancel is not None:
+            self._nudge_cancel()
+            self._nudge_cancel = None
         for unsub in self._unsubs:
             unsub()
         self._unsubs.clear()
@@ -687,9 +697,15 @@ class ClimaSmartController:
         async with self._lock:
             pass
 
-    async def async_pause(self) -> None:
-        """Prevent new commands and drain the currently running evaluation."""
+    async def async_pause(self, unloading: bool = False) -> None:
+        """Prevent new commands and drain the currently running evaluation.
+
+        `unloading` marks the config entry teardown: then even the explicit bot
+        commands are refused, see `_bot_may_command`.
+        """
         self.enabled = False
+        if unloading:
+            self._unloading = True
         async with self._lock:
             pass
         # Stesso motivo di `async_stop`: da qui in poi nessuna passata salvera'
@@ -2561,7 +2577,19 @@ class ClimaSmartController:
         # umidita' per tutta la notte. Non abilita un avvio nuovo (nostro_ciclo
         # resta condizione necessaria): di giorno, o a macchina spenta, la guardia
         # e' piena come prima.
-        if not summer and nostro_ciclo and is_night:
+        #
+        # Revisione del 25 ottobre 2026: l'eccezione non aveva un pavimento. Con
+        # l'unita' in sola ventilazione (anche messa a mano) a ottobre, 8 gradi
+        # fuori, la notte passava a `cool` perfino con la camera sotto target: un
+        # avvio del compressore d'inverno. Vale solo finche' l'esterna e' vicina
+        # alla stagione (vedi NIGHT_SEASON_OVERRIDE_DROP).
+        if (
+            not summer
+            and nostro_ciclo
+            and is_night
+            and outdoor_valid
+            and outdoor > self.summer_threshold - NIGHT_SEASON_OVERRIDE_DROP
+        ):
             summer = True
 
         if self.mode == MODE_OFF:
@@ -3363,6 +3391,26 @@ class ClimaSmartController:
     def _arm_settle(self, field: str) -> None:
         setattr(self, field, dt_util.now() + timedelta(seconds=COMMAND_SETTLE_SECONDS))
 
+    def cancel_unloading(self) -> None:
+        """Lo scarico e' fallito e il controller resta: i comandi tornano possibili."""
+        self._unloading = False
+
+    def _bot_may_command(self) -> bool:
+        """I comandi espliciti del bot (/menu) passano anche con lo switch master
+        spento, e si fermano solo se il controller se ne sta andando.
+
+        Revisione del 25 ottobre 2026. La 1.28.0 li aveva allineati a `_apply`
+        (`_stopped or not self.enabled`) per coerenza, ma `_apply` e' il
+        controller che decide da solo, e la Pausa del menu ferma proprio quello.
+        Accendi/Spegni/Ventola sono una persona che decide: con la Pausa attiva
+        venivano ignorati in silenzio, mentre il bot rispondeva comunque «Clima
+        spento.» e l'unita' restava accesa. A controller in pausa non c'e' nessun
+        anello con cui litigare. Resta il blocco durante lo scarico dell'entry
+        (`_unloading`, `_stopped`): li' un vecchio controller e uno nuovo
+        potrebbero comandare insieme.
+        """
+        return not (self._stopped or self._unloading)
+
     async def async_bot_command(self, hvac_mode: str) -> bool:
         """Un comando esplicito del bot Telegram (/menu), non una mano sul telecomando.
 
@@ -3376,7 +3424,7 @@ class ClimaSmartController:
         l'eco che segue viene riconosciuto come nostro, non come una mano.
         """
         async with self._lock:
-            if self._stopped or not self.enabled:
+            if not self._bot_may_command():
                 return False
             if hvac_mode not in (HVAC_OFF, HVAC_COOL):
                 return False
@@ -3411,7 +3459,7 @@ class ClimaSmartController:
         9 settembre 2026. Aggiunta insieme a questa protezione, non prima.
         """
         async with self._lock:
-            if self._stopped or not self.enabled:
+            if not self._bot_may_command():
                 return False
             climate = self.hass.states.get(self.climate_entity)
             if climate is None or climate.state in _UNAVAILABLE:
@@ -3445,6 +3493,11 @@ class ClimaSmartController:
         if direzione not in ("fresco", "caldo"):
             return False
         async with self._lock:
+            # A differenza di Accendi/Spegni la spinta agisce solo sul target del
+            # controller: in pausa non avrebbe effetto, e restava memorizzata per
+            # ricomparire alla riattivazione. Rifiutata, cosi' il bot lo puo' dire.
+            if not self._bot_may_command() or not self.enabled:
+                return False
             self._nudge_value = -NUDGE_DELTA_C if direzione == "fresco" else NUDGE_DELTA_C
             if self._nudge_cancel is not None:
                 self._nudge_cancel()
