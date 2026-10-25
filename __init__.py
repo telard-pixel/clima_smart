@@ -7,7 +7,12 @@ import logging
 import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.core import (
+    HomeAssistant,
+    ServiceCall,
+    ServiceResponse,
+    SupportsResponse,
+)
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 
@@ -51,6 +56,22 @@ SERVICE_NUDGE_COMMAND_SCHEMA = vol.Schema(
 )
 
 
+def _esito(call: ServiceCall, ok: bool, comando: str, entity_id: str) -> ServiceResponse:
+    """L'esito di un comando del bot, a chi lo chiede.
+
+    Chi chiama con una variabile di risposta (`response_variable`) riceve
+    `{"eseguito": ...}` e decide cosa rispondere: e' cosi' che il /menu dice
+    «non ci sono riuscito» invece di confermare un comando non passato. Chi non
+    la chiede riceve un errore, che ferma l'automazione invece di lasciarla
+    proseguire come se niente fosse (25/10/2026, 1.29.1).
+    """
+    if call.return_response:
+        return {"eseguito": ok}
+    if not ok:
+        raise HomeAssistantError(f"Clima Smart: {comando} non eseguito su {entity_id}")
+    return None
+
+
 async def _async_setup_services(hass: HomeAssistant) -> None:
     """Un solo servizio a livello di dominio, condiviso da tutte le istanze
 
@@ -60,79 +81,70 @@ async def _async_setup_services(hass: HomeAssistant) -> None:
     if hass.services.has_service(DOMAIN, SERVICE_BOT_COMMAND):
         return
 
-    async def _handle_bot_command(call: ServiceCall) -> None:
+    async def _handle_bot_command(call: ServiceCall) -> ServiceResponse:
         entity_id = call.data["entity_id"]
         hvac_mode = call.data[ATTR_HVAC_MODE]
         for data in hass.data.get(DOMAIN, {}).values():
             controller: ClimaSmartController = data[DATA_CONTROLLER]
             if controller.climate_entity == entity_id:
-                if not await controller.async_bot_command(hvac_mode):
-                    # Prima il False si perdeva: il servizio riusciva, il bot
-                    # rispondeva come se il comando fosse passato (25/10/2026).
-                    raise HomeAssistantError(
-                        f"Clima Smart: comando_bot {hvac_mode} non eseguito su {entity_id}"
-                    )
-                return
+                ok = await controller.async_bot_command(hvac_mode)
+                return _esito(call, ok, f"comando_bot {hvac_mode}", entity_id)
         _LOGGER.warning(
             "Clima Smart: comando_bot per %s, nessun controller la governa",
             entity_id,
         )
+        return {"eseguito": False} if call.return_response else None
 
     hass.services.async_register(
         DOMAIN,
         SERVICE_BOT_COMMAND,
         _handle_bot_command,
         schema=SERVICE_BOT_COMMAND_SCHEMA,
+        supports_response=SupportsResponse.OPTIONAL,
     )
 
-    async def _handle_fan_command(call: ServiceCall) -> None:
+    async def _handle_fan_command(call: ServiceCall) -> ServiceResponse:
         entity_id = call.data["entity_id"]
         fan_mode = call.data["fan_mode"]
         for data in hass.data.get(DOMAIN, {}).values():
             controller: ClimaSmartController = data[DATA_CONTROLLER]
             if controller.climate_entity == entity_id:
-                if not await controller.async_fan_command(fan_mode):
-                    # Prima il False si perdeva: il servizio riusciva, il bot
-                    # rispondeva come se il comando fosse passato (25/10/2026).
-                    raise HomeAssistantError(
-                        f"Clima Smart: ventola_bot {fan_mode} non eseguito su {entity_id}"
-                    )
-                return
+                ok = await controller.async_fan_command(fan_mode)
+                return _esito(call, ok, f"ventola_bot {fan_mode}", entity_id)
         _LOGGER.warning(
             "Clima Smart: ventola_bot per %s, nessun controller la governa",
             entity_id,
         )
+        return {"eseguito": False} if call.return_response else None
 
     hass.services.async_register(
         DOMAIN,
         SERVICE_FAN_COMMAND,
         _handle_fan_command,
         schema=SERVICE_FAN_COMMAND_SCHEMA,
+        supports_response=SupportsResponse.OPTIONAL,
     )
 
-    async def _handle_nudge_command(call: ServiceCall) -> None:
+    async def _handle_nudge_command(call: ServiceCall) -> ServiceResponse:
         entity_id = call.data["entity_id"]
         direzione = call.data["direzione"]
         for data in hass.data.get(DOMAIN, {}).values():
             controller: ClimaSmartController = data[DATA_CONTROLLER]
             if controller.climate_entity == entity_id:
-                if not await controller.async_nudge_bot(direzione):
-                    # Prima il False si perdeva: il servizio riusciva, il bot
-                    # rispondeva come se il comando fosse passato (25/10/2026).
-                    raise HomeAssistantError(
-                        f"Clima Smart: spinta_bot {direzione} non eseguito su {entity_id}"
-                    )
-                return
+                ok = await controller.async_nudge_bot(direzione)
+                return _esito(call, ok, f"spinta_bot {direzione}", entity_id)
         _LOGGER.warning(
             "Clima Smart: spinta_bot per %s, nessun controller la governa",
             entity_id,
         )
+        return {"eseguito": False} if call.return_response else None
 
     hass.services.async_register(
         DOMAIN,
         SERVICE_NUDGE_COMMAND,
         _handle_nudge_command,
         schema=SERVICE_NUDGE_COMMAND_SCHEMA,
+        supports_response=SupportsResponse.OPTIONAL,
     )
 
 
