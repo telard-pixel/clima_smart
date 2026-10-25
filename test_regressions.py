@@ -3705,6 +3705,50 @@ class ControllerRegressionTests(unittest.TestCase):
         desired = ctrl._compute(GIORNO.replace(hour=23, minute=30))
         self.assertNotEqual(desired.hvac, "off")
 
+    def test_night_exception_lets_a_cold_night_rest_restart(self):
+        """Revisione del 25 ottobre 2026: il ciclo tenuto vivo dall'eccezione
+        notturna, messo a riposo per notte fredda, non ripartiva piu'. Spento da
+        noi non era piu' «nostro», e ogni passata tornava a «fuori stagione»
+        prima di arrivare al rientro dal riposo."""
+        ctrl = self._smart_controller(room=24.0, humidity=55, outdoor=18.0)
+        self._profilo_notte(ctrl)
+        ctrl.entry.options = dict(ctrl.entry.options, night_start_outdoor=20.0)
+        ctrl._not_summer_since = GIORNO - timedelta(
+            seconds=controller_module.SEASON_EXIT_CONFIRM_SECONDS
+        )
+        notte = GIORNO.replace(hour=1, minute=0) + timedelta(days=1)
+        self._comodino(ctrl, 20.0)           # media (18+20)/2 = 19: riposa
+        desired = ctrl._compute(notte)
+        self.assertEqual(desired.hvac, "off")
+        self.assertTrue(ctrl._cold_night_resting)
+
+        ctrl.hass.states.values["climate.test"].state = "off"
+        ctrl.hass.states.values["climate.test"].attributes["current_temperature"] = 26.0
+        self._comodino(ctrl, 29.0)           # media 23.5, sopra 22 + 1: riparte
+        desired = ctrl._compute(notte + timedelta(hours=2))
+        self.assertEqual(desired.hvac, "cool")
+        self.assertIn("riparto", desired.reason)
+
+    def test_cold_night_rest_does_not_survive_into_the_next_day(self):
+        """I reset dei flag stavano dopo i ritorni anticipati di `_compute`: un
+        giorno fuori stagione li saltava, e `_cold_night_resting` vero dalla
+        notte prima avrebbe fatto ripartire l'unita' la notte dopo senza
+        chiedere il permesso (revisione del 25 ottobre 2026)."""
+        ctrl = self._smart_controller(room=24.0, outdoor=8.0)
+        self._profilo_notte(ctrl)
+        ctrl.hass.states.values["climate.test"].state = "off"
+        ctrl._not_summer_since = GIORNO - timedelta(
+            seconds=controller_module.SEASON_EXIT_CONFIRM_SECONDS
+        )
+        ctrl._cold_night_resting = True
+        ctrl._cold_night = True
+        ctrl._night_mild = True
+        desired = ctrl._compute(GIORNO.replace(hour=15, minute=0))
+        self.assertIn("fuori stagione", desired.reason)
+        self.assertFalse(ctrl._cold_night_resting)
+        self.assertFalse(ctrl._cold_night)
+        self.assertFalse(ctrl._night_mild)
+
     def test_out_of_season_still_stops_a_cycle_started_during_the_day(self):
         """L'eccezione notturna non tocca il giorno: un pomeriggio fresco resta
         un segnale di stagione vero, e ferma il ciclo come sempre."""

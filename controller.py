@@ -2482,6 +2482,27 @@ class ClimaSmartController:
         return None
 
     # ------------------------------------------------------------- decision
+    def _reset_flags_outside_their_window(self, phase: str) -> None:
+        """Azzera i flag di isteresi e di riposo fuori dalla fascia che li scrive.
+
+        Revisione del 25 ottobre 2026. La 1.28.0 aveva aggiunto questi reset in
+        fondo a `_compute`, dopo i ritorni anticipati (modo Spento, clima non
+        disponibile, spegnimento del mattino, fuori stagione, `heat`): su quei
+        percorsi i flag restavano congelati da un giorno all'altro. Il caso
+        peggiore era `_cold_night_resting`: rimasto vero dalla notte prima,
+        avrebbe fatto ripartire l'unita' la notte dopo come «rientro dal
+        riposo», cioe' senza chiedere il permesso. Qui, prima di ogni ritorno,
+        vale per tutti i percorsi. I reset in fondo restano per il caso
+        «sleep ma fuori casa», che dipende dalla presenza.
+        """
+        if phase != PHASE_SLEEP:
+            self._cold_night = False
+            self._cold_night_resting = False
+        if phase not in (PHASE_SLEEP, PHASE_WIND_DOWN):
+            self._night_mild = False
+        if phase in (PHASE_SLEEP, PHASE_WIND_DOWN):
+            self._hot_outdoor = False
+
     def _compute(self, now: datetime) -> Desired:
         self._trim_probe_age(now)
         phase = self._phase(now)
@@ -2491,6 +2512,7 @@ class ClimaSmartController:
         is_night = phase in (PHASE_NIGHT, PHASE_SLEEP)
         if phase in (PHASE_SLEEP, PHASE_WIND_DOWN):
             self._clear_trim_probe()
+        self._reset_flags_outside_their_window(phase)
         climate = self.hass.states.get(self.climate_entity)
         if climate is None or climate.state in _UNAVAILABLE:
             # Clear the diagnostics too: leaving them frozen on the last pass made
@@ -2583,9 +2605,17 @@ class ClimaSmartController:
         # fuori, la notte passava a `cool` perfino con la camera sotto target: un
         # avvio del compressore d'inverno. Vale solo finche' l'esterna e' vicina
         # alla stagione (vedi NIGHT_SEASON_OVERRIDE_DROP).
+        # Anche un ciclo messo a riposo per notte fredda e' ancora nostro: spento
+        # da noi, deve poter ripartire se la camera si scalda. Senza, la notte del
+        # riposo restava ferma a «fuori stagione» fino al mattino (revisione del 25
+        # ottobre 2026); `_cold_night_resting` vale solo dentro `sleep`, vedi
+        # `_reset_flags_outside_their_window`.
+        ciclo_notturno = nostro_ciclo or (
+            phase == PHASE_SLEEP and self._cold_night_resting
+        )
         if (
             not summer
-            and nostro_ciclo
+            and ciclo_notturno
             and is_night
             and outdoor_valid
             and outdoor > self.summer_threshold - NIGHT_SEASON_OVERRIDE_DROP
