@@ -551,6 +551,12 @@ DEFAULT_HIGH_FAN_GUARD_MINUTES = 45
 # questo guardiano non aveva mosso la ripresa di NIENTE in 3.5 ore: 0.3
 # gradi e' gia' un margine ampio sopra zero.
 HIGH_FAN_GUARD_MIN_GAIN = 0.3
+# La finestra di misura del guardiano e' continua: se per piu' di due passate
+# (UPDATE_INTERVAL_SECONDS) il guardiano non ha visto `high` - unita' spenta, spinta
+# iniziale, fuori stagione - la finestra e' interrotta e si riapre da capo. Senza, il
+# primo `high` del giorno dopo veniva giudicato subito contro la ripresa della sera
+# prima e tagliato a `medium` per 45 minuti senza una prova vera (25 ottobre 2026).
+HIGH_FAN_GUARD_MAX_GAP_SECONDS = 2 * UPDATE_INTERVAL_SECONDS
 
 # --- MODE_SMART: `dry` program, only with a humidity sensor configured ---
 # Muggy but already at temperature: dehumidifying is what actually helps.

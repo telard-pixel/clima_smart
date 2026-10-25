@@ -148,6 +148,7 @@ from .const import (
     FAN_HYSTERESIS_SLEEP_DOWN,
     FAN_HYSTERESIS_UP,
     FAN_ORDER,
+    HIGH_FAN_GUARD_MAX_GAP_SECONDS,
     HIGH_FAN_GUARD_MIN_GAIN,
     HOT_OUTDOOR_HYSTERESIS,
     HOUSE_TRIM_DEADBAND,
@@ -376,6 +377,7 @@ class ClimaSmartController:
         # per qualche minuto - innocuo, a differenza di scartare un override.
         self._high_fan_started_at: datetime | None = None
         self._high_fan_room_at_start: float | None = None
+        self._high_fan_seen_at: datetime | None = None
         self._high_fan_capped_until: datetime | None = None
         self._dry_active = False
         self._fan_only_active = False
@@ -2393,7 +2395,19 @@ class ClimaSmartController:
         if fan != "high":
             self._high_fan_started_at = None
             self._high_fan_room_at_start = None
+            self._high_fan_seen_at = None
             return fan
+        if self._high_fan_started_at is not None and (
+            self._high_fan_seen_at is None
+            or (now - self._high_fan_seen_at).total_seconds()
+            > HIGH_FAN_GUARD_MAX_GAP_SECONDS
+        ):
+            # Finestra interrotta: questo guardiano non gira su ogni percorso
+            # (unita' spenta, spinta, fuori stagione), e un riferimento rimasto
+            # dalla sera prima non e' una misura di `high`.
+            self._high_fan_started_at = None
+            self._high_fan_room_at_start = None
+        self._high_fan_seen_at = now
         if self._high_fan_started_at is None:
             self._high_fan_started_at = now
             self._high_fan_room_at_start = room

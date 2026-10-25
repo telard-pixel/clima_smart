@@ -1732,6 +1732,15 @@ class ControllerRegressionTests(unittest.TestCase):
 
     # --------------------------------------------- guardiano di resa su high
 
+    def _passate(self, ctrl, da, a):
+        """Le valutazioni ogni UPDATE_INTERVAL_SECONDS fra `da` (escluso) e `a`
+        (escluso), come le fa l'istanza vera: il guardiano di `high` considera
+        interrotta una finestra in cui non e' stato interpellato per due passate."""
+        t = da + timedelta(seconds=controller_module.UPDATE_INTERVAL_SECONDS)
+        while t < a:
+            ctrl._compute(t)
+            t += timedelta(seconds=controller_module.UPDATE_INTERVAL_SECONDS)
+
     def test_high_fan_guard_drops_to_medium_after_a_barren_window(self):
         """Il caso del 10 agosto 2026: `high` per ore senza che la ripresa si
         muova. Dopo la finestra di default (45 min) senza guadagno, si torna
@@ -1739,6 +1748,7 @@ class ControllerRegressionTests(unittest.TestCase):
         ctrl = self._smart_controller(room=30.0)
         self.assertEqual(ctrl._compute(GIORNO).fan, "high")
         dopo = GIORNO + timedelta(minutes=46)
+        self._passate(ctrl, GIORNO, dopo)
         self.assertEqual(ctrl._compute(dopo).fan, "medium")
 
     def test_high_fan_guard_lets_high_continue_when_it_is_working(self):
@@ -1748,12 +1758,15 @@ class ControllerRegressionTests(unittest.TestCase):
         self.assertEqual(ctrl._compute(GIORNO).fan, "high")
         ctrl.hass.states.values["climate.test"].attributes["current_temperature"] = 29.5
         dopo = GIORNO + timedelta(minutes=46)
+        self._passate(ctrl, GIORNO, dopo)
         self.assertEqual(ctrl._compute(dopo).fan, "high")
+        self.assertIsNone(ctrl._high_fan_capped_until, "ha reso: nessuna bocciatura")
 
     def test_high_fan_guard_holds_medium_through_the_cooldown_then_remeasures(self):
         ctrl = self._smart_controller(room=30.0)
         ctrl._compute(GIORNO)
         capped_at = GIORNO + timedelta(minutes=46)
+        self._passate(ctrl, GIORNO, capped_at)
         self.assertEqual(ctrl._compute(capped_at).fan, "medium")
         primo_capped_until = ctrl._high_fan_capped_until
         # Ancora dentro il raffreddamento imposto: resta medium, e il termine
@@ -1765,13 +1778,29 @@ class ControllerRegressionTests(unittest.TestCase):
         # fresco preso ora - non quello di inizio-cap, che avrebbe attribuito
         # a `high` un eventuale guadagno ottenuto da `medium` durante il cap.
         dopo_scadenza = capped_at + timedelta(minutes=46)
+        self._passate(ctrl, poco_dopo, dopo_scadenza)
         self.assertEqual(ctrl._compute(dopo_scadenza).fan, "high")
         self.assertIsNone(ctrl._high_fan_capped_until)
         # La ripresa non si e' mai mossa: dopo una finestra intera di prova
         # vera con `high`, la nuova bocciatura arriva e il vincolo si rinnova.
         nuova_bocciatura = dopo_scadenza + timedelta(minutes=46)
+        self._passate(ctrl, dopo_scadenza, nuova_bocciatura)
         self.assertEqual(ctrl._compute(nuova_bocciatura).fan, "medium")
         self.assertGreater(ctrl._high_fan_capped_until, primo_capped_until)
+
+    def test_high_fan_guard_window_does_not_span_a_break(self):
+        """Revisione del 25 ottobre 2026: il guardiano non gira su ogni percorso
+        (unita' spenta, spinta iniziale, fuori stagione), e il riferimento
+        restava quello dell'ultima volta. Il primo `high` del giorno dopo veniva
+        giudicato subito contro la ripresa della sera prima e tagliato a
+        `medium` per 45 minuti senza una prova vera."""
+        ctrl = self._smart_controller(room=28.0)
+        ieri = GIORNO.replace(hour=19)
+        self.assertEqual(ctrl._high_fan_guard("high", 27.0, ieri), "high")
+        oggi = ieri + timedelta(hours=18)
+        self.assertEqual(ctrl._high_fan_guard("high", 27.5, oggi), "high")
+        self.assertIsNone(ctrl._high_fan_capped_until)
+        self.assertEqual(ctrl._high_fan_room_at_start, 27.5)
 
     def test_high_fan_guard_can_be_disabled(self):
         ctrl = self._smart_controller(room=30.0)
