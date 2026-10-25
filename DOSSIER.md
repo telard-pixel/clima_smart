@@ -1,7 +1,18 @@
 # Clima Smart — dossier tecnico dell'impianto
 
 **Ultimo aggiornamento: 24 settembre 2026 (Europe/Rome).**
-**Versione in funzione: 1.28.0.**
+**Versione in funzione: 1.29.1** (installata e verificata il 25 ottobre 2026 alle 12:26 CET).
+
+**Installazione del 25 ottobre.** Release GitHub 1.29.0 e 1.29.1; file copiati in
+`custom_components/clima_smart` (backup `clima_smart-prima-di-1.29.1.tar` nella cartella di
+configurazione), `ha core check` superato e riavvio alle 12:25, fuori dagli orari del §9.5. Dopo il
+riavvio: `manifest.json` sul disco dell'istanza = 1.29.1, nessun errore di `clima_smart` né delle
+automazioni nel log, switch master `on`, modo `smart`, fase `day`, `sensor.clima_smart_stato`
+aggiornato alle 12:28. Nello stesso giro le quattro automazioni che chiamano i servizi del bot (menu,
+permesso d'avvio, pioggia, aria aperta) leggono l'esito con `response_variable: esito_comando` e, se
+il comando non passa, rispondono «Non ci sono riuscito» e si fermano (backup
+`automations.yaml.bak-prima-esito-bot-20261025`). HACS non e' stato usato: l'entita'
+`update.clima_smart_update` puo' ancora proporre la 1.29.1, reinstallarla e' innocuo.
 
 **Nota sull'aggiornamento del 24 settembre.** Questo giro ha portato il
 dossier dal passo col codice della 1.23.0 (1° settembre) a quello della
@@ -611,7 +622,7 @@ Sedici versioni. Le svolte, non l'elenco completo:
 | 1.27.1 (hotfix, 11 set.) | la guardia di fine stagione non spegne più un ciclo notturno già acceso | di notte la soglia stagionale blocca solo un nuovo avvio, non interrompe più uno in corso |
 | **1.28.0** | quattro bug dalla revisione a quattro angoli del 24 settembre | tre flag di isteresi (`_cold_night`, `_night_mild`, `_hot_outdoor`) restavano congelati fuori dalla loro finestra e usavano la soglia di mantenimento invece di quella d'ingresso alla prima valutazione utile; l'allarme di resa scarsa contava anche gli Hz estrapolati; il guardiano su `high` accreditava a `high` un guadagno ottenuto da `medium` durante il cap; `async_bot_command`/`async_fan_command` non controllavano `enabled`/`_stopped` come ogni altro punto che comanda l'unità |
 | 1.29.0 (25 ott., pubblicata, mai installata: superata dalla 1.29.1) | revisione del 25 ottobre: sette difetti, quasi tutti nati dall'eccezione notturna di stagione e dai reset della 1.28.0 | l'eccezione notturna non aveva pavimento (a ottobre, 8 gradi fuori, una sola ventilazione notturna passava a `cool`): ora vale solo sopra soglia − 4, tarata sulle 290 ore notturne d'estate a compressore acceso (la più fredda 17.0 con soglia 19); un ciclo a riposo per notte fredda non ripartiva più; i reset dei flag stavano dopo i ritorni anticipati (`_cold_night_resting` poteva sopravvivere fino alla notte dopo e far ripartire senza permesso); in `wind_down` si spegneva subito invece che allo spegnimento del mattino; il guardiano di `high` giudicava contro la ripresa della sera prima; un tratto estrapolato azzerava il conteggio della resa scarsa; **con la Pausa del menu Spegni non spegneva, e il bot rispondeva «Clima spento.»**; un `heat` acceso a mano sotto il tetto veniva spento come «camera al tetto» |
-| 1.29.1 (25 ott.) | i servizi del bot restituiscono l'esito (`{"eseguito": ...}`) a chi lo chiede con `response_variable`; senza, un comando fallito solleva errore | il /menu può dire «non ci sono riuscito» invece di confermare un comando non passato |
+| **1.29.1** (25 ott., installata) | i servizi del bot restituiscono l'esito (`{"eseguito": ...}`) a chi lo chiede con `response_variable`; senza, un comando fallito solleva errore | il /menu può dire «non ci sono riuscito» invece di confermare un comando non passato |
 
 **Il metodo che ha prodotto di più:** la *revisione a più occhi*. Più
 revisori indipendenti, ognuno su un angolo diverso (macchina a stati e
