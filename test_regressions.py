@@ -4763,6 +4763,22 @@ class ControllerRegressionTests(unittest.TestCase):
         self.assertAlmostEqual(ctrl.poor_efficiency_minutes, 25.0)
         self.assertTrue(ctrl.poor_efficiency_alert)
 
+    def test_poor_efficiency_count_survives_an_extrapolated_stretch(self):
+        """Revisione del 25 ottobre 2026: un tratto estrapolato (85 Hz) in mezzo
+        a un ciclo gia' fuori banda azzerava il conteggio, e l'allarme non
+        scattava mai proprio ai carichi piu' pesanti. Ora lo tiene fermo: non lo
+        avvia (test qui sopra) ma non lo cancella."""
+        ctrl = self._con_potenza(1062.7)                      # 71 Hz, misurato
+        ctrl._compute(GIORNO)
+        ctrl.hass.states.values["sensor.potenza"] = State("1310.5")   # 85 Hz
+        ctrl._compute(GIORNO + timedelta(minutes=10))
+        self.assertTrue(ctrl.efficiency_extrapolated)
+        self.assertAlmostEqual(ctrl.poor_efficiency_minutes, 10.0)
+        ctrl.hass.states.values["sensor.potenza"] = State("1062.7")
+        ctrl._compute(GIORNO + timedelta(minutes=25))
+        self.assertAlmostEqual(ctrl.poor_efficiency_minutes, 25.0)
+        self.assertTrue(ctrl.poor_efficiency_alert)
+
     def test_poor_efficiency_resets_once_back_in_band(self):
         ctrl = self._con_potenza(1062.7)
         ctrl._compute(GIORNO)

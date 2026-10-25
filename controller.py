@@ -1527,12 +1527,13 @@ class ClimaSmartController:
             if affidabile
             else None
         )
-        if (
-            affidabile
-            and hz > EFFICIENCY_BAND_MAX_HZ
-            and not self.efficiency_extrapolated
-        ):
-            if self._poor_efficiency_since is None:
+        if affidabile and hz > EFFICIENCY_BAND_MAX_HZ:
+            # Una stima estrapolata (sopra gli 81 Hz misurati) non avvia il
+            # conteggio, ma nemmeno lo azzera: e' comunque fuori banda, solo di
+            # quanto non si sa. Azzerarla - come dalla 1.28.0 al 25 ottobre 2026 -
+            # spegneva l'allarme proprio ai carichi piu' pesanti, e un ciclo che
+            # ballava intorno agli 81 Hz ripartiva da zero a ogni attraversamento.
+            if self._poor_efficiency_since is None and not self.efficiency_extrapolated:
                 self._poor_efficiency_since = now
         else:
             self._poor_efficiency_since = None
