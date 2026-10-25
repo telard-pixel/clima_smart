@@ -610,6 +610,7 @@ Sedici versioni. Le svolte, non l'elenco completo:
 | 1.27.0 | ventola e spinta temporanea sicure dal bot Telegram | nuovi servizi `ventola_bot` e `spinta_bot`, stesso principio di `comando_bot` |
 | 1.27.1 (hotfix, 11 set.) | la guardia di fine stagione non spegne più un ciclo notturno già acceso | di notte la soglia stagionale blocca solo un nuovo avvio, non interrompe più uno in corso |
 | **1.28.0** | quattro bug dalla revisione a quattro angoli del 24 settembre | tre flag di isteresi (`_cold_night`, `_night_mild`, `_hot_outdoor`) restavano congelati fuori dalla loro finestra e usavano la soglia di mantenimento invece di quella d'ingresso alla prima valutazione utile; l'allarme di resa scarsa contava anche gli Hz estrapolati; il guardiano su `high` accreditava a `high` un guadagno ottenuto da `medium` durante il cap; `async_bot_command`/`async_fan_command` non controllavano `enabled`/`_stopped` come ogni altro punto che comanda l'unità |
+| 1.29.0 (25 ott., **non ancora installata**) | revisione del 25 ottobre: sette difetti, quasi tutti nati dall'eccezione notturna di stagione e dai reset della 1.28.0 | l'eccezione notturna non aveva pavimento (a ottobre, 8 gradi fuori, una sola ventilazione notturna passava a `cool`): ora vale solo sopra soglia − 4, tarata sulle 290 ore notturne d'estate a compressore acceso (la più fredda 17.0 con soglia 19); un ciclo a riposo per notte fredda non ripartiva più; i reset dei flag stavano dopo i ritorni anticipati (`_cold_night_resting` poteva sopravvivere fino alla notte dopo e far ripartire senza permesso); in `wind_down` si spegneva subito invece che allo spegnimento del mattino; il guardiano di `high` giudicava contro la ripresa della sera prima; un tratto estrapolato azzerava il conteggio della resa scarsa; **con la Pausa del menu Spegni non spegneva, e il bot rispondeva «Clima spento.»**; un `heat` acceso a mano sotto il tetto veniva spento come «camera al tetto» |
 
 **Il metodo che ha prodotto di più:** la *revisione a più occhi*. Più
 revisori indipendenti, ognuno su un angolo diverso (macchina a stati e
@@ -620,6 +621,9 @@ quattro dalla 1.25.0. Sessioni su sessioni hanno prodotto bug veri: 1.13.1,
 1.22.0, 1.23.0, 1.24.0, 1.25.0, 1.26.0, 1.26.1, 1.28.0.
 
 **Errori metodologici commessi e da non ripetere:**
+- allineare un punto del codice agli altri «per coerenza» senza chiedersi chi lo usa: la 1.28.0 ha dato ai comandi del bot la stessa
+  guardia di `_apply` (`not enabled`), ma `_apply` è il controller che decide da solo, e la Pausa ferma proprio quello. Il risultato
+  è stato un pulsante Spegni che non spegneva, con il bot che confermava. Il test della 1.28.0 verificava il codice, non l'uso;
 - cambiare il **segnale** di un anello lasciando le **soglie** tarate sull'altro;
 - dedurre un nesso causale da una transizione in cui **due cose cambiano insieme**
   (il caso della spinta notturna: setpoint e ventola cambiano nello stesso minuto);
