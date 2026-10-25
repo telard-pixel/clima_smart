@@ -2921,6 +2921,33 @@ class ControllerRegressionTests(unittest.TestCase):
         self.assertEqual(desired.setpoint, 19.0)
         self.assertTrue(ctrl._winter_heating)
 
+    def test_winter_heat_adopts_a_manual_heat_below_the_ceiling(self):
+        """Revisione del 25 ottobre 2026: un `heat` acceso a mano a 18.5 - sotto
+        il tetto di 19 ma sopra la soglia d'avvio di 18 - non era riconosciuto
+        come ciclo, e allo scadere dell'override veniva spento come «camera al
+        tetto». Ora si accompagna fino al tetto, come un ciclo partito da noi."""
+        ctrl = self._con_casa_inverno(room=18.5)
+        ctrl.hass.states.values["climate.test"].state = "heat"
+        desired = ctrl._compute(GIORNO)
+        self.assertEqual(desired.hvac, "heat")
+        self.assertEqual(desired.setpoint, 19.0)
+        self.assertTrue(ctrl._winter_heating)
+
+    def test_winter_heat_still_stops_a_manual_heat_at_the_ceilings(self):
+        """I tetti restano limiti anche per un `heat` acceso a mano, e il motivo
+        dice quale dei due e' stato raggiunto."""
+        ctrl = self._con_casa_inverno(room=19.5)
+        ctrl.hass.states.values["climate.test"].state = "heat"
+        desired = ctrl._compute(GIORNO)
+        self.assertEqual(desired.hvac, "off")
+        self.assertIn("camera al tetto", desired.reason)
+
+        ctrl = self._con_casa_inverno(room=18.5, altre=(20.5, 20.5, 20.5))
+        ctrl.hass.states.values["climate.test"].state = "heat"
+        desired = ctrl._compute(GIORNO)
+        self.assertEqual(desired.hvac, "off")
+        self.assertIn("casa al tetto", desired.reason)
+
     def test_winter_heat_stops_at_the_target(self):
         """Raggiunti i 19 gradi il ciclo si ferma: e' un tetto, non un
         anello da inseguire di continuo."""

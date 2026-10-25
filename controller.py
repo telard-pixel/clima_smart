@@ -2742,6 +2742,7 @@ class ClimaSmartController:
                 # sull'esterna qui sopra.
                 self.active_target = None
                 return Desired(reason="fuori stagione: non tocco il riscaldamento")
+            casa_libera = True
             if self._winter_heating:
                 self._winter_heating = room < target_inverno
             else:
@@ -2755,12 +2756,22 @@ class ClimaSmartController:
                 casa_libera = tetto_casa <= 0 or (
                     casa is not None and casa < tetto_casa
                 )
-                self._winter_heating = room < soglia_avvio and casa_libera
+                if cur_mode == HVAC_HEAT:
+                    # Un `heat` acceso a mano, sotto i due tetti: lo si accompagna
+                    # fino al tetto della camera come un ciclo nostro. Prima si
+                    # riconosceva solo un ciclo partito sotto la soglia d'avvio, e
+                    # un riscaldamento acceso a 18.5 veniva spento allo scadere
+                    # dell'override come «camera al tetto», un grado prima del
+                    # tetto vero (revisione del 25 ottobre 2026).
+                    self._winter_heating = room < target_inverno and casa_libera
+                else:
+                    self._winter_heating = room < soglia_avvio and casa_libera
             if not self._winter_heating:
                 self.active_target = None
                 if cur_mode == HVAC_HEAT:
+                    dove = "camera" if room >= target_inverno else "casa"
                     return Desired(
-                        hvac=HVAC_OFF, reason="inverno: camera al tetto, mi fermo"
+                        hvac=HVAC_OFF, reason=f"inverno: {dove} al tetto, mi fermo"
                     )
                 return Desired(reason="fuori stagione: non tocco il riscaldamento")
             self.active_target = self._reachable_target(target_inverno, climate)
