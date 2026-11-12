@@ -1,7 +1,23 @@
 # Clima Smart — dossier tecnico dell'impianto
 
 **Ultimo aggiornamento: 24 settembre 2026 (Europe/Rome).**
-**Versione in funzione: 1.29.1** (installata e verificata il 25 ottobre 2026 alle 12:26 CET).
+**Versione in funzione: 1.30.0** (installata il 12 novembre 2026, vedi sotto).
+
+**1.30.0, 12 novembre 2026: deumidificazione della camera fuori stagione.** Richiesta
+dell'utente: d'autunno la camera resta umida (Shelly BLU al comodino, ultimo mese: mediana 62%,
+sopra il 65% il 15% delle ore, 68-70% quasi fissi dal 10 al 12 novembre) mentre il controller dice
+«fuori stagione» e non fa niente. Nuove entità opzionali `room_humidity_sensor`
+(`sensor.bthome_sensor_89af_umidita`) e `health_switch` (`switch.clima_camera_health`, la lampada
+UV); opzioni `dehum_humidity_on` 67, `dehum_humidity_off` 62, `dehum_room_floor` 19, tutte
+scelte dall'utente. Parte **da sola** (niente permesso: scelta dell'utente) dopo mezz'ora sopra
+soglia a unità spenta; **mai nel sonno** e un ciclo in corso si ferma quando il sonno entra; si
+ferma sotto la soglia bassa, sotto il pavimento al comodino, dopo 90 minuti o col sensore
+illeggibile; due ore di riposo fra un ciclo e l'altro. Il ciclo non conta come raffrescamento
+(niente isteresi di stagione, niente eccezione notturna) e sopravvive ai riavvii. Eventi
+`clima_smart_deumidificazione_avviata` / `_finita`. **Setpoint di `dry` = 16, da misurare**: il 12
+novembre un `dry` acceso a mano con setpoint 22 e ripresa 20.5-23 ha tenuto il compressore fermo
+per un'ora (8 W) senza togliere umidità; con setpoint 20 e ripresa 21.5 girava (327 W). Vedi §11.7.
+**Release GitHub e tag 1.30.0 NON ancora fatti** (pubblicazione da autorizzare): trappola §10.3.
 
 **Installazione del 25 ottobre.** Release GitHub 1.29.0 e 1.29.1; file copiati in
 `custom_components/clima_smart` (backup `clima_smart-prima-di-1.29.1.tar` nella cartella di
@@ -550,6 +566,7 @@ target.
 | 3 | Quanto vale un grado di target notturno? | **aperta**. Servono 8-10 notti alternate 22.5 / **23.5** (non 23.0, che la macchina riceve identico: §6.2), confrontando i kWh 23:00–08:00 normalizzati sull'esterna |
 | 4 | Ripartire alle 09:00 conviene? | **superata da `start_approval`**: oggi l'ora di partenza la decide una persona rispondendo su Telegram, non una soglia |
 | 5 | **Perché `low` di notte arriva solo il 5-7% del tempo?** | **riaperta il 24 settembre.** Il fix del 1.26.2 (isteresi di discesa 0.5→0.2) ha alzato `low` dal 5% al 7% sulla cronologia live, un miglioramento reale ma insufficiente: §7.1. Il guadagno è andato a `medium`/`auto`, non a `low`. Serve capire cosa tiene ancora `low` così raro — probabile prossimo candidato: la soglia stessa (1.0) o il tempo minimo di permanenza (`MIN_FAN_DWELL_SECONDS`), non ancora messi in discussione |
+| 7 | **Il `dry` d'inverno a setpoint 16 toglie umidità alla camera, e quanto costa?** | **nuova, aperta (12 novembre 2026).** Misura: i primi cicli della 1.30.0, umidità e temperatura al comodino, watt dello Shelly. Se il compressore non gira o l'umidità non scende, la funzione va ripensata, non tarata |
 | 6 | **Il dimezzamento dei consumi quanto deve all'anello di casa e quanto alle ore in meno?** | **nuova, aperta.** La decomposizione ore/watt del §4.2 è misurata, l'attribuzione no. La chiuderebbe una settimana con `start_approval` spento e l'anello attivo, confrontata con una a parti invertite |
 
 ## 12. Acquisti giustificati
@@ -623,6 +640,7 @@ Sedici versioni. Le svolte, non l'elenco completo:
 | **1.28.0** | quattro bug dalla revisione a quattro angoli del 24 settembre | tre flag di isteresi (`_cold_night`, `_night_mild`, `_hot_outdoor`) restavano congelati fuori dalla loro finestra e usavano la soglia di mantenimento invece di quella d'ingresso alla prima valutazione utile; l'allarme di resa scarsa contava anche gli Hz estrapolati; il guardiano su `high` accreditava a `high` un guadagno ottenuto da `medium` durante il cap; `async_bot_command`/`async_fan_command` non controllavano `enabled`/`_stopped` come ogni altro punto che comanda l'unità |
 | 1.29.0 (25 ott., pubblicata, mai installata: superata dalla 1.29.1) | revisione del 25 ottobre: sette difetti, quasi tutti nati dall'eccezione notturna di stagione e dai reset della 1.28.0 | l'eccezione notturna non aveva pavimento (a ottobre, 8 gradi fuori, una sola ventilazione notturna passava a `cool`): ora vale solo sopra soglia − 4, tarata sulle 290 ore notturne d'estate a compressore acceso (la più fredda 17.0 con soglia 19); un ciclo a riposo per notte fredda non ripartiva più; i reset dei flag stavano dopo i ritorni anticipati (`_cold_night_resting` poteva sopravvivere fino alla notte dopo e far ripartire senza permesso); in `wind_down` si spegneva subito invece che allo spegnimento del mattino; il guardiano di `high` giudicava contro la ripresa della sera prima; un tratto estrapolato azzerava il conteggio della resa scarsa; **con la Pausa del menu Spegni non spegneva, e il bot rispondeva «Clima spento.»**; un `heat` acceso a mano sotto il tetto veniva spento come «camera al tetto» |
 | **1.29.1** (25 ott., installata) | i servizi del bot restituiscono l'esito (`{"eseguito": ...}`) a chi lo chiede con `response_variable`; senza, un comando fallito solleva errore | il /menu può dire «non ci sono riuscito» invece di confermare un comando non passato |
+| **1.30.0** (12 nov., installata) | deumidificazione della camera fuori stagione sull'umidità del comodino, con la lampada UV (`health`) | da misurare sui primi cicli (§11.7). La prova del riavvio ha trovato prima dell'installazione un `dry` nostro passato a `cool` nel quarto d'ora di conferma della stagione |
 
 **Il metodo che ha prodotto di più:** la *revisione a più occhi*. Più
 revisori indipendenti, ognuno su un angolo diverso (macchina a stati e
