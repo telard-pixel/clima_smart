@@ -4853,6 +4853,282 @@ class ControllerRegressionTests(unittest.TestCase):
         self.assertIsNone(ctrl.implied_compressor_hz)
         self.assertIsNone(ctrl.efficiency_measured_watts)
 
+    # ------------------------------------------------------------------
+    # Deumidificazione della camera fuori stagione (12 novembre 2026)
+    # ------------------------------------------------------------------
+    def _deum(self, umidita=70.0, camera=20.5, ripresa=21.0, outdoor=8.0):
+        """Novembre: unita' spenta, fuori stagione gia' confermato, umidita'
+        della camera e lampada UV collegate. Nessun aiuto invernale."""
+        ctrl = self._smart_controller(room=ripresa, outdoor=outdoor)
+        valori = ctrl.hass.states.values
+        valori["climate.test"].state = "off"
+        valori["sensor.um_camera"] = State(str(umidita))
+        valori["sensor.comodino"] = State(str(camera), {"unit_of_measurement": "°C"})
+        valori["switch.health"] = State("off")
+        ctrl.entry.data = dict(
+            ctrl.entry.data,
+            room_humidity_sensor="sensor.um_camera",
+            room_sensor="sensor.comodino",
+            health_switch="switch.health",
+        )
+        mezzanotte = NOW.replace(hour=0, minute=0, second=0, microsecond=0)
+        ctrl._not_summer_since = mezzanotte - timedelta(
+            seconds=controller_module.SEASON_EXIT_CONFIRM_SECONDS
+        )
+        return ctrl
+
+    def _deum_avviata(self, **kw):
+        """Ciclo partito alle 12:31 dopo la mezz'ora di conferma, e unita' che
+        ha gia' eseguito il comando."""
+        ctrl = self._deum(**kw)
+        ctrl._compute(GIORNO)
+        desired = ctrl._compute(GIORNO + timedelta(minutes=31))
+        self.assertEqual(desired.hvac, "dry")
+        ctrl.hass.states.values["climate.test"].state = "dry"
+        return ctrl
+
+    def test_dehum_without_the_room_sensor_nothing_changes(self):
+        """Senza il sensore di umidita' della camera la funzione non esiste:
+        fuori stagione resta tutto com'era."""
+        ctrl = self._deum(umidita=80.0)
+        ctrl.entry.data = {
+            k: v for k, v in ctrl.entry.data.items() if k != "room_humidity_sensor"
+        }
+        ctrl._compute(GIORNO)
+        desired = ctrl._compute(GIORNO + timedelta(hours=2))
+        self.assertIsNone(desired.hvac)
+        self.assertIsNone(desired.health)
+        self.assertEqual(desired.reason, "fuori stagione: non tocco il riscaldamento")
+
+    def test_dehum_waits_half_an_hour_above_the_threshold(self):
+        """Una doccia non e' una camera umida: sopra il 67% deve restarci
+        mezz'ora. Poi parte da sola, in `dry` al minimo, con la lampada UV."""
+        ctrl = self._deum(umidita=70.0)
+        self.assertIsNone(ctrl._compute(GIORNO).hvac)
+        self.assertIsNone(ctrl._compute(GIORNO + timedelta(minutes=29)).hvac)
+        self.assertFalse(ctrl._dehum_active)
+        desired = ctrl._compute(GIORNO + timedelta(minutes=31))
+        self.assertEqual(desired.hvac, "dry")
+        self.assertEqual(desired.setpoint, controller_module.DEHUM_SETPOINT)
+        self.assertTrue(desired.health)
+        self.assertTrue(ctrl._dehum_active)
+        self.assertEqual(
+            ctrl._dehum_event[0], controller_module.EVENT_DEHUM_STARTED
+        )
+
+    def test_dehum_a_dip_below_the_threshold_restarts_the_wait(self):
+        ctrl = self._deum(umidita=70.0)
+        ctrl._compute(GIORNO)
+        ctrl.hass.states.values["sensor.um_camera"].state = "66"
+        ctrl._compute(GIORNO + timedelta(minutes=20))
+        ctrl.hass.states.values["sensor.um_camera"].state = "70"
+        self.assertIsNone(ctrl._compute(GIORNO + timedelta(minutes=35)).hvac)
+        self.assertEqual(
+            ctrl._compute(GIORNO + timedelta(minutes=66)).hvac, "dry"
+        )
+
+    def test_dehum_at_the_threshold_does_not_start(self):
+        ctrl = self._deum(umidita=67.0)
+        ctrl._compute(GIORNO)
+        self.assertIsNone(ctrl._compute(GIORNO + timedelta(hours=1)).hvac)
+
+    def test_dehum_never_starts_during_sleep(self):
+        """Scelta dell'utente: di notte non deve andare."""
+        ctrl = self._deum(umidita=75.0)
+        self._orari(ctrl)   # sonno 23:30-07:30
+        notte = NOW.replace(hour=1, minute=0, second=0, microsecond=0)
+        ctrl._compute(notte)
+        desired = ctrl._compute(notte + timedelta(hours=2))
+        self.assertIsNone(desired.hvac)
+        self.assertFalse(ctrl._dehum_active)
+
+    def test_dehum_stops_when_sleep_begins(self):
+        ctrl = self._deum(umidita=75.0)
+        self._orari(ctrl)
+        sera = NOW.replace(hour=22, minute=30, second=0, microsecond=0)
+        ctrl._compute(sera)
+        self.assertEqual(ctrl._compute(sera + timedelta(minutes=31)).hvac, "dry")
+        ctrl.hass.states.values["climate.test"].state = "dry"
+        desired = ctrl._compute(sera + timedelta(minutes=61))   # 23:31
+        self.assertEqual(desired.hvac, "off")
+        self.assertIs(desired.health, False)
+        self.assertIn("sonno", desired.reason)
+        self.assertFalse(ctrl._dehum_active)
+
+    def test_dehum_keeps_going_between_the_two_thresholds(self):
+        """Fra 62 e 67 un ciclo in corso continua: sono la sua isteresi. E non
+        viene spento come «raffrescamento fuori stagione»."""
+        ctrl = self._deum_avviata()
+        ctrl.hass.states.values["sensor.um_camera"].state = "64"
+        desired = ctrl._compute(GIORNO + timedelta(minutes=50))
+        self.assertEqual(desired.hvac, "dry")
+        self.assertTrue(desired.health)
+
+    def test_dehum_stops_at_the_low_threshold_and_rests(self):
+        ctrl = self._deum_avviata()
+        ctrl.hass.states.values["sensor.um_camera"].state = "62"
+        desired = ctrl._compute(GIORNO + timedelta(minutes=50))
+        self.assertEqual(desired.hvac, "off")
+        self.assertIs(desired.health, False)
+        self.assertFalse(ctrl._dehum_active)
+        tipo, dati = ctrl._dehum_event
+        self.assertEqual(tipo, controller_module.EVENT_DEHUM_STOPPED)
+        self.assertEqual(dati["minuti"], 19)
+        # Riposo di due ore: l'umidita' risale subito, ma non si riparte.
+        ctrl.hass.states.values["climate.test"].state = "off"
+        ctrl.hass.states.values["sensor.um_camera"].state = "72"
+        ctrl._compute(GIORNO + timedelta(minutes=55))
+        self.assertIsNone(ctrl._compute(GIORNO + timedelta(minutes=140)).hvac)
+        self.assertEqual(
+            ctrl._compute(GIORNO + timedelta(minutes=171)).hvac, "dry"
+        )
+
+    def test_dehum_stops_below_the_room_floor(self):
+        """`dry` raffredda: sotto i 19 gradi al comodino si ferma."""
+        ctrl = self._deum_avviata()
+        ctrl.hass.states.values["sensor.comodino"].state = "18.9"
+        desired = ctrl._compute(GIORNO + timedelta(minutes=50))
+        self.assertEqual(desired.hvac, "off")
+        self.assertIn("sotto il minimo", desired.reason)
+
+    def test_dehum_does_not_start_on_the_edge_of_the_floor(self):
+        ctrl = self._deum(umidita=75.0, camera=19.3)
+        ctrl._compute(GIORNO)
+        self.assertIsNone(ctrl._compute(GIORNO + timedelta(hours=1)).hvac)
+        ctrl.hass.states.values["sensor.comodino"].state = "19.5"
+        self.assertEqual(ctrl._compute(GIORNO + timedelta(hours=1, minutes=5)).hvac, "dry")
+
+    def test_dehum_stops_at_the_maximum_time(self):
+        ctrl = self._deum_avviata()
+        self.assertEqual(
+            ctrl._compute(GIORNO + timedelta(minutes=31 + 89)).hvac, "dry"
+        )
+        desired = ctrl._compute(GIORNO + timedelta(minutes=31 + 90))
+        self.assertEqual(desired.hvac, "off")
+        self.assertIn("tempo massimo", desired.reason)
+
+    def test_dehum_stops_if_the_humidity_sensor_disappears(self):
+        """Fail closed: senza la misura non si continua alla cieca."""
+        ctrl = self._deum_avviata()
+        ctrl.hass.states.values["sensor.um_camera"].state = "unavailable"
+        desired = ctrl._compute(GIORNO + timedelta(minutes=40))
+        self.assertEqual(desired.hvac, "off")
+        self.assertIn("illeggibile", desired.reason)
+
+    def test_dehum_does_not_keep_the_warm_season_alive(self):
+        """Il nostro `dry` non e' un ciclo di raffrescamento: con l'esterna
+        dentro l'isteresi della soglia non deve riportare in stagione."""
+        ctrl = self._deum_avviata(outdoor=8.0)
+        soglia = ctrl.summer_threshold
+        ctrl.hass.states.values["sensor.outdoor"].state = str(soglia - 0.2)
+        desired = ctrl._compute(GIORNO + timedelta(minutes=40))
+        self.assertEqual(desired.hvac, "dry")
+        self.assertIn("deumidifico la camera", desired.reason)
+
+    def test_dehum_a_manual_dry_is_still_switched_off_out_of_season(self):
+        """Un `dry` acceso a mano non e' il nostro ciclo: come prima, allo
+        scadere dell'override si spegne (12 novembre 2026, ore 08:27)."""
+        ctrl = self._deum(umidita=60.0)
+        ctrl.hass.states.values["climate.test"].state = "dry"
+        desired = ctrl._compute(GIORNO)
+        self.assertEqual(desired.hvac, "off")
+        self.assertEqual(desired.reason, "fuori stagione: spengo raffrescamento")
+        self.assertIsNone(desired.health)
+
+    def test_dehum_switched_off_by_hand_is_not_restarted(self):
+        ctrl = self._deum_avviata()
+        ctrl.hass.states.values["climate.test"].state = "off"
+        desired = ctrl._compute(GIORNO + timedelta(minutes=50))
+        self.assertIsNone(desired.hvac)
+        self.assertIs(desired.health, False)
+        self.assertFalse(ctrl._dehum_active)
+        self.assertIsNone(ctrl._compute(GIORNO + timedelta(minutes=100)).hvac)
+
+    def test_dehum_tolerates_the_cloud_lag_after_its_own_start(self):
+        """Subito dopo il comando l'unita' risulta ancora spenta: non e' una mano."""
+        ctrl = self._deum()
+        ctrl._compute(GIORNO)
+        ctrl._compute(GIORNO + timedelta(minutes=31))
+        desired = ctrl._compute(GIORNO + timedelta(minutes=33))
+        self.assertEqual(desired.hvac, "dry")
+        self.assertTrue(ctrl._dehum_active)
+
+    def test_dehum_forgets_a_cycle_the_user_turned_into_heat(self):
+        ctrl = self._deum_avviata()
+        ctrl.hass.states.values["climate.test"].state = "heat"
+        desired = ctrl._compute(GIORNO + timedelta(minutes=40))
+        self.assertIsNone(desired.hvac)
+        self.assertFalse(ctrl._dehum_active)
+
+    def test_dehum_does_not_interrupt_the_winter_help(self):
+        ctrl = self._deum(umidita=75.0, ripresa=18.5)
+        ctrl.entry.options = dict(
+            ctrl.entry.options, winter_room_start=18.0, winter_room_target=19.0
+        )
+        ctrl.hass.states.values["climate.test"].state = "heat"
+        ctrl._compute(GIORNO)
+        desired = ctrl._compute(GIORNO + timedelta(hours=1))
+        self.assertEqual(desired.hvac, "heat")
+        self.assertFalse(ctrl._dehum_active)
+
+    def test_dehum_mode_off_ends_the_cycle_and_the_lamp(self):
+        ctrl = self._deum_avviata()
+        ctrl.mode = "off"
+        desired = ctrl._compute(GIORNO + timedelta(minutes=40))
+        self.assertEqual(desired.hvac, "off")
+        self.assertIs(desired.health, False)
+        self.assertFalse(ctrl._dehum_active)
+
+    def test_dehum_survives_a_restart(self):
+        ctrl = self._deum_avviata()
+        asyncio.run(ctrl._async_save_memoria())
+        dopo = self._riavvia(ctrl)
+        self.assertTrue(dopo._dehum_active)
+        self.assertEqual(dopo._dehum_started_at, GIORNO + timedelta(minutes=31))
+        desired = dopo._compute(GIORNO + timedelta(minutes=45))
+        self.assertEqual(desired.hvac, "dry")
+
+    def test_dehum_health_switch_is_commanded(self):
+        ctrl = self._deum()
+        comandi = []
+
+        async def registra(domain, service, entity_id, data=None):
+            comandi.append((domain, service, entity_id))
+            return True
+
+        async def muto(domain, service, data=None):
+            return True
+
+        ctrl._call_target = registra
+        ctrl._call = muto
+        asyncio.run(
+            ctrl._apply(
+                controller_module.Desired(hvac="dry", setpoint=16.0, health=True)
+            )
+        )
+        self.assertIn(("switch", "turn_on", "switch.health"), comandi)
+
+    def test_dehum_event_is_fired_once(self):
+        ctrl = self._deum()
+        ctrl._restore_event.set()
+
+        def finto(now):
+            ctrl._dehum_event = (
+                controller_module.EVENT_DEHUM_STARTED,
+                {"umidita": 70.0, "camera": 20.5},
+            )
+            return controller_module.Desired(reason="prova")
+
+        ctrl._compute = finto
+        asyncio.run(ctrl.async_evaluate("prova"))
+        lanciati = [
+            e for e in ctrl.hass.bus.eventi
+            if e[0] == controller_module.EVENT_DEHUM_STARTED
+        ]
+        self.assertEqual(len(lanciati), 1)
+        self.assertEqual(lanciati[0][1]["entity_id"], "climate.test")
+        self.assertEqual(lanciati[0][1]["umidita"], 70.0)
+
 
 class ValidationTests(unittest.TestCase):
     """Regole del form, provate direttamente: `validation` non importa ne' Home
@@ -4873,6 +5149,25 @@ class ValidationTests(unittest.TestCase):
 
     def test_configurazione_sana_passa(self):
         self.assertIsNone(self.valida())
+
+    def test_soglie_deumidificazione_incrociate(self):
+        self.assertIsNone(self.valida(dehum_humidity_on=67.0, dehum_humidity_off=62.0))
+        self.assertIsNone(self.valida(dehum_humidity_on=0.0, dehum_humidity_off=62.0))
+        self.assertEqual(
+            self.valida(dehum_humidity_on=62.0, dehum_humidity_off=62.0),
+            "invalid_dehum_range",
+        )
+        self.assertEqual(
+            self.valida(dehum_humidity_on=67.0, dehum_humidity_off=0.0),
+            "invalid_dehum_range",
+        )
+
+    def test_health_non_puo_coincidere_con_un_altro_switch(self):
+        self.assertFalse(
+            validation.aux_switches_are_distinct(
+                {"mute_switch": "switch.a", "health_switch": "switch.a"}
+            )
+        )
 
     def test_ordine_orari(self):
         self.assertEqual(self.valida(day_start="07:00:00"), "invalid_time_order")

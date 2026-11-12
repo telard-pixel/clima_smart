@@ -24,6 +24,16 @@ CONF_NIGHT_SWITCH = "night_switch"
 # Optional indoor humidity source, only used by MODE_SMART to pick the `dry`
 # program. Left empty the mode still works, it just never dehumidifies.
 CONF_HUMIDITY = "humidity_sensor"
+# Deumidificazione della camera fuori stagione (12 novembre 2026). L'umidita'
+# qui sopra e' quella di casa e serve solo a scegliere `dry` al posto di `cool`
+# d'estate. Questa e' un'altra domanda: la camera, d'autunno e d'inverno, resta
+# sopra il 65% per giorni (Shelly BLU al comodino: mediana 62%, 68-70% dal 10
+# al 12 novembre) mentre il controller dice «fuori stagione» e non fa niente.
+# Vuoto: la funzione non esiste e il comportamento resta quello di sempre.
+CONF_ROOM_HUMIDITY = "room_humidity_sensor"
+# L'interruttore `Health` dell'unita' (la lampada UV): acceso insieme alla
+# deumidificazione della camera e spento alla fine. Vuoto: non si tocca.
+CONF_HEALTH_SWITCH = "health_switch"
 # Un termometro vero della stanza, fuori dal getto d'aria. Quando c'e', prende il
 # posto della temperatura di ripresa della macchina - che non e' la stanza ma
 # l'aria che rientra nell'unita', e che la ventola stessa sposta di un grado.
@@ -110,6 +120,13 @@ CONF_WINTER_ROOM_TARGET = "winter_room_target"
 # Rete di sicurezza: non accende se la media delle altre stanze e' gia' al
 # tetto di casa. Zero disattiva il controllo (nessun tetto).
 CONF_WINTER_HOUSE_CEILING = "winter_house_ceiling"
+# Deumidificazione della camera: parte sopra la prima soglia, si ferma sotto la
+# seconda (sono la propria isteresi, come le due dell'aiuto invernale) oppure
+# se il termometro della camera scende sotto il pavimento - `dry` e' pur sempre
+# il compressore che raffredda, e d'inverno lavora contro i caloriferi.
+CONF_DEHUM_ON = "dehum_humidity_on"
+CONF_DEHUM_OFF = "dehum_humidity_off"
+CONF_DEHUM_ROOM_FLOOR = "dehum_room_floor"
 # Sotto questa esterna la notte fonda entra in un regime diverso: l'aria di
 # ripresa non basta piu' a dire se in stanza si sta gia' bene, perche' legge il
 # condotto e non il letto. Sotto soglia si media esterna e comodino, e si lascia
@@ -235,6 +252,12 @@ DEFAULT_AUTO_START_OUTDOOR = 0.0
 DEFAULT_WINTER_ROOM_START = 0.0    # zero: aiuto invernale disattivato
 DEFAULT_WINTER_ROOM_TARGET = 19.0
 DEFAULT_WINTER_HOUSE_CEILING = 0.0   # zero: nessun tetto casa
+# Scelte dell'utente il 12 novembre 2026: partenza sopra il 67% (con il 65 la
+# camera sarebbe stata sopra soglia il 15% delle ore dell'ultimo mese), arresto
+# sotto il 62% (la mediana), pavimento a 19 gradi.
+DEFAULT_DEHUM_ON = 67.0
+DEFAULT_DEHUM_OFF = 62.0
+DEFAULT_DEHUM_ROOM_FLOOR = 19.0
 DEFAULT_NIGHT_START_OUTDOOR = 20.0
 DEFAULT_NIGHT_MILD_OUTDOOR = 0.0   # zero: nessuna notte mite, come prima
 DEFAULT_TARGET_SLEEP_MILD = 23.0
@@ -662,6 +685,34 @@ EVENT_STARTED = "clima_smart_avviato"
 EVENT_APPROVAL_NEEDED = "clima_smart_avvio_richiesto"
 START_REASON_DAY = "giorno"
 START_REASON_NIGHT = "notte"
+
+# Deumidificazione della camera: parte da sola (scelta dell'utente, niente
+# permesso su Telegram), quindi chi vuole saperlo ascolta questi due.
+# Dati dell'avvio: entity_id, umidita, camera. Della fine: entity_id, umidita,
+# camera, motivo, minuti.
+EVENT_DEHUM_STARTED = "clima_smart_deumidificazione_avviata"
+EVENT_DEHUM_STOPPED = "clima_smart_deumidificazione_finita"
+# L'umidita' deve restare sopra soglia per mezz'ora prima di partire: una
+# doccia o una finestra aperta non sono una camera umida.
+DEHUM_CONFIRM_SECONDS = 1800
+# Un ciclo non dura piu' di un'ora e mezza, e fra un ciclo e il successivo
+# passano almeno due ore: se l'umidita' non scende non si insiste a oltranza.
+DEHUM_MAX_SECONDS = 5400
+DEHUM_REST_SECONDS = 7200
+# Il setpoint mandato in `dry`. **Da confermare con una misura**: il 12
+# novembre 2026, a mano, `dry` con setpoint 22 e ripresa a 20.5-23 ha tenuto il
+# compressore fermo per un'ora (8 W, sola ventola) e l'umidita' non si e' mossa
+# dal 69-70%; con setpoint 20 e ripresa 21.5 il compressore girava (327 W).
+# In `dry` la macchina rispetta il setpoint: va tenuto ben sotto la stanza.
+# 16 e' il minimo dell'unita'; `_snap_setpoint` lo riporta nei suoi limiti.
+DEHUM_SETPOINT = 16.0
+# Dopo un arresto per camera fredda si riparte solo mezzo grado sopra il
+# pavimento, per non ballare sul bordo.
+DEHUM_FLOOR_RESTART_MARGIN = 0.5
+# Fra il nostro comando e lo stato riportato dal cloud passano delle passate in
+# cui l'unita' risulta ancora spenta. Oltre questo tempo, «spenta» vuol dire
+# che l'ha spenta qualcun altro: il ciclo si chiude, non si riaccende.
+DEHUM_OFF_GRACE_SECONDS = 300
 
 # Fired when the morning switch-off for a cool day goes through, so an
 # automation can suggest opening the windows instead. Data: entity_id.

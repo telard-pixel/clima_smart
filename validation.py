@@ -16,6 +16,9 @@ from .const import (
     CONF_ECO_SWITCH,
     CONF_MORNING_OFF_START,
     CONF_MUTE_SWITCH,
+    CONF_HEALTH_SWITCH,
+    CONF_DEHUM_ON,
+    CONF_DEHUM_OFF,
     CONF_TRIM_MAX,
     CONF_TRIM_MIN,
     CONF_NIGHT_START,
@@ -35,7 +38,9 @@ def aux_switches_are_distinct(values: dict[str, Any]) -> bool:
     """Prevent two logical features from fighting over the same real switch."""
     selected = [
         values.get(key)
-        for key in (CONF_ECO_SWITCH, CONF_MUTE_SWITCH, CONF_NIGHT_SWITCH)
+        for key in (
+            CONF_ECO_SWITCH, CONF_MUTE_SWITCH, CONF_NIGHT_SWITCH, CONF_HEALTH_SWITCH
+        )
         if values.get(key)
     ]
     return len(selected) == len(set(selected))
@@ -71,6 +76,13 @@ def validate_options(values: dict[str, Any]) -> str | None:
         # Con gli estremi incrociati l'anello esterno non avrebbe spazio per
         # muoversi, e il target della camera resterebbe inchiodato al primo valore.
         return "invalid_trim_range"
+
+    deum_on = values.get(CONF_DEHUM_ON)
+    deum_off = values.get(CONF_DEHUM_OFF)
+    if deum_on and (not deum_off or deum_off >= deum_on):
+        # Le due soglie sono l'isteresi del ciclo: uguali o incrociate, la
+        # deumidificazione della camera partirebbe e si fermerebbe a ogni passata.
+        return "invalid_dehum_range"
 
     if values[CONF_ECO_OUTDOOR_ON] >= values[CONF_ECO_OUTDOOR_OFF]:
         # _eco_decision checks the "on" condition first: a swapped or equal pair

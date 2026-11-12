@@ -49,6 +49,14 @@ from .const import (
     CONF_WINTER_ROOM_START,
     CONF_WINTER_ROOM_TARGET,
     CONF_WINTER_HOUSE_CEILING,
+    CONF_ROOM_HUMIDITY,
+    CONF_HEALTH_SWITCH,
+    CONF_DEHUM_ON,
+    CONF_DEHUM_OFF,
+    CONF_DEHUM_ROOM_FLOOR,
+    DEFAULT_DEHUM_ON,
+    DEFAULT_DEHUM_OFF,
+    DEFAULT_DEHUM_ROOM_FLOOR,
     CONF_NIGHT_SWITCH,
     CONF_PRESENCE_ENTITY,
     CONF_OUTDOOR,
@@ -147,6 +155,11 @@ def _setup_schema(defaults: dict[str, Any]) -> vol.Schema:
             _optional(CONF_HUMIDITY, defaults): _entity(
                 "sensor", device_class="humidity"
             ),
+            # Umidita' della camera: accende la deumidificazione fuori
+            # stagione. Vuoto: la funzione non esiste.
+            _optional(CONF_ROOM_HUMIDITY, defaults): _entity(
+                "sensor", device_class="humidity"
+            ),
             # Solo diagnostica (vedi sensor.efficiency): vuoto non toglie nulla
             # al controllo, si perde solo la stima degli Hz impliciti.
             _optional(CONF_POWER_SENSOR, defaults): _entity(
@@ -162,6 +175,8 @@ def _setup_schema(defaults: dict[str, Any]) -> vol.Schema:
             _optional(CONF_ECO_SWITCH, defaults): _entity("switch"),
             _optional(CONF_MUTE_SWITCH, defaults): _entity("switch"),
             _optional(CONF_NIGHT_SWITCH, defaults): _entity("switch"),
+            # La lampada UV: segue la deumidificazione della camera.
+            _optional(CONF_HEALTH_SWITCH, defaults): _entity("switch"),
             # Vuoto vale "sempre a casa": la notte fonda parte comunque.
             _optional(CONF_PRESENCE_ENTITY, defaults): _entity(
                 ["person", "device_tracker"]
@@ -407,6 +422,18 @@ class ClimaSmartOptionsFlow(OptionsFlow):
                     default=_num(
                         CONF_WINTER_HOUSE_CEILING, DEFAULT_WINTER_HOUSE_CEILING
                     ),
+                ): vol.All(vol.Coerce(float), vol.Range(min=0, max=30)),
+                vol.Required(
+                    CONF_DEHUM_ON,
+                    default=_num(CONF_DEHUM_ON, DEFAULT_DEHUM_ON),
+                ): vol.All(vol.Coerce(float), vol.Range(min=0, max=95)),
+                vol.Required(
+                    CONF_DEHUM_OFF,
+                    default=_num(CONF_DEHUM_OFF, DEFAULT_DEHUM_OFF),
+                ): vol.All(vol.Coerce(float), vol.Range(min=0, max=95)),
+                vol.Required(
+                    CONF_DEHUM_ROOM_FLOOR,
+                    default=_num(CONF_DEHUM_ROOM_FLOOR, DEFAULT_DEHUM_ROOM_FLOOR),
                 ): vol.All(vol.Coerce(float), vol.Range(min=0, max=30)),
                 vol.Required(
                     CONF_EFFICIENCY_ALERT_MINUTES,

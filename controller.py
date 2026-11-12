@@ -55,6 +55,22 @@ from .const import (
     CONF_HOT_OUTDOOR,
     CONF_HOUSE_TARGET,
     CONF_HUMIDITY,
+    CONF_ROOM_HUMIDITY,
+    CONF_HEALTH_SWITCH,
+    CONF_DEHUM_ON,
+    CONF_DEHUM_OFF,
+    CONF_DEHUM_ROOM_FLOOR,
+    DEFAULT_DEHUM_ON,
+    DEFAULT_DEHUM_OFF,
+    DEFAULT_DEHUM_ROOM_FLOOR,
+    DEHUM_CONFIRM_SECONDS,
+    DEHUM_MAX_SECONDS,
+    DEHUM_REST_SECONDS,
+    DEHUM_SETPOINT,
+    DEHUM_FLOOR_RESTART_MARGIN,
+    DEHUM_OFF_GRACE_SECONDS,
+    EVENT_DEHUM_STARTED,
+    EVENT_DEHUM_STOPPED,
     CONF_MORNING_OFF_ENABLED,
     CONF_MORNING_OFF_START,
     CONF_MUTE_SWITCH,
@@ -301,6 +317,7 @@ class Desired:
     eco: bool | None = None          # True=on, False=off, None=leave
     mute: bool | None = None
     night: bool | None = None
+    health: bool | None = None       # la lampada UV, solo con la deumidificazione
     vane_h: str | None = None        # posizione chiesta all'aletta orizzontale
     vane_v: str | None = None        # e a quella verticale
     reason: str = ""
@@ -425,6 +442,18 @@ class ClimaSmartController:
         # (avvio/tetto) come propria isteresi - stesso schema di
         # _cold_night, stessa ragione di persistenza.
         self._winter_heating = False
+        # Deumidificazione della camera fuori stagione. Persistiti il ciclo in
+        # corso, il suo inizio e il riposo dopo l'ultimo: un riavvio a meta'
+        # non deve ne' abbandonare l'unita' accesa in `dry` (non sarebbe piu'
+        # riconosciuta come nostra) ne' far ripartire subito un ciclo appena
+        # finito. La mezz'ora di conferma invece riparte da capo: innocuo.
+        self._dehum_active = False
+        self._dehum_started_at: datetime | None = None
+        self._dehum_rest_until: datetime | None = None
+        self._dehum_high_since: datetime | None = None
+        # Evento da lanciare a fine passata (avvio o fine del ciclo), armato
+        # in _compute come gli altri contrassegni.
+        self._dehum_event: tuple[str, dict] | None = None
         # Il giudizio del passo in giu': la media di casa al momento in cui e'
         # stato fatto, il livello a cui ha portato, e il pavimento che i passi
         # bocciati hanno lasciato per la giornata in corso.
@@ -854,6 +883,9 @@ class ClimaSmartController:
             and self._approval_waiting_on in (now.date(), now.date() - timedelta(days=1))
             and old_state.state == HVAC_OFF
             and new_state.state in (HVAC_COOL, HVAC_DRY)
+            # L'avvio della deumidificazione della camera e' nostro, non la
+            # risposta a una domanda rimasta in sospeso dal giorno prima.
+            and not self._dehum_active
         ):
             # Il si' al permesso, non una mano: si prende il comando subito
             # invece di cedere per un'ora. Vale una volta sola, per la giornata
@@ -1173,6 +1205,9 @@ class ClimaSmartController:
             "cold_night_resting": self._cold_night_resting,
             "night_mild": self._night_mild,
             "winter_heating": self._winter_heating,
+            "dehum_active": self._dehum_active,
+            "dehum_started_at": giorno(self._dehum_started_at),
+            "dehum_rest_until": giorno(self._dehum_rest_until),
             # Anche il giudizio sul passo deve sopravvivere a un riavvio: senza,
             # l'anello dimentica la lezione e ricomincia a spingere. Misurato l'8
             # agosto 2026: riavvio alle 18:48, e alle 18:49 ha rifatto il passo che
@@ -1322,6 +1357,10 @@ class ClimaSmartController:
         self._winter_heating = (
             scaldo_inverno if isinstance(scaldo_inverno, bool) else False
         )
+        deumidifica = dati.get("dehum_active", False)
+        self._dehum_active = deumidifica if isinstance(deumidifica, bool) else False
+        self._dehum_started_at = istante_di("dehum_started_at")
+        self._dehum_rest_until = istante_di("dehum_rest_until")
         caldo_esterno = dati.get("hot_outdoor", False)
         self._hot_outdoor = caldo_esterno if isinstance(caldo_esterno, bool) else False
         dry_attivo = dati.get("dry_active", False)
@@ -2285,9 +2324,14 @@ class ClimaSmartController:
             self._last_fan_band_at = now
         return "high"
 
-    def _read_humidity(self) -> float | None:
-        """Indoor relative humidity, if a sensor was configured (MODE_SMART only)."""
-        ent = self._cfg(CONF_HUMIDITY)
+    def _read_humidity(self, conf_key: str = CONF_HUMIDITY) -> float | None:
+        """Indoor relative humidity, if a sensor was configured.
+
+        `CONF_HUMIDITY` e' l'umidita' di casa (sceglie `dry` d'estate),
+        `CONF_ROOM_HUMIDITY` quella della camera (deumidificazione fuori
+        stagione): stessa lettura, stesse cautele.
+        """
+        ent = self._cfg(conf_key)
         if not ent:
             return None
         st = self.hass.states.get(ent)
@@ -2427,6 +2471,126 @@ class ClimaSmartController:
         self._high_fan_capped_until = now + timedelta(minutes=soglia)
         return "medium"
 
+    def _dehum_close(self, now: datetime, motivo: str, umidita: float | None,
+                     camera: float | None) -> None:
+        """Chiude il ciclo di deumidificazione della camera e apre il riposo."""
+        inizio = self._dehum_started_at
+        minuti = (
+            round((now - inizio).total_seconds() / 60) if inizio is not None else None
+        )
+        self._dehum_active = False
+        self._dehum_started_at = None
+        self._dehum_high_since = None
+        self._dehum_rest_until = now + timedelta(seconds=DEHUM_REST_SECONDS)
+        self._dehum_event = (
+            EVENT_DEHUM_STOPPED,
+            {"umidita": umidita, "camera": camera, "motivo": motivo, "minuti": minuti},
+        )
+
+    def _room_dehumidify(
+        self, now: datetime, phase: str, cur_mode: str, camera: float | None
+    ) -> Desired | None:
+        """Deumidificazione della camera fuori stagione (12 novembre 2026).
+
+        Restituisce cosa fare, oppure None se non e' affar suo e la decisione
+        resta al resto del ramo «fuori stagione» (spegnimento di un ciclo non
+        nostro, aiuto invernale). Chiamata solo da li': in stagione l'umidita'
+        la gestisce `_program_for` scegliendo fra `cool` e `dry`.
+
+        Regole, tutte scelte dall'utente: parte **da sola** (niente permesso)
+        quando l'umidita' della camera resta sopra la soglia per mezz'ora;
+        **mai nel sonno**, e un ciclo in corso si ferma quando il sonno entra;
+        si ferma sotto la soglia bassa, sotto il pavimento di temperatura,
+        dopo un tempo massimo, o se il sensore sparisce (fail closed). La
+        lampada UV (`health`) segue il ciclo.
+        """
+        soglia_on = float(self._cfg(CONF_DEHUM_ON, DEFAULT_DEHUM_ON) or 0.0)
+        soglia_off = float(self._cfg(CONF_DEHUM_OFF, DEFAULT_DEHUM_OFF) or 0.0)
+        pavimento = float(
+            self._cfg(CONF_DEHUM_ROOM_FLOOR, DEFAULT_DEHUM_ROOM_FLOOR) or 0.0
+        )
+        configurata = (
+            bool(self._cfg(CONF_ROOM_HUMIDITY))
+            and soglia_on > 0
+            and 0 < soglia_off < soglia_on
+        )
+        umidita = self._read_humidity(CONF_ROOM_HUMIDITY) if configurata else None
+        in_sonno = phase in (PHASE_SLEEP, PHASE_WIND_DOWN)
+
+        if self._dehum_active:
+            inizio = self._dehum_started_at or now
+            trascorso = (now - inizio).total_seconds()
+            if cur_mode == HVAC_OFF and trascorso > DEHUM_OFF_GRACE_SECONDS:
+                # Spenta da qualcun altro (una mano, dopo l'override): il
+                # ciclo e' finito, non la si riaccende.
+                self._dehum_close(now, "unità spenta", umidita, camera)
+                return Desired(
+                    health=False,
+                    reason="deumidificazione: unità spenta, chiudo il ciclo",
+                )
+            if not configurata:
+                motivo = "non più configurata"
+            elif in_sonno:
+                motivo = "entra il sonno"
+            elif umidita is None:
+                motivo = "umidità illeggibile"
+            elif umidita <= soglia_off:
+                motivo = f"umidità al {umidita:.0f}%"
+            elif camera is None:
+                motivo = "temperatura della camera illeggibile"
+            elif pavimento > 0 and camera < pavimento:
+                motivo = f"camera a {camera:.1f}, sotto il minimo di {pavimento:g}"
+            elif trascorso >= DEHUM_MAX_SECONDS:
+                motivo = f"tempo massimo, umidità ancora al {umidita:.0f}%"
+            else:
+                return Desired(
+                    hvac=HVAC_DRY,
+                    setpoint=DEHUM_SETPOINT,
+                    health=True,
+                    reason=(
+                        f"deumidifico la camera: umidità {umidita:.0f}%, "
+                        f"mi fermo al {soglia_off:.0f}%"
+                    ),
+                )
+            self._dehum_close(now, motivo, umidita, camera)
+            return Desired(
+                hvac=HVAC_OFF,
+                health=False,
+                reason=f"deumidificazione finita: {motivo}",
+            )
+
+        if not configurata or umidita is None or umidita <= soglia_on:
+            self._dehum_high_since = None
+            return None
+        if self._dehum_high_since is None:
+            self._dehum_high_since = now
+        if cur_mode != HVAC_OFF or in_sonno:
+            # Unita' gia' accesa (da una mano, o dall'aiuto invernale): non e'
+            # il momento di cambiarle programma. Nel sonno non si parte mai.
+            return None
+        if self._dehum_rest_until is not None and now < self._dehum_rest_until:
+            return None
+        if camera is None or (
+            pavimento > 0 and camera < pavimento + DEHUM_FLOOR_RESTART_MARGIN
+        ):
+            return None
+        if (now - self._dehum_high_since).total_seconds() < DEHUM_CONFIRM_SECONDS:
+            return None
+        self._dehum_active = True
+        self._dehum_started_at = now
+        self._dehum_event = (
+            EVENT_DEHUM_STARTED, {"umidita": umidita, "camera": camera}
+        )
+        return Desired(
+            hvac=HVAC_DRY,
+            setpoint=DEHUM_SETPOINT,
+            health=True,
+            reason=(
+                f"deumidifico la camera: umidità {umidita:.0f}% da mezz'ora, "
+                f"mi fermo al {soglia_off:.0f}%"
+            ),
+        )
+
     def _dry_reference_target(self, target: float, now: datetime) -> float:
         """Target per il giudizio dry/cool, rallentato rispetto a quello vero.
 
@@ -2550,6 +2714,18 @@ class ClimaSmartController:
         # in `fan_only` non veniva riconosciuta come nostra e nessuno la
         # fermava piu' (vedi la guardia di fine stagione qui sotto).
         nostro_ciclo = cur_mode in (HVAC_COOL, HVAC_DRY, HVAC_FAN_ONLY)
+        # La deumidificazione della camera fuori stagione usa lo stesso `dry`,
+        # ma non e' un ciclo di raffrescamento: se contasse come tale terrebbe
+        # viva la stagione calda con la sua isteresi, farebbe scattare
+        # l'eccezione notturna e verrebbe spenta come «raffrescamento fuori
+        # stagione» dal ramo che invece la deve gestire. Se nel frattempo una
+        # mano ha messo l'unita' in un altro programma, il ciclo non e' piu'
+        # nostro e si dimentica senza toccare niente.
+        if self._dehum_active and cur_mode not in (HVAC_DRY, HVAC_OFF):
+            self._dehum_active = False
+            self._dehum_started_at = None
+        if self._dehum_active:
+            nostro_ciclo = False
         # Il giudizio sulla deumidificazione rispecchia la macchina, non si
         # accumula. `_program_for` e' l'unico posto che azzerava `_dry_active`, e
         # non viene raggiunto quando l'unita' e' spenta, in `gap`, in `wind_down`,
@@ -2598,6 +2774,17 @@ class ClimaSmartController:
                     and outdoor > self.summer_threshold - SUMMER_HYSTERESIS
                 )
             )
+            if self._dehum_active:
+                # Un ciclo di deumidificazione della camera esiste solo fuori
+                # stagione, gia' confermata quando e' partito. Dopo un riavvio
+                # la conferma ricomincia da capo e per un quarto d'ora «e'
+                # ancora estate»: senza questo, l'unita' accesa in `dry` a
+                # novembre veniva presa per un raffrescamento e passata a
+                # `cool`. Trovato dalla prova del riavvio, prima di installare.
+                if not summer and self._not_summer_since is None:
+                    self._not_summer_since = now - timedelta(
+                        seconds=SEASON_EXIT_CONFIRM_SECONDS
+                    )
             summer = self._season_confirmed(summer, now)
         else:
             # Outdoor sensors unavailable: fail closed. We may maintain a cooling
@@ -2644,6 +2831,10 @@ class ClimaSmartController:
         if self.mode == MODE_OFF:
             self.current_phase = None
             self.active_target = None
+            if self._dehum_active:
+                self._dehum_active = False
+                self._dehum_started_at = None
+                return Desired(hvac=HVAC_OFF, health=False, reason="modo Spento")
             return Desired(hvac=HVAC_OFF, reason="modo Spento")
 
         # Da qui in poi c'e' un solo percorso: fasce orarie, guardie di stagione, e
@@ -2686,6 +2877,17 @@ class ClimaSmartController:
             )
 
         if not summer:
+            # Prima di tutto il resto: un ciclo di deumidificazione in corso va
+            # seguito (e fermato) da chi l'ha avviato, e uno nuovo parte solo a
+            # unita' spenta. Il limite di temperatura e' il termometro al
+            # comodino, fuori dal getto; senza, l'aria di ripresa.
+            deumidifica = self._room_dehumidify(
+                now, phase, cur_mode, comodino if comodino is not None else room
+            )
+            if deumidifica is not None:
+                self.active_target = None
+                self._winter_heating = False
+                return deumidifica
             if nostro_ciclo:
                 self.active_target = None
                 return Desired(
@@ -2782,6 +2984,11 @@ class ClimaSmartController:
             )
 
         self._winter_heating = False
+        # In stagione la deumidificazione della camera non esiste: un ciclo
+        # sorpreso dal ritorno del caldo passa al raffrescamento normale.
+        self._dehum_active = False
+        self._dehum_started_at = None
+        self._dehum_high_since = None
 
         if cur_mode == HVAC_HEAT:
             # Never touch hvac/setpoint over a running heat cycle, but muto/notte
@@ -3183,9 +3390,19 @@ class ClimaSmartController:
                 self._sleep_start_armed = False
                 self._morning_cool_off_armed = False
                 self._approval_armed = None
+                self._dehum_event = None
                 desired = self._compute(now)
                 self._apply_errors.clear()
                 await self._apply(desired)
+                if self._dehum_event is not None:
+                    # Anche con errori d'applicazione: lo stato del ciclo e'
+                    # gia' cambiato in _compute e non si ripresentera', e un
+                    # annuncio mancato vale meno di uno ripetuto a ogni passata.
+                    tipo, dati_evento = self._dehum_event
+                    self._dehum_event = None
+                    self.hass.bus.async_fire(
+                        tipo, {"entity_id": self.climate_entity, **dati_evento}
+                    )
                 if self._morning_off_armed and not self._apply_errors:
                     # The switch-off went through: no second attempt today.
                     self._morning_off_done_on = now.date()
@@ -3423,6 +3640,8 @@ class ClimaSmartController:
         # hvac mode (vedi il ramo `heat` di _compute).
         await self._apply_switch(CONF_MUTE_SWITCH, desired.mute)
         await self._apply_switch(CONF_NIGHT_SWITCH, desired.night)
+        # La lampada UV: chiesta solo dalla deumidificazione della camera.
+        await self._apply_switch(CONF_HEALTH_SWITCH, desired.health)
         # Alette: chieste solo dentro la notte fonda, fuori restano dove sono.
         restore_vanes = (
             self.current_phase in (PHASE_WIND_DOWN, PHASE_DAY)
