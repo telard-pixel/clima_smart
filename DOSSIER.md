@@ -17,7 +17,7 @@ illeggibile; due ore di riposo fra un ciclo e l'altro. Il ciclo non conta come r
 `clima_smart_deumidificazione_avviata` / `_finita`. **Setpoint di `dry` = 16, da misurare**: il 12
 novembre un `dry` acceso a mano con setpoint 22 e ripresa 20.5-23 ha tenuto il compressore fermo
 per un'ora (8 W) senza togliere umidità; con setpoint 20 e ripresa 21.5 girava (327 W). Vedi §11.7.
-**Release GitHub e tag 1.30.0 NON ancora fatti** (pubblicazione da autorizzare): trappola §10.3.
+Release GitHub e tag `1.30.0` pubblicati lo stesso giorno, prima del riavvio.
 
 **Installazione del 25 ottobre.** Release GitHub 1.29.0 e 1.29.1; file copiati in
 `custom_components/clima_smart` (backup `clima_smart-prima-di-1.29.1.tar` nella cartella di
