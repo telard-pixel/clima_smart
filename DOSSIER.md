@@ -18,6 +18,15 @@ illeggibile; due ore di riposo fra un ciclo e l'altro. Il ciclo non conta come r
 novembre un `dry` acceso a mano con setpoint 22 e ripresa 20.5-23 ha tenuto il compressore fermo
 per un'ora (8 W) senza togliere umidità; con setpoint 20 e ripresa 21.5 girava (327 W). Vedi §11.7.
 Release GitHub e tag `1.30.0` pubblicati lo stesso giorno, prima del riavvio.
+**DISATTIVATA lo stesso giorno alle 13:33, su richiesta dell'utente.** Primo ciclo partito da solo
+alle 13:27 (umidità 69%, comodino 20.1): compressore vero (~400 W), in 4 minuti umidità 68→66% e
+comodino 20.1→19.7, ma **l'aria in uscita era troppo fredda** per una camera abitata e l'utente l'ha
+spenta a mano alle 13:31. `dry` a 16 deumidifica davvero (la domanda §11.7 è chiusa sul «toglie
+umidità»), però soffia aria fredda: è il prezzo fisico, la macchina non riscalda l'aria dopo la
+batteria. Configurazione tolta: `room_humidity_sensor` scollegato e `dehum_humidity_on` = 0;
+`health_switch` resta collegato (serve solo alla deumidificazione, quindi è inerte); cancellata
+l'automazione dell'avviso. Il codice resta nella 1.30.0 ma senza il sensore non fa nulla. Idea non
+richiesta e non fatta: farla andare solo a casa vuota.
 
 **Installazione del 25 ottobre.** Release GitHub 1.29.0 e 1.29.1; file copiati in
 `custom_components/clima_smart` (backup `clima_smart-prima-di-1.29.1.tar` nella cartella di
@@ -566,7 +575,7 @@ target.
 | 3 | Quanto vale un grado di target notturno? | **aperta**. Servono 8-10 notti alternate 22.5 / **23.5** (non 23.0, che la macchina riceve identico: §6.2), confrontando i kWh 23:00–08:00 normalizzati sull'esterna |
 | 4 | Ripartire alle 09:00 conviene? | **superata da `start_approval`**: oggi l'ora di partenza la decide una persona rispondendo su Telegram, non una soglia |
 | 5 | **Perché `low` di notte arriva solo il 5-7% del tempo?** | **riaperta il 24 settembre.** Il fix del 1.26.2 (isteresi di discesa 0.5→0.2) ha alzato `low` dal 5% al 7% sulla cronologia live, un miglioramento reale ma insufficiente: §7.1. Il guadagno è andato a `medium`/`auto`, non a `low`. Serve capire cosa tiene ancora `low` così raro — probabile prossimo candidato: la soglia stessa (1.0) o il tempo minimo di permanenza (`MIN_FAN_DWELL_SECONDS`), non ancora messi in discussione |
-| 7 | **Il `dry` d'inverno a setpoint 16 toglie umidità alla camera, e quanto costa?** | **nuova, aperta (12 novembre 2026).** Misura: i primi cicli della 1.30.0, umidità e temperatura al comodino, watt dello Shelly. Se il compressore non gira o l'umidità non scende, la funzione va ripensata, non tarata |
+| 7 | **Il `dry` d'inverno a setpoint 16 toglie umidità alla camera, e quanto costa?** | **chiusa il 12 novembre 2026: sì (68→66% in 4 minuti, ~400 W), ma l'aria è troppo fredda per una camera abitata; funzione disattivata.** Testo originale: Misura: i primi cicli della 1.30.0, umidità e temperatura al comodino, watt dello Shelly. Se il compressore non gira o l'umidità non scende, la funzione va ripensata, non tarata |
 | 6 | **Il dimezzamento dei consumi quanto deve all'anello di casa e quanto alle ore in meno?** | **nuova, aperta.** La decomposizione ore/watt del §4.2 è misurata, l'attribuzione no. La chiuderebbe una settimana con `start_approval` spento e l'anello attivo, confrontata con una a parti invertite |
 
 ## 12. Acquisti giustificati
